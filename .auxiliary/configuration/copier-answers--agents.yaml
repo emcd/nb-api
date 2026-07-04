@@ -1,0 +1,13 @@
+# Changes here will be overwritten by Copier
+_commit: v1.0a11-13-g364253b
+_src_path: gh:emcd/agents-common
+coders:
+- claude
+- codex
+- opencode
+languages:
+- rust
+project_bundle_name: infrastructure
+project_name: nb-api
+provide_instructions: false
+support_local_models: true
