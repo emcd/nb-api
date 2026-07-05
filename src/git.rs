@@ -1,6 +1,7 @@
 //! Git repository detection helpers.
 //!
-//! Shared between nb-api and nb-mcp-server (paths.rs).
+//! Consumed by `nb-api` directly and by downstream tools (e.g.,
+//! `nb-mcp-server`'s `paths.rs`) via the published crate.
 
 use std::path::PathBuf;
 
