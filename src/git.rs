@@ -32,12 +32,14 @@ pub fn derive_git_notebook_name() -> Option<String> {
 /// Run `git rev-parse` with the given arguments and return the output as a path.
 ///
 /// Returns `None` if git is not available, the command fails, or the output is empty.
+///
+/// Strips inherited `GIT_*` routing vars before spawning so the git
+/// invocation resolves the repository from its own cwd/args, not from
+/// the parent hook or CI environment. See `nb-api:issues/3`.
 pub fn git_rev_parse(args: &[&str]) -> Option<PathBuf> {
-    let output = std::process::Command::new("git")
-        .args(["rev-parse"])
-        .args(args)
-        .output()
-        .ok()?;
+    let mut command = std::process::Command::new("git");
+    crate::git_env::scrub_git_env_std(&mut command);
+    let output = command.args(["rev-parse"]).args(args).output().ok()?;
     if !output.status.success() {
         return None;
     }

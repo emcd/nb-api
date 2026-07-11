@@ -5,14 +5,16 @@
 //! all note-taking operations.
 
 mod git;
+mod git_env;
+
+pub use git::{derive_git_notebook_name, git_rev_parse};
+pub use git_env::{leaked_git_names, scrub_git_env, scrub_git_env_std};
 
 use std::{collections::VecDeque, path::PathBuf, process::Stdio, sync::LazyLock};
 
 use regex::Regex;
 use serde::Deserialize;
 use tokio::process::Command;
-
-pub use git::{derive_git_notebook_name, git_rev_parse};
 
 /// Regex to match ANSI/ISO 2022 escape sequences.
 ///
@@ -272,6 +274,18 @@ impl NbClient {
     async fn exec(&self, args: &[&str]) -> Result<String, NbError> {
         tracing::debug!(?args, "executing nb command");
         let mut command = Command::new("nb");
+        // Strip inherited `GIT_*` routing vars before chaining `.args` /
+        // `.env`. Without this, any caller invoking us from inside a
+        // git hook (pre-commit, pre-push, post-checkout) or CI runner
+        // propagates GIT_DIR / GIT_INDEX_FILE / GIT_COMMON_DIR /
+        // GIT_WORK_TREE / GIT_OBJECT_DIRECTORY /
+        // GIT_ALTERNATE_OBJECT_DIRECTORIES into the spawned `nb`,
+        // which is a bash script wrapping git — every git call inside
+        // nb then redirects to the parent repo instead of the
+        // notebook's repo. The blast-by-prefix also covers future
+        // GIT_* redirect vars without requiring a code change.
+        // See `nb-api:issues/3`. Do not remove.
+        scrub_git_env(&mut command);
         command
             .args(args)
             .stdin(Stdio::null()) // Prevent TTY hangs
