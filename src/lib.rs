@@ -399,8 +399,19 @@ impl NbClient {
     /// Shows a note's content.
     pub async fn show(&self, id: &str, notebook: Option<&str>) -> Result<String, NbError> {
         let (_, selector) = self.resolve_target_selector(id, notebook).await?;
-        self.exec_vec(vec!["show".to_string(), selector, "--no-color".to_string()])
-            .await
+        // Pass `--print` so `nb show` writes stored bytes to stdout instead of
+        // piping through the renderer/pager. The renderer path word-wraps at
+        // ~80 columns when stdout is a pipe, silently corrupting any stored
+        // line longer than that (e.g. JSON in change-meta notes, code blocks,
+        // long URLs). `--print` returns the file verbatim. Do not remove.
+        // See `nb-api:issues/2`.
+        self.exec_vec(vec![
+            "show".to_string(),
+            selector,
+            "--print".to_string(),
+            "--no-color".to_string(),
+        ])
+        .await
     }
 
     /// Lists notes in a notebook or folder.
