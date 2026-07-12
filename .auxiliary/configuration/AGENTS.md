@@ -35,7 +35,7 @@ Before implementing code changes, consult `documentation/development.md` if it e
 | Topic | File |
 |-------|------|
 | `nb` MCP tools, tagging, and notebook organization | @documentation/agents/notebook.md |
-| OpenSpec proposals and workflow | @documentation/agents/openspec.md |
+| Nbspec proposals and workflow | @documentation/agents/nbspec.md |
 | Delegated review flow and stacked commits | @documentation/agents/reviews.md |
 
 ### Recommended Organization
@@ -43,14 +43,15 @@ Before implementing code changes, consult `documentation/development.md` if it e
 | Medium | Location | Purpose |
 |--------|----------|---------|
 | `nb` | `coordination/` | Handoffs, org chart, team workflow |
-| `nb` | `ideas/` | Rough ideas, early-stage proposals; tag `#task-proposal` for OpenSpec drafts |
+| `nb` | `ideas/` | Brainstorming and rough sketches (not formal proposals — those live in `proposals/<change-id>/`) |
 | `nb` | `issues/` | Bug tracking and known issues |
 | `nb` | `reviews/` | Code and proposal reviews |
 | `nb` | `procedures/` | How-to guides and checklists |
 | `nb` | `todos/` | Task tracking |
 | `nb` | `artifacts/` | Preserved reference material: completed POCs, historical analysis |
+| `nb` | `proposals/<change-id>/` | Active change namespaces (scaffolded by `nbspec create`; carries proposal, specifications, designs, decisions, and `work` todos); the source of truth for in-flight changes |
 | `agentmux` | | Inter-agent messaging, pane inspection, coordination |
-| (filesystem) | `openspec/` | Formal proposals, specs, designs |
+| (filesystem) | `documentation/{specifications,designs,decisions}/` | Durable documents materialized from Nbspec-managed proposals at merge time |
 | (filesystem) | `src/**/README.md` | Architecture, constraints, design rationale |
 
 ## Tests Development
@@ -80,31 +81,20 @@ Before implementing code changes, consult `documentation/development.md` if it e
 - Batch related updates into one message instead of sending rapid-fire partial status pings.
 - Use `Cc` only for agents who need to act or review; avoid broad `Cc` by default.
 - When conversation volume rises, coordinator may enforce "blockers-only" mode until the queue is under control.
-## Tests Development
 
-- Prefer tests under `tests/unit` and `tests/integration` over inline `#[cfg(test)]` modules in `src/**`.
-- Prefer tests that exercise public interfaces; avoid source-inclusion patterns used only to reach private internals.
-- Inline `#[cfg(test)]` is permitted only when ALL of the following hold:
-  1. The tested item is crate-private **by design** (not by oversight or laziness) and making it testable externally would require widening its visibility or adding a `#[doc(hidden)] pub` escape hatch that would itself become unintended API surface.
-  2. No existing public interface exercises the same code path.
-  3. The inline test block contains at most **one** `#[test]` function.
-- If a candidate inline test fails any of these conditions, move it to `tests/unit` and widen visibility or restructure as needed. Do not default to inline to avoid that conversation; the friction is intentional.
+## Nbspec Instructions
 
-## OpenSpec Instructions
+This project uses Nbspec (notebook-resident change orchestration). Workflow Guide: @documentation/agents/nbspec.md
 
-Workflow Guide: @openspec/AGENTS.md
-
-Always open `openspec/AGENTS.md` when the request:
+Always open `documentation/agents/nbspec.md` when the request:
 - Mentions planning or proposals (words like proposal, spec, change, plan).
 - Introduces new capabilities, breaking changes, architecture shifts, or big performance/security work.
 - Sounds ambiguous and you need the authoritative spec before coding.
 
-Use `openspec/AGENTS.md` to learn:
+Use `documentation/agents/nbspec.md` to learn:
 - How to create and apply change proposals
 - Spec format and conventions
 - Project structure and guidelines
-
-When a commit completes an OpenSpec task or requirement, update the relevant OpenSpec task status in the same commit.
 
 # Commits
 
