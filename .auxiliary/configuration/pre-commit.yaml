@@ -55,7 +55,7 @@ repos:
     - id: cargo-test
       name: 'Test (Rust)'
       language: system
-      entry: 'cargo test --locked'
+      entry: 'cargo test --locked --all-features'
       pass_filenames: false
       require_serial: true
       stages: [ 'pre-commit' ]
@@ -64,7 +64,7 @@ repos:
     - id: cargo-build
       name: 'Compile (Rust: Release)'
       language: system
-      entry: 'cargo build --release --locked'
+      entry: 'cargo build --release --locked --all-features'
       pass_filenames: false
       require_serial: true
       stages: [ 'pre-push' ]
@@ -74,7 +74,7 @@ repos:
     - id: cargo-test-release
       name: 'Test (Rust: Release)'
       language: system
-      entry: 'cargo test --release --locked'
+      entry: 'cargo test --release --locked --all-features'
       pass_filenames: false
       require_serial: true
       stages: [ 'pre-push' ]

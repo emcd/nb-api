@@ -155,6 +155,8 @@ constructing `Config`.
 | Feature | Default | Description |
 |---------|---------|-------------|
 | `schemars` | disabled | Adds `JsonSchema` derive to `EditMode`, `SearchMode`, `TaskStatus` |
+| `testing` | disabled | Exposes the `nb_api::testing` module with `NbTestEnv` and friends; pulls in `tempfile` as a dependency. Use for integration tests of consumers. |
+| `testing-tokio` | disabled | Within `nb_api::testing`, reveals the async helpers `NbTestEnv::configure_tokio` and `NbTestEnv::nb_command_async`. The crate's own tokio usage (in `NbClient`) is unconditional and does not depend on this flag. Pair with `testing` to reach the async helpers. |
 
 ## License
 

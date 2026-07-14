@@ -24,6 +24,23 @@ serde_json = "1.0"
 [features]
 default = []
 schemars = ["dep:schemars"]
+# Gates the public `nb_api::testing` module (and its `tempfile`
+# dependency). Off by default so test-only crates do not enter the
+# build graph of normal consumers.
+testing = ["dep:tempfile"]
+# Gates the async helpers in `nb_api::testing`
+# (`configure_tokio`, `nb_command_async`). The crate's own tokio
+# usage (in `NbClient`) is unconditional; this flag narrows the
+# public API surface for consumers who do not need the async
+# testing helpers. Does not add a dependency. Pair with
+# `testing` (`--features testing,testing-tokio`) to reach the
+# async helpers.
+testing-tokio = []
+
+[[test]]
+name = "integration"
+path = "tests/integration/main.rs"
+required-features = ["testing"]
 
 [dependencies]
 # Async runtime
@@ -44,3 +61,7 @@ tracing = "0.1"
 
 # Text processing
 regex = "1.0"
+
+# Hermetic test fixtures (only compiled when the `testing` feature
+# is enabled; never reaches normal consumers).
+tempfile = { version = "3.0", optional = true }

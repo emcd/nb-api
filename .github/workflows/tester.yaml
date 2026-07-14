@@ -45,11 +45,25 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install nb
+        # Hermetic install: clone a pinned nb tag into a temp dir,
+        # symlink into a private bin dir, and append that bin dir
+        # to PATH for the rest of the job. Pinning to `7.24.0`
+        # keeps identical nb-api commits testing against identical
+        # CLI behavior across CI runs. Matches the version we
+        # develop against locally.
+        run: |
+          set -eu
+          git clone --depth 1 --branch 7.24.0 https://github.com/xwmx/nb.git /tmp/nb
+          mkdir -p "$HOME/.local/bin"
+          ln -sf /tmp/nb/nb "$HOME/.local/bin/nb"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
       - name: Build
         run: cargo build --release
 
       - name: Test
-        run: cargo test --release
+        run: cargo test --release --all-features
 
   package:
     needs: [initialize, lint, test]
@@ -63,7 +77,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Verify Package
-        run: cargo package --no-verify --list
+        run: cargo package --no-verify --list --all-features
 
       - name: Dry-Run Publish
-        run: cargo publish --dry-run --locked
+        run: cargo publish --dry-run --locked --all-features

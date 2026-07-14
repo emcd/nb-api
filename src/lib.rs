@@ -7,6 +7,9 @@
 mod git;
 mod git_env;
 
+#[cfg(feature = "testing")]
+pub mod testing;
+
 pub use git::{derive_git_notebook_name, git_rev_parse};
 pub use git_env::{leaked_git_names, scrub_git_env, scrub_git_env_std};
 
