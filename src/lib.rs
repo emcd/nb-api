@@ -46,6 +46,44 @@ pub enum NbError {
 
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+
+    /// `nb show` was invoked on a selector whose type is not
+    /// classified as text by `nb` itself (per
+    /// `add-0-2-0-foundation` public-API spec). Folders, archives,
+    /// audio, video, image, and any other non-textual type reach
+    /// this path. The classification delegates to
+    /// `nb show <selector> --type text` so forward compatibility
+    /// is automatic when `nb` adds new textual types. Probe
+    /// failure (e.g., selector not found) does NOT route here;
+    /// it falls through to the original `CommandFailed` error
+    /// from the content-read path.
+    #[error(
+        "selector `{selector}` resolved to non-textual type `{actual_type}`; \
+         `nb show` does not display non-textual content"
+    )]
+    UnsupportedShowTarget {
+        selector: String,
+        actual_type: String,
+    },
+}
+
+/// Result of probing a selector's textual classification via
+/// `nb show <selector> --type text`. Used by
+/// [`NbClient::show`](crate::NbClient::show) to decide whether
+/// the content-read path is safe.
+enum ShowClassification {
+    /// `nb` classified the type as text. Caller proceeds to
+    /// the content-read path.
+    Textual,
+    /// `nb` classified the type as non-text (folder, archive,
+    /// image, audio, video, etc.). `actual_type` carries the
+    /// `nb`-reported type string (file extension or `folder`).
+    NonTextual { actual_type: String },
+    /// The probe could not classify the selector (selector not
+    /// found, internal error). Caller falls through to the
+    /// original show path so existing missing-selector
+    /// diagnostics are preserved.
+    ProbeFailure,
 }
 
 /// Configuration for constructing an [`NbClient`].
@@ -416,6 +454,29 @@ impl NbClient {
     /// Shows a note's content.
     pub async fn show(&self, id: &str, notebook: Option<&str>) -> Result<String, NbError> {
         let (_, selector) = self.resolve_target_selector(id, notebook).await?;
+        // Probe the selector's classification before reading.
+        // `nb show <selector> --type text` reports whether the
+        // type is text (rc 0) or not (rc non-zero). If the type
+        // is not text, a follow-up `nb show <selector> --type`
+        // reports the actual_type for the error diagnostic. When
+        // the probe cannot classify (selector not found, internal
+        // error), fall through to the original show path so
+        // existing missing-selector diagnostics are preserved.
+        // The semantic check delegates "what is text" to `nb`
+        // itself, ensuring forward compatibility as `nb` adds
+        // new textual types.
+        match self.probe_show_classification(&selector).await {
+            ShowClassification::NonTextual { actual_type } => {
+                return Err(NbError::UnsupportedShowTarget {
+                    selector: selector.clone(),
+                    actual_type,
+                });
+            }
+            ShowClassification::Textual | ShowClassification::ProbeFailure => {
+                // Proceed to content read (Textual) or fall
+                // through to original show (ProbeFailure).
+            }
+        }
         // Pass `--print` so `nb show` writes stored bytes to stdout instead of
         // piping through the renderer/pager. The renderer path word-wraps at
         // ~80 columns when stdout is a pipe, silently corrupting any stored
@@ -429,6 +490,53 @@ impl NbClient {
             "--no-color".to_string(),
         ])
         .await
+    }
+
+    /// Probe the textual classification of a selector via `nb`'s
+    /// native `--type` mechanism.
+    ///
+    /// Two-step probe: first `nb show <selector> --type text` to
+    /// ask `nb` whether the type is text. If yes, return
+    /// [`ShowClassification::Textual`]. If no, follow up with
+    /// `nb show <selector> --type` to recover the `actual_type`
+    /// for the error diagnostic. If the follow-up also fails
+    /// (selector not found, internal error), return
+    /// [`ShowClassification::ProbeFailure`] so the caller can
+    /// fall through to the original show path.
+    async fn probe_show_classification(&self, selector: &str) -> ShowClassification {
+        let textual = self
+            .exec_vec(vec![
+                "show".to_string(),
+                selector.to_string(),
+                "--type".to_string(),
+                "text".to_string(),
+                "--no-color".to_string(),
+            ])
+            .await;
+        if textual.is_ok() {
+            return ShowClassification::Textual;
+        }
+        match self
+            .exec_vec(vec![
+                "show".to_string(),
+                selector.to_string(),
+                "--type".to_string(),
+                "--no-color".to_string(),
+            ])
+            .await
+        {
+            Ok(stdout) => {
+                let trimmed = stdout.trim();
+                if trimmed.is_empty() {
+                    ShowClassification::ProbeFailure
+                } else {
+                    ShowClassification::NonTextual {
+                        actual_type: trimmed.to_string(),
+                    }
+                }
+            }
+            Err(_) => ShowClassification::ProbeFailure,
+        }
     }
 
     /// Lists notes in a notebook or folder.

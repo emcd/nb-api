@@ -10,6 +10,7 @@
 mod common;
 mod git_env_scrub;
 mod show_line_wrap;
+mod show_probe;
 
 #[cfg(feature = "testing-tokio")]
 #[path = "async_helpers.rs"]
