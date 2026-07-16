@@ -13,7 +13,51 @@ use std::sync::{Mutex, MutexGuard};
 
 use nb_api::testing::NbTestEnv;
 
-/// All env vars [`with_isolated_env`] may read, write, or restore.
+/// Bash script template for the fake `nb` shim used by
+/// [`with_shim_nb_env`]. The `__REAL_NB__` placeholder is
+/// replaced with the absolute path to the real `nb` binary
+/// (resolved against the unmodified PATH) before writing the
+/// script to disk. Using a template constant keeps the script
+/// readable and avoids double-escaping bash variables inside
+/// a Rust format string. Unix-only because [`with_shim_nb_env`]
+/// is Unix-only (Bash script + executable-bit chmod).
+#[cfg(unix)]
+const SHIM_SCRIPT_TEMPLATE: &str = r#"#!/usr/bin/env bash
+# Pass through to real nb UNLESS both:
+# 1. SHIM_OUTPUT is set (the shim test is active), AND
+# 2. The invocation is list-like (any arg matches "list" or
+#    ends with ":list", e.g. "scratch:list").
+# Without the subcommand check, the shim would echo
+# SHIM_OUTPUT for any concurrent `nb` invocation
+# (e.g., a sibling test's `nb notebooks add` during
+# fixture init), corrupting the sibling's notebook
+# creation. The subcommand check routes non-list
+# invocations to real nb regardless of SHIM_OUTPUT.
+# REAL_NB is the absolute path to the real `nb` binary,
+# resolved against the unmodified PATH by the Rust
+# helper before prepending the shim dir. Defaults to
+# /usr/local/bin/nb if unset (defensive fallback).
+shim_output="${SHIM_OUTPUT:-}"
+list_invocation=false
+for arg in "$@"; do
+  if [[ "$arg" == "list" || "$arg" == *:list* ]]; then
+    list_invocation=true
+    break
+  fi
+done
+if [[ -n "$shim_output" && "$list_invocation" == "true" ]]; then
+  printf '%s' "$shim_output"
+  exit 0
+fi
+exec "${REAL_NB:-__REAL_NB__}" "$@"
+"#;
+
+/// All env vars the env-mutating helpers may read, write, or
+/// restore. `PATH` and `SHIM_OUTPUT` are included so the
+/// RAII `EnvSnapshot` handles them automatically (panic-safe
+/// restoration on drop). Adding `PATH` is also a hardening
+/// for `with_isolated_env`: a panic inside the closure no
+/// longer leaks a mutated PATH to subsequent tests.
 const ENV_VARS_OF_INTEREST: &[&str] = &[
     "NB_DIR",
     "HOME",
@@ -23,6 +67,8 @@ const ENV_VARS_OF_INTEREST: &[&str] = &[
     "GIT_WORK_TREE",
     "GIT_OBJECT_DIRECTORY",
     "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "PATH",
+    "SHIM_OUTPUT",
 ];
 
 /// All `GIT_*` routing vars used in the blast-by-prefix scrub. Exposed
@@ -168,4 +214,207 @@ impl Drop for EnvSnapshot {
         // restoration also runs on panic unwinding.
         self.restore();
     }
+}
+
+/// Resolve `nb` against the given PATH value. Returns the
+/// absolute path of the first executable `nb` found, or
+/// `None` if no match exists in any PATH directory. Continues
+/// past missing or non-executable candidates rather than
+/// bailing on the first missing dir — a typical CI PATH may
+/// have many directories, only one of which contains `nb`.
+/// Used by [`with_shim_nb_env`] to embed the real-binary path
+/// in the shim so pass-through works in CI
+/// (`$HOME/.local/bin/nb` per the `qa` workflow) as well as on
+/// local machines (`/usr/local/bin/nb`).
+///
+/// Unix-only: the only caller is [`with_shim_nb_env`] which is
+/// `#[cfg(unix)]`. The non-Unix stub was removed in the sixth
+/// fixup because it was private dead code (no caller on
+/// non-Unix) and would fail warning-denied cross-platform
+/// Clippy. Tests and helpers are gated `#[cfg(unix)]` end to
+/// end, so the resolver has no non-Unix surface.
+#[cfg(unix)]
+fn resolve_nb_in_path(path_var: Option<&OsString>) -> Option<std::path::PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+    let path_var = path_var?;
+    for dir in std::env::split_paths(path_var) {
+        let candidate = dir.join("nb");
+        let Ok(metadata) = std::fs::metadata(&candidate) else {
+            // Missing dir or file: not a candidate; keep scanning.
+            continue;
+        };
+        if !metadata.is_file() {
+            continue;
+        }
+        if metadata.permissions().mode() & 0o111 == 0 {
+            continue;
+        }
+        return Some(candidate);
+    }
+    None
+}
+
+/// Run a test closure with a fake `nb` shim in `PATH` that
+/// emits `shim_output` (verbatim) as its stdout, plus
+/// standard fixture env (`NB_DIR`, `HOME` from the
+/// `NbTestEnv`).
+///
+/// Used to drive the `NbClient` public API with crafted `nb`
+/// output that real `nb 7.24.0` does not produce — for example,
+/// CRLF terminators, missing terminators, or `0 <kind>.`
+/// signal lines without a trailing hint block. These cases
+/// cannot be triggered through real `nb` invocations, but
+/// the public API contract is exercised end-to-end via the
+/// shim.
+///
+/// The helper acquires `ENV_LOCK`, lets `EnvSnapshot`
+/// (which now covers `PATH` and `SHIM_OUTPUT` via
+/// `ENV_VARS_OF_INTEREST`) capture the current env, writes a
+/// fake `nb` script to a temporary directory, prepends that
+/// directory to `PATH`, sets `SHIM_OUTPUT`, runs the closure,
+/// and restores the env on drop. The RAII snapshot is
+/// panic-safe: a panic inside the closure triggers `Drop`
+/// which restores `PATH` / `SHIM_OUTPUT` / `NB_DIR` / `HOME` /
+/// `GIT_*` to their pre-helper values before the tempdir is
+/// dropped (avoiding the "deleted tempdir in PATH" poisoning
+/// of subsequent tests).
+#[cfg(unix)]
+#[allow(dead_code, clippy::await_holding_lock)]
+pub async fn with_shim_nb_env<F, Fut, R>(env: &NbTestEnv, shim_output: &str, f: F) -> R
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = R>,
+{
+    let _guard = lock_env();
+    let _snap = EnvSnapshot::capture(ENV_VARS_OF_INTEREST);
+
+    // Resolve the real `nb` binary against the unmodified PATH
+    // BEFORE prepending the shim dir. The shim uses this path
+    // for pass-through (`exec "${REAL_NB}"`), so the helper
+    // works on both local machines (`nb` at `/usr/local/bin/nb`)
+    // and CI (`nb` at `$HOME/.local/bin/nb` per `qa` workflow's
+    // `Install nb` step). If no `nb` is found in PATH, fail
+    // setup clearly rather than hard-coding a fallback (which
+    // would recreate the portability failure).
+    let path_var = std::env::var_os("PATH");
+    let real_nb = resolve_nb_in_path(path_var.as_ref()).unwrap_or_else(|| {
+        panic!(
+            "with_shim_nb_env: could not find `nb` in PATH. \
+             Ensure `nb` is installed and discoverable. \
+             Checked PATH={:?}",
+            path_var
+        )
+    });
+
+    let shim_dir = tempfile::Builder::new()
+        .prefix("nb-shim-")
+        .tempdir()
+        .expect("create shim tempdir");
+    let shim_path = shim_dir.path();
+    std::fs::write(
+        shim_path.join("nb"),
+        SHIM_SCRIPT_TEMPLATE.replace("__REAL_NB__", &real_nb.display().to_string()),
+    )
+    .expect("write shim script");
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(shim_path.join("nb"), std::fs::Permissions::from_mode(0o755))
+            .expect("chmod shim script");
+    }
+
+    // SAFETY: serialized by ENV_LOCK (held above).
+    let new_path = match path_var.as_ref() {
+        Some(p) => format!("{}:{}", shim_path.display(), p.to_string_lossy()),
+        None => shim_path.display().to_string(),
+    };
+    unsafe {
+        std::env::set_var("PATH", &new_path);
+    }
+    unsafe {
+        std::env::set_var("SHIM_OUTPUT", shim_output);
+    }
+    unsafe {
+        std::env::set_var("NB_DIR", env.nb_dir());
+    }
+    unsafe {
+        std::env::set_var("HOME", env.home_dir());
+    }
+
+    // EnvSnapshot's Drop restores PATH, SHIM_OUTPUT, NB_DIR,
+    // HOME, GIT_* to the values captured at function entry —
+    // panic-safe (runs on unwind as well as on normal return).
+    f().await
+}
+
+/// Panic-restoration regression for the RAII `EnvSnapshot`.
+///
+/// `with_shim_nb_env` is the production path that captures
+/// and restores `PATH` / `SHIM_OUTPUT` / `NB_DIR` / `HOME` /
+/// `GIT_*` on `Drop`. This test exercises the `Drop`
+/// restoration directly inside one locked critical section so
+/// it is not subject to races from concurrent helper
+/// invocations (MCP Owner caught a racy variant in the
+/// previous fixup round that read env vars before and after
+/// the helper outside `ENV_LOCK`). The test asserts that a
+/// panic inside the locked scope triggers the `Drop` and
+/// restores the captured values, including the `PATH` and
+/// `SHIM_OUTPUT` entries that were added to
+/// `ENV_VARS_OF_INTEREST` in the fourth fixup.
+#[test]
+fn env_snapshot_restores_path_and_shim_output_on_panic() {
+    // Hold ENV_LOCK for the ENTIRE test (baseline read, capture,
+    // panic, and post-catch assertions). The lock is acquired
+    // OUTSIDE the catch_unwind closure so it is still held
+    // when the post-catch assertions run — without this,
+    // another helper that acquires the lock between catch_unwind
+    // returning and the assertions reading env could
+    // interleave and the post-catch reads could observe that
+    // helper's values rather than ours. This is not a
+    // self-locking helper call (no `with_shim_nb_env` or
+    // `with_isolated_env` inside the closure), so there is no
+    // reentrancy concern.
+    let _guard = lock_env();
+
+    let path_before = std::env::var_os("PATH").expect("PATH must be set");
+    let shim_output_before = std::env::var_os("SHIM_OUTPUT");
+
+    let result = std::panic::catch_unwind(|| {
+        let _snap = EnvSnapshot::capture(ENV_VARS_OF_INTEREST);
+        // SAFETY: serialized by ENV_LOCK (held by `_guard`
+        // declared outside this closure).
+        unsafe {
+            std::env::set_var("PATH", "/poisoned/path");
+            std::env::set_var("SHIM_OUTPUT", "poisoned-output");
+        }
+        // Verify the poisoning is observable before the panic.
+        assert_eq!(
+            std::env::var_os("PATH").as_deref(),
+            Some(std::ffi::OsStr::new("/poisoned/path"))
+        );
+        assert_eq!(
+            std::env::var_os("SHIM_OUTPUT").as_deref(),
+            Some(std::ffi::OsStr::new("poisoned-output"))
+        );
+        panic!("env_snapshot_restores_path_and_shim_output_on_panic: deliberate panic");
+    });
+
+    assert!(
+        result.is_err(),
+        "the closure should have panicked; if it returned Ok, the panic did not propagate"
+    );
+
+    // Lock is still held (`_guard` not yet dropped) — assertions
+    // run inside the same critical section as the baseline.
+    let path_after = std::env::var_os("PATH").expect("PATH must be set");
+    let shim_output_after = std::env::var_os("SHIM_OUTPUT");
+    assert_eq!(
+        path_after, path_before,
+        "PATH must be restored to its pre-helper value after a panic; \
+         EnvSnapshot::Drop must run on unwind"
+    );
+    assert_eq!(
+        shim_output_after, shim_output_before,
+        "SHIM_OUTPUT must be restored to its pre-helper value after a panic; \
+         EnvSnapshot::Drop must run on unwind"
+    );
 }

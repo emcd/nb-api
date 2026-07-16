@@ -6,6 +6,7 @@
 
 mod git;
 mod git_env;
+mod output;
 
 #[cfg(feature = "testing")]
 pub mod testing;
@@ -608,7 +609,15 @@ impl NbClient {
             args.push(tag_str);
         }
 
-        self.exec_vec(args).await
+        // Strip the trailing usage/help hint block from empty
+        // results (`0 items.` followed by `Add a note:`,
+        // `Import a file:`, `Help information:`). Detection
+        // keys off the empty-result signal per the
+        // `output-behavior` specification. See `output.rs`
+        // for the helper's contract.
+        self.exec_vec(args)
+            .await
+            .map(|output| output::strip_empty_result_hint(&output))
     }
 
     /// Searches notes.
@@ -874,7 +883,15 @@ impl NbClient {
         args.push("folder".to_string());
         args.push("--no-color".to_string());
 
-        self.exec_vec(args).await
+        // Strip the trailing usage/help hint block from empty
+        // results (`0 folders.` followed by `Import a file:`,
+        // `Help information:`). Detection keys off the
+        // empty-result signal per the `output-behavior`
+        // specification. See `output.rs` for the helper's
+        // contract.
+        self.exec_vec(args)
+            .await
+            .map(|output| output::strip_empty_result_hint(&output))
     }
 
     /// Creates a folder.
