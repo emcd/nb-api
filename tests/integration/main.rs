@@ -9,6 +9,7 @@
 
 mod common;
 mod duplicate_title;
+mod edit_mode_required;
 mod empty_result_hints;
 mod git_env_scrub;
 mod show_line_wrap;

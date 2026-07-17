@@ -17,7 +17,7 @@ pub use git_env::{leaked_git_names, scrub_git_env, scrub_git_env_std};
 use std::{collections::VecDeque, path::PathBuf, process::Stdio, sync::LazyLock};
 
 use regex::Regex;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokio::process::Command;
 
 /// Regex to match ANSI/ISO 2022 escape sequences.
@@ -148,17 +148,67 @@ const NOTEBOOK_FIELD_MESSAGE: &str = "Invalid `notebook`: use a bare notebook na
 
 const FOLDER_FIELD_MESSAGE: &str = "Invalid folder path: use `folder` for folder paths only, not notebook-qualified selectors. To choose a notebook, use the separate `notebook` field.";
 
-/// Behavior mode for `nb edit` content updates.
-#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+/// Behavior mode for [`NbClient::edit`] content updates.
+///
+/// ## Vocabulary
+///
+/// The variant previously named `Replace` is now `Overwrite` to
+/// remove the vocabulary trap at the root of `nb-api:issues/api/6`:
+/// callers reading `mode: "replace"` reasonably expected a
+/// substring-style replacement (analogous to
+/// [`str::replace`](std::str::replace)), but `nb edit --overwrite`
+/// is destructive — it replaces every byte of the note body.
+/// Renaming the variant to `Overwrite` makes the destructive
+/// intent unambiguous at the call site.
+///
+/// The legacy string `"replace"` is accepted as a serde alias for
+/// backward compatibility with payloads produced before this
+/// rename. The alias is **not** advertised in the derived
+/// [`schemars`](https://docs.rs/schemars) JSON Schema — only the
+/// canonical `"overwrite"` is exposed to MCP tool consumers.
+///
+/// ## Mapping
+///
+/// | Variant | Canonical serialization | `nb edit` flag(s) | Effect |
+/// |---------|------------------------|-------------------|--------|
+/// | [`EditMode::Overwrite`] | `"overwrite"` | `--overwrite --content <content>` | Replace **every byte** of the note body with `<content>`. Destructive: any existing content is lost. |
+/// | [`EditMode::Append`] | `"append"` | `--content <content>` | Append `<content>` after the existing note body. |
+/// | [`EditMode::Prepend`] | `"prepend"` | `--prepend --content <content>` | Prepend `<content>` before the existing note body. |
+///
+/// ## Default
+///
+/// `EditMode` derives `Default` with `EditMode::Overwrite` as the
+/// default variant. This is the **`nb-api` default**, chosen for
+/// compatibility with the current API contract and the documented
+/// destructive default on `nb_api`'s edit API. Note that this is
+/// distinct from the `nb` CLI's native no-flag behavior (`nb edit
+/// --content` without `--overwrite` appends; see the mapping
+/// table above). Requiredness on the consumer side (e.g., the
+/// `mode` field on `nb-mcp-server`'s `EditArgs`) is a
+/// **consumer-layer concern**, not enforced here. Downstream
+/// consumers that want to require `mode` explicitly should drop
+/// `#[serde(default)]` from their containing struct.
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum EditMode {
-    /// Replace note content using `nb edit --overwrite`.
+    /// Replace **every byte** of the note body with the provided
+    /// content. Destructive: any existing content is lost. Maps to
+    /// `nb edit --overwrite --content <content>`.
+    ///
+    /// Accepts legacy `"replace"` as a serde alias for backward
+    /// compatibility with payloads produced before the variant
+    /// rename. The alias is not advertised in the derived JSON
+    /// Schema; only `"overwrite"` is exposed to schema consumers.
     #[default]
-    Replace,
-    /// Append content using `nb edit --content` (nb default behavior).
+    #[serde(alias = "replace")]
+    Overwrite,
+    /// Append the provided content after the existing note body.
+    /// Maps to `nb edit --content <content>` (the `nb` default
+    /// content-mode behavior).
     Append,
-    /// Prepend content using `nb edit --prepend`.
+    /// Prepend the provided content before the existing note body.
+    /// Maps to `nb edit --prepend --content <content>`.
     Prepend,
 }
 
@@ -646,6 +696,14 @@ impl NbClient {
     }
 
     /// Edits a note using the provided content mode.
+    ///
+    /// See [`EditMode`] for the vocabulary rationale (the variant
+    /// previously named `Replace` is now `Overwrite` to remove the
+    /// vocabulary trap at the root of `nb-api:issues/api/6`).
+    ///
+    /// Requiredness on the consumer side (e.g., the `mode` field on
+    /// `nb-mcp-server`'s `EditArgs`) is a consumer-layer concern,
+    /// not enforced here.
     pub async fn edit(
         &self,
         id: &str,
@@ -1127,7 +1185,7 @@ fn strip_atx_closing_hashes(s: &str) -> String {
 fn edit_args(selector: String, content: &str, mode: EditMode) -> Vec<String> {
     let mut args = vec!["edit".to_string(), selector];
     match mode {
-        EditMode::Replace => args.push("--overwrite".to_string()),
+        EditMode::Overwrite => args.push("--overwrite".to_string()),
         EditMode::Append => {}
         EditMode::Prepend => args.push("--prepend".to_string()),
     }

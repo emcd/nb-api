@@ -89,7 +89,7 @@ output. Typed accessor methods may be added in future versions.
 |--------|-------------|
 | `add` | Create a note (title, content, tags, folder) |
 | `show` | Read a note's content |
-| `edit` | Update a note (replace, append, or prepend) |
+| `edit` | Update a note (`mode` selects `Overwrite` (destructive: replaces every byte), `Append`, or `Prepend`) |
 | `delete` | Delete a note |
 | `move_note` | Move or rename a note |
 | `list` | List notes with optional filtering |
@@ -123,7 +123,7 @@ output. Typed accessor methods may be added in future versions.
 | `NbClient` | Async client for invoking nb commands |
 | `NbError` | Error type for all operations |
 | `Config` | Configuration for constructing `NbClient` |
-| `EditMode` | Content update mode (replace, append, prepend) |
+| `EditMode` | Content update mode for `edit` (`Overwrite` is destructive: replaces every byte of the note body). Canonical serialization is `overwrite`; the legacy string `replace` is accepted as a serde alias for backward compatibility but is not advertised in the derived JSON Schema. |
 | `SearchMode` | Query matching mode (any, all) |
 | `TaskStatus` | Todo status filter (open, closed) |
 
