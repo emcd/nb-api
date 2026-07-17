@@ -55,7 +55,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = NbClient::new(&config)?;
 
     // Create a note
-    let result = client.add(
+    let result = client.add_note(
         Some("My Note"),
         "Note content with `backticks` works fine.",
         &["design".to_string(), "api".to_string()],
@@ -65,7 +65,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("{}", result);
 
     // Search notes
-    let results = client.search(
+    let results = client.search_notes(
         &["API".to_string()],
         nb_api::SearchMode::Any,
         &[],
@@ -87,34 +87,34 @@ output. Typed accessor methods may be added in future versions.
 
 | Method | Description |
 |--------|-------------|
-| `add` | Create a note (title, content, tags, folder) |
-| `show` | Read a note's content |
-| `edit` | Update a note (`mode` selects `Overwrite` (destructive: replaces every byte), `Append`, or `Prepend`) |
-| `delete` | Delete a note |
+| `add_note` | Create a note (title, content, tags, folder) |
+| `show_note` | Read a note's content |
+| `edit_note` | Update a note (`mode` selects `Overwrite` (destructive: replaces every byte), `Append`, or `Prepend`) |
+| `delete_note` | Delete a note |
 | `move_note` | Move or rename a note |
-| `list` | List notes with optional filtering |
-| `search` | Full-text search with OR/AND semantics |
+| `list_notes` | List notes with optional filtering |
+| `search_notes` | Full-text search with OR/AND semantics |
 
 ### Todos
 
 | Method | Description |
 |--------|-------------|
-| `todo` | Create a todo item with optional checklist |
-| `do_task` | Mark a todo as complete |
-| `undo_task` | Reopen a completed todo |
-| `tasks` | List todos with optional status filter |
+| `add_todo` | Create a todo item with optional checklist |
+| `mark_task_done` | Mark a todo (or specific task) as complete |
+| `unmark_task_done` | Reopen a completed todo (or specific task) |
+| `list_tasks` | List checklist items within todos, with optional status filter |
 
 ### Organization
 
 | Method | Description |
 |--------|-------------|
-| `bookmark` | Save a URL as a bookmark |
-| `import` | Import a file or URL |
-| `folders` | List folders in a notebook |
-| `mkdir` | Create a folder |
-| `notebooks` | List available notebooks |
-| `status` | Show notebook status |
-| `notebook_path` | Get the filesystem path for a notebook |
+| `add_bookmark` | Save a URL as a bookmark |
+| `import_note` | Import a file or URL |
+| `list_folders` | List folders in a notebook |
+| `add_folder` | Create a folder |
+| `list_notebooks` | List available notebooks |
+| `show_notebook_status` | Show notebook status |
+| `show_notebook_path` | Get the filesystem path for a notebook |
 
 ### Types
 
@@ -123,7 +123,7 @@ output. Typed accessor methods may be added in future versions.
 | `NbClient` | Async client for invoking nb commands |
 | `NbError` | Error type for all operations |
 | `Config` | Configuration for constructing `NbClient` |
-| `EditMode` | Content update mode for `edit` (`Overwrite` is destructive: replaces every byte of the note body). Canonical serialization is `overwrite`; the legacy string `replace` is accepted as a serde alias for backward compatibility but is not advertised in the derived JSON Schema. |
+| `EditMode` | Content update mode for `edit_note` (`Overwrite` is destructive: replaces every byte of the note body). Canonical serialization is `overwrite`; the legacy string `replace` is accepted as a serde alias for backward compatibility but is not advertised in the derived JSON Schema. |
 | `SearchMode` | Query matching mode (any, all) |
 | `TaskStatus` | Todo status filter (open, closed) |
 

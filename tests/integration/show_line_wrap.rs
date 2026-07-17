@@ -35,11 +35,11 @@ async fn show_preserves_long_unbroken_line_verbatim() {
         .expect("client construction");
 
         client
-            .add(Some("long-line"), LONG_LINE, &[], None, None)
+            .add_note(Some("long-line"), LONG_LINE, &[], None, None)
             .await
             .expect("add note");
 
-        let output = client.show("1", None).await.expect("show note");
+        let output = client.show_note("1", None).await.expect("show note");
         assert!(
             output.contains(LONG_LINE),
             "show output did not contain the long line verbatim; \

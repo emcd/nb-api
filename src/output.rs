@@ -57,18 +57,19 @@
 //!
 //! The helper is applied ONLY to list-style methods that
 //! empirically emit the hint block:
-//! - `NbClient::list` (handles `0 items.`)
-//! - `NbClient::folders` (handles `0 folders.`)
+//! - `NbClient::list_notes` (handles `0 items.`)
+//! - `NbClient::list_folders` (handles `0 folders.`)
 //!
 //! The helper is NOT applied to:
-//! - User-content methods (`show`, `add`, `edit`, `delete`,
-//!   `move_note`, `import`, etc.) — these return user
-//!   content, not list output, and a note whose first line is
-//!   `0 items.` would be wrongly truncated.
-//! - `NbClient::tasks` — single-line `! 0 ... tasks.`
+//! - User-content methods (`show_note`, `add_note`,
+//!   `edit_note`, `delete_note`, `move_note`, `import_note`,
+//!   etc.) — these return user content, not list output, and a
+//!   note whose first line is `0 items.` would be wrongly
+//!   truncated.
+//! - `NbClient::list_tasks` — single-line `! 0 ... tasks.`
 //!   signals handled separately by the existing
 //!   `is_empty_tasks_error` / `empty_tasks_message` logic.
-//! - `NbClient::search` no-match — `! Not found in
+//! - `NbClient::search_notes` no-match — `! Not found in
 //!   <notebook>: <query>` propagates as `CommandFailed`,
 //!   preserved as a distinct contract (not a helper
 //!   pass-through).
@@ -168,12 +169,12 @@ pub(crate) fn strip_empty_result_hint(output: &str) -> String {
 // satisfy ALL of: (1) tested item is crate-private by design,
 // (2) no existing public interface exercises the same code
 // path, (3) at most ONE `#[test]` function. Condition (2)
-// fails for this helper because `NbClient::list` and
-// `NbClient::folders` invoke it publicly. Per the AGENTS.md
+// fails for this helper because `NbClient::list_notes` and
+// `NbClient::list_folders` invoke it publicly. Per the AGENTS.md
 // guidance ("Do not default to inline to avoid that
 // conversation; the friction is intentional"), all helper
-// coverage is exercised via the public list/folders behavior
-// in `tests/integration/empty_result_hints.rs`, using a
+// coverage is exercised via the public list-notes/list-folders
+// behavior in `tests/integration/empty_result_hints.rs`, using a
 // deterministic `nb` shim in PATH (see
 // `tests/integration/common/mod.rs::with_shim_nb_env`) to
 // emit crafted list output for the LF / CRLF / no-terminator

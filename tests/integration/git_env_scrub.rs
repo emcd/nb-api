@@ -36,10 +36,10 @@ async fn nb_client_exec_does_not_inherit_leaked_git_dir() {
         })
         .expect("client construction");
 
-        let result = client.status(None).await;
+        let result = client.show_notebook_status(None).await;
         assert!(
             result.is_ok(),
-            "NbClient::status under leaked GIT_* failed: {:?}",
+            "NbClient::show_notebook_status under leaked GIT_* failed: {:?}",
             result.err()
         );
     })

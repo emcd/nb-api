@@ -1,7 +1,7 @@
 //! Regression tests for the `nb-api 0.2.0` duplicate-title H1
-//! rejection in `NbClient::add`.
+//! rejection in `NbClient::add_note`.
 //!
-//! `NbClient::add` inspects the first nonblank line of `content`
+//! `NbClient::add_note` inspects the first nonblank line of `content`
 //! and rejects when it is a CommonMark ATX H1 (per the
 //! public-api-surface specification grammar: 0-3 leading spaces,
 //! exactly one opening `#`, required space/tab/EOL delimiter,
@@ -42,7 +42,7 @@ async fn add_rejects_exact_duplicate_h1() {
         let client = NbClient::new(&config_for(&env)).expect("client construction");
 
         let result = client
-            .add(
+            .add_note(
                 Some("Title"),
                 "# Title\n\nbody content here\n",
                 &[],
@@ -72,7 +72,7 @@ async fn add_rejects_duplicate_h1_with_leading_blank_lines() {
         let client = NbClient::new(&config_for(&env)).expect("client construction");
 
         let result = client
-            .add(Some("Title"), "\n\n\n# Title\n\nbody\n", &[], None, None)
+            .add_note(Some("Title"), "\n\n\n# Title\n\nbody\n", &[], None, None)
             .await;
 
         match result {
@@ -93,7 +93,7 @@ async fn add_allows_different_h1_text() {
         let client = NbClient::new(&config_for(&env)).expect("client construction");
 
         let result = client
-            .add(
+            .add_note(
                 Some("Title"),
                 "# Different Title\n\nbody\n",
                 &[],
@@ -121,7 +121,9 @@ async fn add_allows_lower_level_headings() {
         for level in 2..=6 {
             let prefix = "#".repeat(level) + " ";
             let content = format!("{prefix}Title\n\nbody\n");
-            let result = client.add(Some("Title"), &content, &[], None, None).await;
+            let result = client
+                .add_note(Some("Title"), &content, &[], None, None)
+                .await;
             result.unwrap_or_else(|err| {
                 panic!("H{level} with matching text should not trigger rejection: {err:?}")
             });
@@ -137,7 +139,7 @@ async fn add_allows_content_without_h1() {
         let client = NbClient::new(&config_for(&env)).expect("client construction");
 
         let result = client
-            .add(
+            .add_note(
                 Some("Title"),
                 "regular body content, no markdown heading at all\n",
                 &[],
@@ -161,7 +163,9 @@ async fn add_allows_no_title_with_h1_in_content() {
     with_isolated_env(&env, false, || async {
         let client = NbClient::new(&config_for(&env)).expect("client construction");
 
-        let result = client.add(None, "# Title\n\nbody\n", &[], None, None).await;
+        let result = client
+            .add_note(None, "# Title\n\nbody\n", &[], None, None)
+            .await;
 
         result.expect("no title should skip duplicate-title validation");
     })
@@ -181,7 +185,7 @@ async fn add_validation_skips_on_empty_title() {
         let client = NbClient::new(&config_for(&env)).expect("client construction");
 
         let result = client
-            .add(Some(""), "# Title\n\nbody\n", &[], None, None)
+            .add_note(Some(""), "# Title\n\nbody\n", &[], None, None)
             .await;
 
         match result {
@@ -208,7 +212,7 @@ async fn add_allows_whitespace_only_title_with_h1_in_content() {
         let client = NbClient::new(&config_for(&env)).expect("client construction");
 
         let result = client
-            .add(Some("   \t  "), "# Title\n\nbody\n", &[], None, None)
+            .add_note(Some("   \t  "), "# Title\n\nbody\n", &[], None, None)
             .await;
 
         result.expect("whitespace-only title should skip duplicate-title validation");
@@ -227,7 +231,7 @@ async fn add_allows_case_different_h1() {
         let client = NbClient::new(&config_for(&env)).expect("client construction");
 
         let result = client
-            .add(Some("Title"), "# title\n\nbody\n", &[], None, None)
+            .add_note(Some("Title"), "# title\n\nbody\n", &[], None, None)
             .await;
         result.expect("case-different H1 text should not trigger rejection");
     })
@@ -252,7 +256,7 @@ async fn add_carries_verbatim_title_in_duplicate_error() {
         let client = NbClient::new(&config_for(&env)).expect("client construction");
 
         let result = client
-            .add(Some("  Title  "), "# Title\n\nbody\n", &[], None, None)
+            .add_note(Some("  Title  "), "# Title\n\nbody\n", &[], None, None)
             .await;
         match result {
             Err(NbError::DuplicateTitleHeading { title, heading }) => {
@@ -298,7 +302,9 @@ async fn add_rejects_h1_with_closing_hashes() {
                 "#\tTitle #",
             ),
         ] {
-            let result = client.add(Some("Title"), content, &[], None, None).await;
+            let result = client
+                .add_note(Some("Title"), content, &[], None, None)
+                .await;
             match result {
                 Err(NbError::DuplicateTitleHeading { title, heading }) => {
                     assert_eq!(title, "Title", "{label}: title field");
@@ -325,7 +331,7 @@ async fn add_rejects_h1_with_2_leading_spaces() {
         let client = NbClient::new(&config_for(&env)).expect("client construction");
 
         let result = client
-            .add(Some("Title"), "  # Title\n\nbody\n", &[], None, None)
+            .add_note(Some("Title"), "  # Title\n\nbody\n", &[], None, None)
             .await;
 
         match result {
@@ -351,7 +357,7 @@ async fn add_rejects_h1_with_3_leading_spaces() {
         let client = NbClient::new(&config_for(&env)).expect("client construction");
 
         let result = client
-            .add(Some("Title"), "   # Title\n\nbody\n", &[], None, None)
+            .add_note(Some("Title"), "   # Title\n\nbody\n", &[], None, None)
             .await;
 
         match result {
@@ -376,7 +382,7 @@ async fn add_rejects_h1_with_tab_delimiter() {
         let client = NbClient::new(&config_for(&env)).expect("client construction");
 
         let result = client
-            .add(Some("Title"), "#\tTitle\n\nbody\n", &[], None, None)
+            .add_note(Some("Title"), "#\tTitle\n\nbody\n", &[], None, None)
             .await;
 
         match result {
@@ -400,7 +406,7 @@ async fn add_allows_4_space_indented_line() {
         let client = NbClient::new(&config_for(&env)).expect("client construction");
 
         let result = client
-            .add(Some("Title"), "    # Title\n\nbody\n", &[], None, None)
+            .add_note(Some("Title"), "    # Title\n\nbody\n", &[], None, None)
             .await;
 
         result.expect("4-space indented line is a code block, not an H1; not flagged");
@@ -421,7 +427,7 @@ async fn add_rejects_literal_trailing_hash() {
         let client = NbClient::new(&config_for(&env)).expect("client construction");
 
         let result = client
-            .add(Some("C#"), "# C#\n\nbody\n", &[], None, None)
+            .add_note(Some("C#"), "# C#\n\nbody\n", &[], None, None)
             .await;
 
         match result {
@@ -452,7 +458,7 @@ async fn add_allows_blank_h1_with_closing_hash() {
         let client = NbClient::new(&config_for(&env)).expect("client construction");
 
         let result = client
-            .add(Some("#"), "# #\n\nbody\n", &[], None, None)
+            .add_note(Some("#"), "# #\n\nbody\n", &[], None, None)
             .await;
 
         result.expect(
@@ -473,7 +479,7 @@ async fn add_allows_blank_h1_with_multi_closing_hashes() {
         let client = NbClient::new(&config_for(&env)).expect("client construction");
 
         let result = client
-            .add(Some("#"), "# ###\n\nbody\n", &[], None, None)
+            .add_note(Some("#"), "# ###\n\nbody\n", &[], None, None)
             .await;
 
         result.expect("blank H1 with multi-hash closing sequence does not match non-empty title");
@@ -493,7 +499,7 @@ async fn add_rejects_h1_with_closing_hash_when_heading_text_matches_title() {
         let client = NbClient::new(&config_for(&env)).expect("client construction");
 
         let result = client
-            .add(Some("C#"), "# C# #\n\nbody\n", &[], None, None)
+            .add_note(Some("C#"), "# C# #\n\nbody\n", &[], None, None)
             .await;
 
         match result {
@@ -520,7 +526,7 @@ async fn add_allows_h1_without_space() {
         let client = NbClient::new(&config_for(&env)).expect("client construction");
 
         let result = client
-            .add(Some("Title"), "#Title\n\nbody\n", &[], None, None)
+            .add_note(Some("Title"), "#Title\n\nbody\n", &[], None, None)
             .await;
 
         result.expect("#Title (no space) is not a valid ATX H1; not flagged");
@@ -550,7 +556,7 @@ async fn add_validation_runs_before_resolve_notebook() {
         .expect("client construction");
 
         let result = client
-            .add(
+            .add_note(
                 Some("Title"),
                 "# Title\n\nbody\n",
                 &[],

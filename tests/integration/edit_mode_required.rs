@@ -1,11 +1,11 @@
 //! Regression tests for Phase 5 of `add-0-2-0-foundation`:
-//! the vocabulary-trap fix on `NbClient::edit`.
+//! the vocabulary-trap fix on `NbClient::edit_note`.
 //!
 //! The destructive-incident root cause tracked at
 //! `nb-api:issues/api/6` / `nb-mcp-server:issues/mcp/6` was
 //! callers reading `mode: "replace"` and reasonably expecting a
 //! substring-style replacement (analogous to
-//! [`str::replace`](std::str::replace)). The `EditMode` variant
+//! [`str::replace`]). The `EditMode` variant
 //! previously named `Replace` was renamed to `Overwrite` so the
 //! destructive intent is unambiguous at the call site. The
 //! legacy string `"replace"` is accepted as a serde alias for
@@ -45,9 +45,9 @@ fn config_for(env: &NbTestEnv) -> Config {
 /// vocabulary-trap regression.
 #[allow(dead_code)]
 fn _compile_time_check_edit_signature_compiles(client: &NbClient) {
-    core::mem::drop(client.edit("id", "content", EditMode::Overwrite, None));
-    core::mem::drop(client.edit("id", "content", EditMode::Append, None));
-    core::mem::drop(client.edit("id", "content", EditMode::Prepend, None));
+    core::mem::drop(client.edit_note("id", "content", EditMode::Overwrite, None));
+    core::mem::drop(client.edit_note("id", "content", EditMode::Append, None));
+    core::mem::drop(client.edit_note("id", "content", EditMode::Prepend, None));
 }
 
 // --------------------------------------------------------------------
@@ -62,7 +62,7 @@ async fn edit_overwrite_destroys_existing_body() {
         let client = NbClient::new(&config_for(&env)).expect("client construction");
 
         client
-            .add(
+            .add_note(
                 None,
                 "original content that should be gone\n",
                 &[],
@@ -73,11 +73,11 @@ async fn edit_overwrite_destroys_existing_body() {
             .expect("add");
 
         client
-            .edit("1", "fresh body\n", EditMode::Overwrite, None)
+            .edit_note("1", "fresh body\n", EditMode::Overwrite, None)
             .await
             .expect("edit overwrite");
 
-        let output = client.show("1", None).await.expect("show");
+        let output = client.show_note("1", None).await.expect("show");
         assert!(
             !output.contains("original content"),
             "Overwrite must destroy original body; got:\n{output:?}"
@@ -97,16 +97,16 @@ async fn edit_append_preserves_and_extends_body() {
         let client = NbClient::new(&config_for(&env)).expect("client construction");
 
         client
-            .add(None, "first chunk\n", &[], None, None)
+            .add_note(None, "first chunk\n", &[], None, None)
             .await
             .expect("add");
 
         client
-            .edit("1", "second chunk\n", EditMode::Append, None)
+            .edit_note("1", "second chunk\n", EditMode::Append, None)
             .await
             .expect("edit append");
 
-        let output = client.show("1", None).await.expect("show");
+        let output = client.show_note("1", None).await.expect("show");
         assert!(
             output.contains("first chunk"),
             "Append must preserve original body; got:\n{output:?}"
@@ -126,16 +126,16 @@ async fn edit_prepend_preserves_and_prepends_body() {
         let client = NbClient::new(&config_for(&env)).expect("client construction");
 
         client
-            .add(None, "second chunk\n", &[], None, None)
+            .add_note(None, "second chunk\n", &[], None, None)
             .await
             .expect("add");
 
         client
-            .edit("1", "first chunk\n", EditMode::Prepend, None)
+            .edit_note("1", "first chunk\n", EditMode::Prepend, None)
             .await
             .expect("edit prepend");
 
-        let output = client.show("1", None).await.expect("show");
+        let output = client.show_note("1", None).await.expect("show");
         assert!(
             output.contains("first chunk"),
             "Prepend must include new content; got:\n{output:?}"
@@ -164,16 +164,16 @@ async fn edit_overwrite_with_single_byte_body() {
         let client = NbClient::new(&config_for(&env)).expect("client construction");
 
         client
-            .add(None, "alpha\nbeta\ngamma\ndelta\n", &[], None, None)
+            .add_note(None, "alpha\nbeta\ngamma\ndelta\n", &[], None, None)
             .await
             .expect("add");
 
         client
-            .edit("1", "x", EditMode::Overwrite, None)
+            .edit_note("1", "x", EditMode::Overwrite, None)
             .await
             .expect("edit overwrite");
 
-        let output = client.show("1", None).await.expect("show");
+        let output = client.show_note("1", None).await.expect("show");
         assert!(
             !output.contains("alpha")
                 && !output.contains("beta")

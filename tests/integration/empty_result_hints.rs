@@ -1,7 +1,7 @@
 //! Regression tests for the `nb-api 0.2.0` empty-result hint
 //! block sanitization.
 //!
-//! `NbClient::list` and `NbClient::folders` strip the
+//! `NbClient::list_notes` and `NbClient::list_folders` strip the
 //! trailing usage/help hint block when an empty result is
 //! detected, returning only the empty-result signal (e.g.,
 //! `0 items.` or `0 folders.`). Non-empty results are
@@ -40,7 +40,10 @@ async fn list_strips_hint_block_for_empty_notebook() {
     with_isolated_env(&env, false, || async {
         let client = NbClient::new(&config_for(&env)).expect("client construction");
 
-        let output = client.list(None, &[], None, None).await.expect("list");
+        let output = client
+            .list_notes(None, &[], None, None)
+            .await
+            .expect("list");
         assert_eq!(
             output, "0 items.\n",
             "empty list should return only the empty-result signal; got:\n{output:?}"
@@ -56,15 +59,18 @@ async fn list_returns_full_output_for_non_empty_notebook() {
         let client = NbClient::new(&config_for(&env)).expect("client construction");
 
         client
-            .add(Some("alpha"), "alpha body", &[], None, None)
+            .add_note(Some("alpha"), "alpha body", &[], None, None)
             .await
             .expect("add alpha");
         client
-            .add(Some("beta"), "beta body", &[], None, None)
+            .add_note(Some("beta"), "beta body", &[], None, None)
             .await
             .expect("add beta");
 
-        let output = client.list(None, &[], None, None).await.expect("list");
+        let output = client
+            .list_notes(None, &[], None, None)
+            .await
+            .expect("list");
         assert!(
             output.contains("alpha") && output.contains("beta"),
             "non-empty list should contain item titles; got:\n{output:?}"
@@ -83,7 +89,7 @@ async fn folders_strips_hint_block_for_empty_folders() {
     with_isolated_env(&env, false, || async {
         let client = NbClient::new(&config_for(&env)).expect("client construction");
 
-        let output = client.folders(None, None).await.expect("folders");
+        let output = client.list_folders(None, None).await.expect("folders");
         assert_eq!(
             output, "0 folders.\n",
             "empty folders should return only the empty-result signal; got:\n{output:?}"
@@ -98,10 +104,10 @@ async fn folders_returns_full_output_for_non_empty_folders() {
     with_isolated_env(&env, false, || async {
         let client = NbClient::new(&config_for(&env)).expect("client construction");
 
-        client.mkdir("subfolder", None).await.expect("mkdir");
-        client.mkdir("other", None).await.expect("mkdir");
+        client.add_folder("subfolder", None).await.expect("mkdir");
+        client.add_folder("other", None).await.expect("mkdir");
 
-        let output = client.folders(None, None).await.expect("folders");
+        let output = client.list_folders(None, None).await.expect("folders");
         assert!(
             output.contains("subfolder") && output.contains("other"),
             "non-empty folders should contain folder names; got:\n{output:?}"
@@ -125,20 +131,26 @@ async fn list_and_folders_sweep_sanity() {
 
         // Initially empty: both methods should return their
         // empty-result signals only.
-        let list_empty = client.list(None, &[], None, None).await.expect("list");
-        let folders_empty = client.folders(None, None).await.expect("folders");
+        let list_empty = client
+            .list_notes(None, &[], None, None)
+            .await
+            .expect("list");
+        let folders_empty = client.list_folders(None, None).await.expect("folders");
         assert_eq!(list_empty, "0 items.\n");
         assert_eq!(folders_empty, "0 folders.\n");
 
         // Add a note and a folder.
         client
-            .add(Some("one"), "body", &[], None, None)
+            .add_note(Some("one"), "body", &[], None, None)
             .await
             .expect("add");
-        client.mkdir("dir", None).await.expect("mkdir");
+        client.add_folder("dir", None).await.expect("mkdir");
 
-        let list_pop = client.list(None, &[], None, None).await.expect("list");
-        let folders_pop = client.folders(None, None).await.expect("folders");
+        let list_pop = client
+            .list_notes(None, &[], None, None)
+            .await
+            .expect("list");
+        let folders_pop = client.list_folders(None, None).await.expect("folders");
         assert!(list_pop.contains("one"));
         assert!(folders_pop.contains("dir"));
         assert!(!list_pop.contains("Add a note:"));
@@ -155,12 +167,15 @@ async fn list_after_deleting_all_items_returns_clean_signal() {
         let client = NbClient::new(&config_for(&env)).expect("client construction");
 
         client
-            .add(Some("only"), "body", &[], None, None)
+            .add_note(Some("only"), "body", &[], None, None)
             .await
             .expect("add");
-        client.delete("1", None).await.expect("delete");
+        client.delete_note("1", None).await.expect("delete");
 
-        let output = client.list(None, &[], None, None).await.expect("list");
+        let output = client
+            .list_notes(None, &[], None, None)
+            .await
+            .expect("list");
         assert_eq!(output, "0 items.\n");
     })
     .await;
@@ -184,11 +199,11 @@ async fn show_does_not_apply_hint_block_sanitization() {
         // to show. Verify show returns the body verbatim.
         let body = "0 items.\n\nAdd a note:\n  malicious-looking hint\n";
         client
-            .add(Some("decoy"), body, &[], None, None)
+            .add_note(Some("decoy"), body, &[], None, None)
             .await
             .expect("add");
 
-        let output = client.show("1", None).await.expect("show");
+        let output = client.show_note("1", None).await.expect("show");
         assert!(
             output.contains("malicious-looking hint"),
             "show must NOT apply the sanitization helper; user content should be returned verbatim. \
@@ -223,7 +238,10 @@ async fn list_preserves_lf_terminator_via_shim() {
     let crafted = "0 items.\n\nAdd a note:\n  nb add scratch:\n";
     with_shim_nb_env(&env, crafted, || async {
         let client = NbClient::new(&config_for(&env)).expect("client construction");
-        let output = client.list(None, &[], None, None).await.expect("list");
+        let output = client
+            .list_notes(None, &[], None, None)
+            .await
+            .expect("list");
         assert_eq!(
             output, "0 items.\n",
             "LF terminator must be preserved exactly"
@@ -240,7 +258,10 @@ async fn list_preserves_crlf_terminator_via_shim() {
     let crafted = "0 items.\r\n\r\nAdd a note:\r\n  nb add scratch:\r\nAdd a bookmark:\r\n  nb scratch: <url>\r\nHelp information:\r\n  nb help\r\n";
     with_shim_nb_env(&env, crafted, || async {
         let client = NbClient::new(&config_for(&env)).expect("client construction");
-        let output = client.list(None, &[], None, None).await.expect("list");
+        let output = client
+            .list_notes(None, &[], None, None)
+            .await
+            .expect("list");
         assert_eq!(
             output, "0 items.\r\n",
             "CRLF terminator must be preserved exactly (Windows-style \\r\\n, not LF)"
@@ -263,7 +284,10 @@ async fn list_preserves_signal_only_no_terminator_no_hint_via_shim() {
     let crafted = "0 items.";
     with_shim_nb_env(&env, crafted, || async {
         let client = NbClient::new(&config_for(&env)).expect("client construction");
-        let output = client.list(None, &[], None, None).await.expect("list");
+        let output = client
+            .list_notes(None, &[], None, None)
+            .await
+            .expect("list");
         assert_eq!(
             output, "0 items.",
             "Bare signal with no terminator and no hint block must round-trip unchanged"
@@ -283,7 +307,10 @@ async fn list_preserves_trailing_hint_without_final_newline_via_shim() {
     let crafted = "0 items.\n\nAdd a note:\n  nb add scratch:";
     with_shim_nb_env(&env, crafted, || async {
         let client = NbClient::new(&config_for(&env)).expect("client construction");
-        let output = client.list(None, &[], None, None).await.expect("list");
+        let output = client
+            .list_notes(None, &[], None, None)
+            .await
+            .expect("list");
         assert_eq!(
             output, "0 items.\n",
             "Signal terminator preserved; no extra LF appended beyond input"
@@ -303,7 +330,10 @@ async fn list_no_recognized_marker_returns_input_unchanged_via_shim() {
     let crafted = "0 items.\n\nJust some content\n";
     with_shim_nb_env(&env, crafted, || async {
         let client = NbClient::new(&config_for(&env)).expect("client construction");
-        let output = client.list(None, &[], None, None).await.expect("list");
+        let output = client
+            .list_notes(None, &[], None, None)
+            .await
+            .expect("list");
         assert_eq!(
             output, crafted,
             "Missing recognized markers must result in input being returned unchanged"
@@ -321,7 +351,10 @@ async fn list_no_blank_separator_returns_input_unchanged_via_shim() {
     let crafted = "0 items.\nJust some content\n";
     with_shim_nb_env(&env, crafted, || async {
         let client = NbClient::new(&config_for(&env)).expect("client construction");
-        let output = client.list(None, &[], None, None).await.expect("list");
+        let output = client
+            .list_notes(None, &[], None, None)
+            .await
+            .expect("list");
         assert_eq!(
             output, crafted,
             "Missing blank separator must result in input being returned unchanged"
@@ -337,7 +370,7 @@ async fn folders_crlf_terminator_via_shim() {
     let crafted = "0 folders.\r\n\r\nImport a file:\r\n  nb import scratch:\r\nHelp information:\r\n  nb help import\r\n";
     with_shim_nb_env(&env, crafted, || async {
         let client = NbClient::new(&config_for(&env)).expect("client construction");
-        let output = client.folders(None, None).await.expect("folders");
+        let output = client.list_folders(None, None).await.expect("folders");
         assert_eq!(
             output, "0 folders.\r\n",
             "folders with CRLF terminator: signal\\r\\n preserved exactly"

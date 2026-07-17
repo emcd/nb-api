@@ -85,7 +85,7 @@ pub enum NbError {
 
 /// Result of probing a selector's textual classification via
 /// `nb show <selector> --type text`. Used by
-/// [`NbClient::show`](crate::NbClient::show) to decide whether
+/// [`NbClient::show_note`](crate::NbClient::show_note) to decide whether
 /// the content-read path is safe.
 enum ShowClassification {
     /// `nb` classified the type as text. Caller proceeds to
@@ -148,7 +148,7 @@ const NOTEBOOK_FIELD_MESSAGE: &str = "Invalid `notebook`: use a bare notebook na
 
 const FOLDER_FIELD_MESSAGE: &str = "Invalid folder path: use `folder` for folder paths only, not notebook-qualified selectors. To choose a notebook, use the separate `notebook` field.";
 
-/// Behavior mode for [`NbClient::edit`] content updates.
+/// Behavior mode for [`NbClient::edit_note`] content updates.
 ///
 /// ## Vocabulary
 ///
@@ -156,7 +156,7 @@ const FOLDER_FIELD_MESSAGE: &str = "Invalid folder path: use `folder` for folder
 /// remove the vocabulary trap at the root of `nb-api:issues/api/6`:
 /// callers reading `mode: "replace"` reasonably expected a
 /// substring-style replacement (analogous to
-/// [`str::replace`](std::str::replace)), but `nb edit --overwrite`
+/// [`str::replace`]), but `nb edit --overwrite`
 /// is destructive — it replaces every byte of the note body.
 /// Renaming the variant to `Overwrite` makes the destructive
 /// intent unambiguous at the call site.
@@ -436,20 +436,20 @@ impl NbClient {
     }
 
     /// Returns status information about the resolved notebook.
-    pub async fn status(&self, notebook: Option<&str>) -> Result<String, NbError> {
+    pub async fn show_notebook_status(&self, notebook: Option<&str>) -> Result<String, NbError> {
         let notebook = self.resolve_notebook(notebook).await?;
         self.exec_vec(vec![format!("{}:", notebook), "status".to_string()])
             .await
     }
 
     /// Lists available notebooks.
-    pub async fn notebooks(&self) -> Result<String, NbError> {
+    pub async fn list_notebooks(&self) -> Result<String, NbError> {
         // Use --no-color to avoid ANSI escape codes
         self.exec(&["notebooks", "--no-color"]).await
     }
 
     /// Returns the path for a notebook.
-    pub async fn notebook_path(&self, notebook: Option<&str>) -> Result<PathBuf, NbError> {
+    pub async fn show_notebook_path(&self, notebook: Option<&str>) -> Result<PathBuf, NbError> {
         let notebook = self.resolve_notebook(notebook).await?;
         let output = self
             .exec_vec(vec![
@@ -469,7 +469,7 @@ impl NbClient {
     }
 
     /// Creates a new note.
-    pub async fn add(
+    pub async fn add_note(
         &self,
         title: Option<&str>,
         content: &str,
@@ -532,7 +532,7 @@ impl NbClient {
     }
 
     /// Shows a note's content.
-    pub async fn show(&self, id: &str, notebook: Option<&str>) -> Result<String, NbError> {
+    pub async fn show_note(&self, id: &str, notebook: Option<&str>) -> Result<String, NbError> {
         let (_, selector) = self.resolve_target_selector(id, notebook).await?;
         // Probe the selector's classification before reading.
         // `nb show <selector> --type text` reports whether the
@@ -620,7 +620,7 @@ impl NbClient {
     }
 
     /// Lists notes in a notebook or folder.
-    pub async fn list(
+    pub async fn list_notes(
         &self,
         folder: Option<&str>,
         tags: &[String],
@@ -671,7 +671,7 @@ impl NbClient {
     }
 
     /// Searches notes.
-    pub async fn search(
+    pub async fn search_notes(
         &self,
         queries: &[String],
         mode: SearchMode,
@@ -704,7 +704,7 @@ impl NbClient {
     /// Requiredness on the consumer side (e.g., the `mode` field on
     /// `nb-mcp-server`'s `EditArgs`) is a consumer-layer concern,
     /// not enforced here.
-    pub async fn edit(
+    pub async fn edit_note(
         &self,
         id: &str,
         content: &str,
@@ -717,7 +717,7 @@ impl NbClient {
     }
 
     /// Deletes a note.
-    pub async fn delete(&self, id: &str, notebook: Option<&str>) -> Result<String, NbError> {
+    pub async fn delete_note(&self, id: &str, notebook: Option<&str>) -> Result<String, NbError> {
         let (notebook, selector) = self.resolve_target_selector(id, notebook).await?;
         let output = self
             .exec_vec(vec!["delete".to_string(), selector, "--force".to_string()])
@@ -746,7 +746,7 @@ impl NbClient {
     }
 
     /// Creates a todo item.
-    pub async fn todo(
+    pub async fn add_todo(
         &self,
         title: &str,
         description: Option<&str>,
@@ -772,7 +772,7 @@ impl NbClient {
     }
 
     /// Marks a todo as done.
-    pub async fn do_task(
+    pub async fn mark_task_done(
         &self,
         id: &str,
         task_number: Option<u32>,
@@ -786,7 +786,7 @@ impl NbClient {
     }
 
     /// Marks a todo as not done.
-    pub async fn undo_task(
+    pub async fn unmark_task_done(
         &self,
         id: &str,
         task_number: Option<u32>,
@@ -799,8 +799,17 @@ impl NbClient {
         Ok(self.append_notebook_warning(output, &notebook))
     }
 
-    /// Lists todos.
-    pub async fn tasks(
+    /// Lists checklist items within todos.
+    ///
+    /// Invokes the `nb tasks` subcommand. The method enumerates
+    /// the checklist items within todos (and recursively into
+    /// subfolders when `recursive = true`), filtered by
+    /// `status` if provided. The method name matches the
+    /// underlying `nb` CLI command (`nb tasks`); a future
+    /// `list_todos` method for the todo **container** listing
+    /// (invoking `nb todos`) is tracked at
+    /// `nb-api:todos/api/5` (deferred to `0.3.0+`).
+    pub async fn list_tasks(
         &self,
         folder: Option<&str>,
         status: Option<TaskStatus>,
@@ -844,7 +853,7 @@ impl NbClient {
         notebook: &str,
         folder: Option<&str>,
     ) -> Result<Vec<String>, NbError> {
-        let notebook_root = self.notebook_path(Some(notebook)).await?;
+        let notebook_root = self.show_notebook_path(Some(notebook)).await?;
         let start = folder.unwrap_or_default().to_string();
         let mut queue = VecDeque::new();
         queue.push_back(start.clone());
@@ -871,7 +880,7 @@ impl NbClient {
     }
 
     /// Creates a bookmark.
-    pub async fn bookmark(
+    pub async fn add_bookmark(
         &self,
         url: &str,
         title: Option<&str>,
@@ -921,7 +930,7 @@ impl NbClient {
     }
 
     /// Lists folders in a notebook.
-    pub async fn folders(
+    pub async fn list_folders(
         &self,
         parent: Option<&str>,
         notebook: Option<&str>,
@@ -953,7 +962,7 @@ impl NbClient {
     }
 
     /// Creates a folder.
-    pub async fn mkdir(&self, path: &str, notebook: Option<&str>) -> Result<String, NbError> {
+    pub async fn add_folder(&self, path: &str, notebook: Option<&str>) -> Result<String, NbError> {
         validate_folder_path(path)?;
         let notebook = self.resolve_notebook(notebook).await?;
         let folder_path = mkdir_selector(&notebook, path);
@@ -963,8 +972,17 @@ impl NbClient {
         Ok(self.append_notebook_warning(output, &notebook))
     }
 
-    /// Imports a file or URL into the notebook.
-    pub async fn import(
+    /// Imports a file or URL into the notebook as a note.
+    ///
+    /// Invokes `nb import`, which only handles notes (HTML,
+    /// Markdown, plain text, and other source formats that
+    /// `nb` can convert into a note body). The `_note` suffix
+    /// is correct because `nb import` cannot create bookmarks
+    /// or folders — those use `add_bookmark` and `add_folder`
+    /// respectively. The `source` may be a local file path or
+    /// a URL; HTML sources may be converted to Markdown via
+    /// `convert = true`.
+    pub async fn import_note(
         &self,
         source: &str,
         folder: Option<&str>,
@@ -1082,7 +1100,7 @@ fn parse_qualified_selector(selector: &str) -> Result<Option<(&str, &str)>, NbEr
 ///
 /// Returns `None` when the title is empty/None, the content has
 /// no nonblank line, or the first nonblank line is not a
-/// duplicate H1. Used by [`NbClient::add`](crate::NbClient::add)
+/// duplicate H1. Used by [`NbClient::add_note`](crate::NbClient::add_note)
 /// to detect the common agent-side mistake of including the title
 /// H1 inside the body content.
 fn detect_duplicate_title_heading(title: &str, content: &str) -> Option<String> {
