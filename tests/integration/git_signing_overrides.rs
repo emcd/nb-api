@@ -17,26 +17,38 @@
 //! `user.signingkey=DEADBEEF` and `commit.gpgsign=true` do
 //! NOT leak through.
 //!
-//! Uses the existing infrastructure: `ENV_LOCK` (serialization
-//! across concurrent tests), `EnvSnapshot` (RAII env restore on
-//! panic), and a custom `nb` shim that captures its own env to
-//! a file. The test does not expose any internals; it observes
-//! the spawned child through the same `NbClient` API the
-//! downstream consumers use.
+//! # Process isolation
 //!
-//! Both tests in this module hold `ENV_LOCK` across the
-//! `client.list_notes(...).await` call to serialize env mutation
-//! against concurrent tests in the same binary. The lock is
-//! released when `_snap` drops (at end of function), and the
-//! mutex is non-reentrant per `tests/integration/common/mod.rs`.
-//! Justified per the same pattern as `with_isolated_env`: all
-//! integration tests use `#[tokio::test]` with the default
-//! current-thread flavor, the closures do not spawn tasks, and
-//! the alternative (drop-and-reacquire with shared state) is
-//! racy.
+//! This module is registered as its own Cargo integration-test
+//! binary (`tests/integration/git_signing_overrides.rs`, see
+//! `Cargo.toml` `[[test]]` entry) rather than as a `mod` in the
+//! main `tests/integration/main.rs`. Reason: the test mutates
+//! process-global state (it prepends a custom `nb` shim dir to
+//! `PATH` and sets `GIT_CONFIG_*` / `GIT_AUTHOR_*` /
+//! `GIT_COMMITTER_*` env vars). Sibling tests in the main
+//! integration binary that call `NbTestEnv::new()` would race
+//! the PATH mutation against `nb notebooks add` fixture
+//! initialization: if the sibling spawns `nb` while PATH points
+//! at this test's success-exiting shim, fixture init returns
+//! Ok but no notebook is created, and the sibling fails later
+//! with `Notebook not found: scratch`. Per MCP Owner analysis
+//! on 2026-07-18, the right fix is to isolate this module in
+//! its own binary so the global-state mutation cannot race the
+//! main binary's tests. ENV_LOCK is still acquired inside this
+//! binary to serialize the two tests against each other.
+//!
+//! Uses the existing infrastructure: `ENV_LOCK` (serialization
+//! across the two tests in this binary), `EnvSnapshot` (RAII
+//! env restore on panic), and a custom `nb` shim that captures
+//! its own env to a file. The test does not expose any
+//! internals; it observes the spawned child through the same
+//! `NbClient` API the downstream consumers use.
 
 #![cfg(unix)]
-#![allow(clippy::await_holding_lock)]
+#![allow(clippy::await_holding_lock, dead_code)]
+
+#[path = "common/mod.rs"]
+mod common;
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -44,12 +56,16 @@ use std::os::unix::fs::PermissionsExt;
 use nb_api::testing::NbTestEnv;
 use nb_api::{Config, NbClient};
 
-use crate::common::{EnvSnapshot, lock_env};
+use common::{EnvSnapshot, lock_env};
 
 /// Env vars this test mutates and restores via `EnvSnapshot`.
-/// Mirrors the variables that `NbTestEnv::configure_std` and
-/// `with_shim_nb_env` care about: NB_DIR, HOME, GIT_* routing
-/// vars (blast-by-prefix scrub), PATH, SHIM_OUTPUT.
+/// Extends the standard `ENV_VARS_OF_INTEREST` (used by
+/// `with_isolated_env` in `common/mod.rs`) with the
+/// `GIT_CONFIG_*` / `GIT_AUTHOR_*` / `GIT_COMMITTER_*` /
+/// `SHIM_OUTPUT` / `PATH` vars that this test sets in the
+/// parent process. The PATH mutation is the most dangerous
+/// (it points at the custom shim); the GIT_* mutations are
+/// captured-and-restored defensively.
 const TEST_ENV_VARS: &[&str] = &[
     "NB_DIR",
     "HOME",
@@ -68,9 +84,17 @@ const TEST_ENV_VARS: &[&str] = &[
 
 #[tokio::test]
 async fn spawned_nb_child_receives_contiguous_signing_overrides_at_indices_zero_and_one() {
-    let env = NbTestEnv::new().expect("fixture initialization");
+    // Acquire ENV_LOCK BEFORE constructing NbTestEnv. The
+    // previous ordering (lock after new) was a process-global
+    // race: a sibling test in this binary could spawn `nb
+    // notebooks add` via NbTestEnv::new() while this test
+    // modified PATH, leaving the sibling fixture without a
+    // notebook. Acquiring the lock first ensures no sibling
+    // observation during fixture construction or during the
+    // test body's env mutation.
     let _guard = lock_env();
     let _snap = EnvSnapshot::capture(TEST_ENV_VARS);
+    let env = NbTestEnv::new().expect("fixture initialization");
 
     // Configure parent env with `GIT_CONFIG_COUNT=2` plus a
     // non-default `KEY_0=user.signingkey`, `VALUE_0=DEADBEEF`,
@@ -95,8 +119,8 @@ async fn spawned_nb_child_receives_contiguous_signing_overrides_at_indices_zero_
     // Write a custom `nb` shim that captures its own env to a
     // file before emitting `SHIM_OUTPUT`. The shim does NOT
     // pass through to real `nb` because we want to capture the
-    // exact env our `NbClient::exec` constructed, regardless
-    // of whether real `nb` would have errored on the captured
+    // exact env our `NbClient::exec` constructed, regardless of
+    // whether real `nb` would have errored on the captured
     // config.
     let capture_dir = tempfile::Builder::new()
         .prefix("nb-env-cap-")
@@ -138,12 +162,7 @@ exit 0
     unsafe { std::env::set_var("HOME", env.home_dir()) };
     // SHIM_OUTPUT triggers the existing empty-result hint
     // sanitization (`0 items.\n`) without depending on real
-    // `nb` output. The hint block detection finds a blank
-    // separator and a hint marker below — but `SHIM_OUTPUT`
-    // here is just `0 items.` with no hint block, so the
-    // helper short-circuits with input unchanged and we get
-    // exactly the signal back. We just need any well-formed
-    // empty-list output; the captured env is what matters.
+    // `nb` output.
     unsafe { std::env::set_var("SHIM_OUTPUT", "0 items.\n") };
     // Also set author/committer env (consistent with
     // `NbTestEnv::configure_std`) so the test exercises the
@@ -263,12 +282,13 @@ exit 0
 /// receives the contiguous overrides. This test guards against a
 /// regression where the patch accidentally reads *no* parent
 /// count and emits 0 entries.
-#[allow(clippy::await_holding_lock)]
 #[tokio::test]
 async fn spawned_nb_child_receives_signing_overrides_when_parent_has_no_git_config() {
-    let env = NbTestEnv::new().expect("fixture initialization");
+    // Acquire ENV_LOCK BEFORE constructing NbTestEnv (same
+    // rationale as the primary test).
     let _guard = lock_env();
     let _snap = EnvSnapshot::capture(TEST_ENV_VARS);
+    let env = NbTestEnv::new().expect("fixture initialization");
 
     // Explicitly unset any parent GIT_CONFIG_* (the EnvSnapshot
     // captures the pre-test state and restores on drop).

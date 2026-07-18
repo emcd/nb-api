@@ -42,6 +42,17 @@ name = "integration"
 path = "tests/integration/main.rs"
 required-features = ["testing"]
 
+# Isolated test binary for `git_signing_overrides`. Lives in its
+# own Cargo integration-test binary/process so the global PATH
+# mutation (a shim dir is prepended to process `PATH`) cannot
+# race sibling tests in the main `integration` binary that run
+# `NbTestEnv::new()` (which spawns `nb notebooks add` against
+# process `PATH`). See MCP Owner analysis 2026-07-18.
+[[test]]
+name = "git_signing_overrides"
+path = "tests/integration/git_signing_overrides.rs"
+required-features = ["testing"]
+
 [dependencies]
 # Async runtime
 tokio = { version = "1.0", features = ["full"] }
