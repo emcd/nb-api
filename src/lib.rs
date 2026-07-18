@@ -1376,11 +1376,6 @@ fn child_folder_names(path: &std::path::Path) -> Result<Vec<String>, NbError> {
 const GIT_SIGNING_OVERRIDES: [(&str, &str); 2] =
     [("commit.gpgsign", "false"), ("tag.gpgsign", "false")];
 
-fn git_config_count(raw: Option<&str>) -> usize {
-    raw.and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(0)
-}
-
 fn git_signing_env_vars(start_index: usize) -> Vec<(String, String)> {
     let total = start_index.saturating_add(GIT_SIGNING_OVERRIDES.len());
     let mut env_vars = Vec::with_capacity(1 + GIT_SIGNING_OVERRIDES.len() * 2);
@@ -1394,8 +1389,18 @@ fn git_signing_env_vars(start_index: usize) -> Vec<(String, String)> {
 }
 
 fn apply_git_signing_env(command: &mut Command) {
-    let start_index = git_config_count(std::env::var("GIT_CONFIG_COUNT").ok().as_deref());
-    for (name, value) in git_signing_env_vars(start_index) {
+    // Always start at index 0. `scrub_git_env` has already removed
+    // every `GIT_CONFIG_*` from the spawn-time `Command` env (the
+    // blast-by-prefix defense-in-depth pattern, mirrored from
+    // `nbspec:71f369e`), so the spawn-time `GIT_CONFIG_COUNT` is
+    // 0. The parent's pre-scrub `GIT_CONFIG_COUNT` does not flow
+    // through to the child and must not influence the index.
+    // (Pre-patch behavior read the parent count via
+    // `std::env::var("GIT_CONFIG_COUNT")`, which produced a gap
+    // in the emitted indices whenever the parent had set
+    // `GIT_CONFIG_*` — see the regression test in
+    // `tests/integration/git_signing_overrides.rs`.)
+    for (name, value) in git_signing_env_vars(0) {
         command.env(name, value);
     }
 }

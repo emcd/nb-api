@@ -12,6 +12,7 @@ mod duplicate_title;
 mod edit_mode_required;
 mod empty_result_hints;
 mod git_env_scrub;
+mod git_signing_overrides;
 mod show_line_wrap;
 mod show_probe;
 
