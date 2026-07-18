@@ -1,6 +1,6 @@
 [package]
 name = "nb-api"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 rust-version = "1.88"
 description = "Typed Rust interface to the nb note-taking CLI (subprocess wrapper: escaping, validation, output parsing)"
