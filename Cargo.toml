@@ -53,6 +53,22 @@ name = "git_signing_overrides"
 path = "tests/integration/git_signing_overrides.rs"
 required-features = ["testing"]
 
+# Bounded empirical probe of `nb 7.24.0` behavior on P1 edge cases.
+# Every subprocess is noninteractive and time-bounded; this target is
+# not part of normal test runs.
+# Usage: cargo test --test probe_empirical --features testing -- --nocapture
+[[test]]
+name = "probe_empirical"
+path = "tests/integration/probe_empirical.rs"
+required-features = ["testing"]
+
+# Empirical probe part 2: dump actual file contents that `nb` produced.
+# Usage: cargo test --test probe_dump --features testing -- --nocapture
+[[test]]
+name = "probe_dump"
+path = "tests/integration/probe_dump.rs"
+required-features = ["testing"]
+
 [dependencies]
 # Async runtime
 tokio = { version = "1.0", features = ["full"] }
