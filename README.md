@@ -31,14 +31,14 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-nb-api = "0.1"
+nb-api = "0.3"
 ```
 
 With optional JSON Schema support:
 
 ```toml
 [dependencies]
-nb-api = { version = "0.1", features = ["schemars"] }
+nb-api = { version = "0.3", features = ["schemars"] }
 ```
 
 ### Example
@@ -80,8 +80,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## API Surface
 
-All operations return `Result<String, NbError>` with raw ANSI-stripped CLI
-output. Typed accessor methods may be added in future versions.
+All `NbClient` operations return `Result<String, NbError>` with raw
+ANSI-stripped CLI output. The `NoteDocument` / `Fingerprint` module
+introduced in 0.3.0 is a typed, byte-precise view of `nb` source files —
+lossless round-trip identity and BLAKE3-256 body fingerprints. See the
+`Document model (new in 0.3.0)` section below for details.
 
 ### Notes
 
@@ -121,11 +124,25 @@ output. Typed accessor methods may be added in future versions.
 | Type | Description |
 |------|-------------|
 | `NbClient` | Async client for invoking nb commands |
-| `NbError` | Error type for all operations |
+| `NbError` | Error type for all operations. **Breaking change in 0.3.0** — variants are now structured (e.g., `CommandFailed { command, stderr, exit_code }`, `ExecutableNotFound { path }`, `Io { path, source: IoError }`). All variants derive `Serialize`/`Deserialize` so they round-trip cleanly through MCP tool responses. See the migration table in `src/error.rs`. |
 | `Config` | Configuration for constructing `NbClient` |
 | `EditMode` | Content update mode for `edit_note` (`Overwrite` is destructive: replaces every byte of the note body). Canonical serialization is `overwrite`; the legacy string `replace` is accepted as a serde alias for backward compatibility but is not advertised in the derived JSON Schema. |
 | `SearchMode` | Query matching mode (any, all) |
 | `TaskStatus` | Todo status filter (open, closed) |
+
+### Document model (new in 0.3.0)
+
+| Type | Description |
+|------|-------------|
+| `NoteDocument` | Lossless byte-range partition of a parsed `nb` note, todo, or bookmark. Accessors: `source`, `emit`, `kind`, `title`, `title_str`, `tags_prefix`, `tag_section`, `tags`, `tags_str`, `body`, `url`, `url_str`, `todo_state`. |
+| `DocumentKind` | Discriminator: `Note`, `Todo`, `Bookmark`. |
+| `TodoState` | Checkbox state for Todo: `Open`, `Done`. |
+| `ParseContext` | How the parser determines kind: `FromPath(PathBuf)` (inferred from extension) or `Explicit(DocumentKind)` (caller-specified). |
+| `TagsIter` / `TagsStrIter` | Iterators over tag tokens (raw bytes or `&str` with UTF-8 errors surfaced). |
+| `BodyFragments` | Iterator over body byte ranges in source order. |
+| `parse(bytes, context)` | The parser entry point. Permissive acceptance per the P1 spec; refusal only on the no-nonblank-line case for Todo/Bookmark. |
+| `Fingerprint` | Versioned public token authenticating exactly the concatenated body_ranges bytes. Canonical form `b3:<64 lowercase hex>` (BLAKE3-256). |
+| `fingerprint(&NoteDocument)` | Compute the BLAKE3-256 fingerprint over body_ranges bytes in source order. |
 
 ## Configuration
 

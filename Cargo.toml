@@ -20,6 +20,7 @@ include = [
 
 [dev-dependencies]
 serde_json = "1.0"
+proptest = "1.4"
 
 [features]
 default = []
@@ -42,6 +43,39 @@ name = "integration"
 path = "tests/integration/main.rs"
 required-features = ["testing"]
 
+# P1 (note document model) test binaries. Per the
+# `add-note-document-model` specification these run by default
+# (no feature flag). The unit tests exercise parser, emitter,
+# and fingerprint without external processes; the integration
+# test exercises the full module against the `nb 7.24.0` corpus.
+[[test]]
+name = "parser"
+path = "tests/unit/parser.rs"
+
+[[test]]
+name = "emitter"
+path = "tests/unit/emitter.rs"
+
+[[test]]
+name = "fingerprint"
+path = "tests/unit/fingerprint.rs"
+
+# Unit tests for `IoError` snapshot chains captured from
+# `std::io::Error` source chains via the public
+# `From<std::io::Error> for IoError` entry point. The tests
+# construct custom `Error` wrappers with `std::io::Error::other`
+# so multi-link chains are reachable end-to-end without any
+# widening of nb-api's public surface. `IoError`,
+# `IoErrorKind`, and `IoError::from` are all already public;
+# no new items are exposed.
+[[test]]
+name = "io_error_chain"
+path = "tests/unit/io_error_chain.rs"
+
+[[test]]
+name = "note_document_model"
+path = "tests/integration/note_document_model.rs"
+
 # Isolated test binary for `git_signing_overrides`. Lives in its
 # own Cargo integration-test binary/process so the global PATH
 # mutation (a shim dir is prepended to process `PATH`) cannot
@@ -54,16 +88,24 @@ path = "tests/integration/git_signing_overrides.rs"
 required-features = ["testing"]
 
 # Bounded empirical probe of `nb 7.24.0` behavior on P1 edge cases.
-# Every subprocess is noninteractive and time-bounded; this target is
-# not part of normal test runs.
-# Usage: cargo test --test probe_empirical --features testing -- --nocapture
+# Every subprocess is noninteractive and time-bounded. The probe
+# functions are `#[ignore]` so they do NOT run under normal
+# `cargo test --all-features` (which would otherwise execute
+# them since the `testing` feature is enabled). The probes
+# require a system-installed `nb` binary AND GNU `timeout` in
+# PATH; running them under the normal all-features test matrix
+# makes the suite environment- and platform-dependent.
+#
+# Invoke intentionally (with --ignored to bypass the ignore):
+#   cargo test --test probe_empirical --features testing -- --ignored --nocapture
 [[test]]
 name = "probe_empirical"
 path = "tests/integration/probe_empirical.rs"
 required-features = ["testing"]
 
 # Empirical probe part 2: dump actual file contents that `nb` produced.
-# Usage: cargo test --test probe_dump --features testing -- --nocapture
+# Invoke intentionally (with --ignored to bypass the ignore):
+#   cargo test --test probe_dump --features testing -- --ignored --nocapture
 [[test]]
 name = "probe_dump"
 path = "tests/integration/probe_dump.rs"
@@ -75,6 +117,10 @@ tokio = { version = "1.0", features = ["full"] }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Cryptographic hashing (Fingerprint scheme, BLAKE3-256)
+blake3 = "1.5"
 
 # JSON Schema generation (optional, for MCP tool schemas)
 schemars = { version = "1.0", optional = true }

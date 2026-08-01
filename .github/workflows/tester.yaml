@@ -5,7 +5,13 @@ on:
     branches: ['*']
   push:
     branches: ['master', 'release-*']
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      base:
+        description: 'Base SHA for the whitespace gate (optional; defaults to HEAD^ for non-initial state, or the empty-tree SHA for the initial push).'
+        required: false
+        type: string
+        default: ''
 
 env:
   CARGO_TERM_COLOR: always
@@ -22,11 +28,38 @@ jobs:
 
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+
+      # Whitespace gate: dispatch on GitHub Actions event kind
+      # via the sourced `scripts/lib/ci-dispatch.sh` library.
+      # Per cycle-4b verdict C4B-V1-1, the dispatch must cover
+      # the exact range of just-pushed commits (PR base SHA,
+      # push before..sha, empty-tree SHA for initial commit),
+      # never an empty range and never a single-commit subset
+      # of a multi-commit push.
+      - name: Whitespace Gate
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          DISPATCH_BASE: ${{ inputs.base }}
+        run: |
+          set -eu
+          source scripts/lib/ci-dispatch.sh
+          base="$(dispatch_base_sha)"
+          echo "Whitespace gate: ${base}..HEAD (event=${GITHUB_EVENT_NAME})"
+          scripts/check-whitespace.sh "${base}..HEAD"
+
+      - name: Run Shell Integration Tests
+        run: |
+          set -eu
+          bash scripts/tests/check-whitespace-test.sh
+          bash scripts/tests/ci-dispatch-test.sh
 
       - name: Check Formatting
         run: cargo fmt --all -- --check

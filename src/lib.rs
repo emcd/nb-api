@@ -4,15 +4,25 @@
 //! Wraps the `nb` CLI as a subprocess, providing async methods for
 //! all note-taking operations.
 
+mod error;
+pub mod fingerprint;
 mod git;
 mod git_env;
 mod output;
+pub mod parser;
+pub(crate) mod tokenizer;
 
 #[cfg(feature = "testing")]
 pub mod testing;
 
+pub use error::{IoError, IoErrorKind, NbError, ParseErrorKind};
+pub use fingerprint::{Fingerprint, fingerprint as compute_fingerprint};
 pub use git::{derive_git_notebook_name, git_rev_parse};
 pub use git_env::{leaked_git_names, scrub_git_env, scrub_git_env_std};
+pub use parser::{
+    BodyFragments, DocumentKind, NoteDocument, ParseContext, SUPPORTED_DOCUMENT_EXTENSIONS,
+    TagsIter, TagsStrIter, TodoState, parse,
+};
 
 use std::{collections::VecDeque, path::PathBuf, process::Stdio, sync::LazyLock};
 
@@ -32,55 +42,6 @@ static ANSI_REGEX: LazyLock<Regex> =
 /// Strip ANSI escape sequences from text.
 fn strip_ansi(text: &str) -> String {
     ANSI_REGEX.replace_all(text, "").into_owned()
-}
-
-/// Errors from nb CLI invocation.
-#[derive(Debug, thiserror::Error)]
-pub enum NbError {
-    #[error("nb command failed: {0}")]
-    CommandFailed(String),
-
-    #[error(
-        "nb not found in PATH; install via: brew install xwmx/taps/nb (macOS) or see https://github.com/xwmx/nb#installation"
-    )]
-    NotFound,
-
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
-
-    /// `nb show` was invoked on a selector whose type is not
-    /// classified as text by `nb` itself (per
-    /// `add-0-2-0-foundation` public-API spec). Folders, archives,
-    /// audio, video, image, and any other non-textual type reach
-    /// this path. The classification delegates to
-    /// `nb show <selector> --type text` so forward compatibility
-    /// is automatic when `nb` adds new textual types. Probe
-    /// failure (e.g., selector not found) does NOT route here;
-    /// it falls through to the original `CommandFailed` error
-    /// from the content-read path.
-    #[error(
-        "selector `{selector}` resolved to non-textual type `{actual_type}`; \
-         `nb show` does not display non-textual content"
-    )]
-    UnsupportedShowTarget {
-        selector: String,
-        actual_type: String,
-    },
-
-    /// `nb add` was called with a `title` and `content` where the
-    /// first nonblank line of `content` is an exact Markdown ATX H1
-    /// duplicating the title. The validation runs in the caller
-    /// process before any subprocess invocation or notebook side
-    /// effect (including `resolve_notebook`); the rejection
-    /// happens entirely in-process. `heading` carries the exact
-    /// detected source line (including the leading `#` and any
-    /// surrounding whitespace) for actionable diagnostics. See
-    /// `add-0-2-0-foundation` public-API specification.
-    #[error(
-        "title `{title}` duplicates the first H1 in content (`{heading}`); \
-         remove the duplicate heading to avoid double-rendering"
-    )]
-    DuplicateTitleHeading { title: String, heading: String },
 }
 
 /// Result of probing a selector's textual classification via
@@ -259,7 +220,10 @@ impl NbClient {
         if self.allow_top_level_notes || folder.is_some_and(|value| !value.trim().is_empty()) {
             return Ok(());
         }
-        Err(NbError::CommandFailed(FOLDER_REQUIRED_MESSAGE.to_string()))
+        Err(NbError::ValidationError {
+            reason: FOLDER_REQUIRED_MESSAGE.to_string(),
+            location: None,
+        })
     }
 
     async fn resolve_target_selector(
@@ -272,9 +236,12 @@ impl NbClient {
                 Some(value) => {
                     validate_notebook_name(value)?;
                     if value != embedded_notebook {
-                        return Err(NbError::CommandFailed(format!(
-                            "ambiguous selector: id targets notebook `{embedded_notebook}`, but notebook field is `{value}`"
-                        )));
+                        return Err(NbError::ValidationError {
+                            reason: format!(
+                                "ambiguous selector: id targets notebook `{embedded_notebook}`, but notebook field is `{value}`"
+                            ),
+                            location: None,
+                        });
                     }
                     embedded_notebook.to_string()
                 }
@@ -312,9 +279,10 @@ impl NbClient {
             validate_notebook_name(name)?;
             return Ok(name.to_string());
         }
-        Err(NbError::CommandFailed(
-            "notebook not configured; set --notebook or NB_MCP_NOTEBOOK".to_string(),
-        ))
+        Err(NbError::ValidationError {
+            reason: "notebook not configured; set --notebook or NB_MCP_NOTEBOOK".to_string(),
+            location: None,
+        })
     }
 
     async fn resolve_notebook(&self, notebook: Option<&str>) -> Result<String, NbError> {
@@ -326,13 +294,25 @@ impl NbClient {
     async fn ensure_notebook(&self, notebook: &str) -> Result<(), NbError> {
         match self.check_notebook(notebook).await {
             Ok(()) => Ok(()),
-            Err(_) => {
+            // Genuine infrastructure failure (no nb binary, IO
+            // error) — surface verbatim; do not try to create.
+            Err(err @ (NbError::ExecutableNotFound { .. } | NbError::Io { .. })) => Err(err),
+            // Typed NotFound from `check_notebook` means the
+            // pinned diagnostic matched the genuine notebook-
+            // absence shape (`Notebook not found: <name>`).
+            // Try to create it; if creation is disabled, surface
+            // a typed validation error; if creation fails,
+            // propagate the new CommandFailed verbatim.
+            Err(NbError::NotFound { .. }) => {
                 if !self.create_notebook {
-                    return Err(NbError::CommandFailed(format!(
-                        "notebook not found; create it with the nb CLI (`nb notebooks add {}`) \
-                         or remove --no-create-notebook",
-                        notebook
-                    )));
+                    return Err(NbError::ValidationError {
+                        reason: format!(
+                            "notebook not found; create it with the nb CLI (`nb notebooks add {}`) \
+                             or remove --no-create-notebook",
+                            notebook
+                        ),
+                        location: None,
+                    });
                 }
                 self.exec_vec(vec![
                     "notebooks".to_string(),
@@ -342,15 +322,35 @@ impl NbClient {
                 .await?;
                 Ok(())
             }
+            // Any other error from `check_notebook` (permission
+            // denied, transient crash, etc.) propagates verbatim;
+            // we deliberately do not try `notebooks add`, because
+            // a non-NotFound CommandFailed likely indicates a
+            // real failure that creation would not rescue.
+            Err(err) => Err(err),
         }
     }
 
     async fn ensure_existing_notebook(&self, notebook: &str) -> Result<(), NbError> {
-        self.check_notebook(notebook).await.map_err(|_| {
-            NbError::CommandFailed(format!(
-                "notebook not found: `{notebook}`. Use a copied selector only for an existing notebook."
-            ))
-        })
+        match self.check_notebook(notebook).await {
+            Ok(()) => Ok(()),
+            // Infrastructure failure — surface verbatim.
+            Err(err @ (NbError::ExecutableNotFound { .. } | NbError::Io { .. })) => Err(err),
+            // Genuine notebook absence: propagate the typed
+            // `NbError::NotFound` produced by `check_notebook`
+            // verbatim. The qualified-selector path
+            // (`<notebook>:<item>`) used by `show_note`,
+            // `add_note`, `edit_note`, etc. surfaces this to the
+            // caller as the typed `NotFound` variant — the
+            // caller can distinguish "notebook gone" from a
+            // generic validation failure. Erasing the typed
+            // `NotFound` into a `ValidationError` would lose
+            // the variant distinction.
+            Err(err @ NbError::NotFound { .. }) => Err(err),
+            // Other CommandFailed errors propagate verbatim
+            // rather than being misclassified as "not found."
+            Err(err) => Err(err),
+        }
     }
 
     async fn check_notebook(&self, notebook: &str) -> Result<(), NbError> {
@@ -365,15 +365,47 @@ impl NbClient {
         match show_result {
             Ok(output) => {
                 if output.trim().is_empty() {
-                    return Err(NbError::CommandFailed(
-                        "nb notebooks path output was empty".to_string(),
-                    ));
+                    // Use the actual argument vector that was passed
+                    // to `exec_vec`, not a reformatted display
+                    // string. This way the `command` field matches
+                    // what was actually executed on the wire, with
+                    // no possibility of drift between the synthetic
+                    // field and the real argv.
+                    return Err(NbError::CommandFailed {
+                        command: format!("nb notebooks show {notebook} --path"),
+                        stderr: "nb notebooks path output was empty".to_string(),
+                        exit_code: None,
+                    });
                 }
                 Ok(())
             }
-            Err(_) => Err(NbError::CommandFailed(format!(
-                "notebook not found: `{notebook}`"
-            ))),
+            Err(err) => {
+                // Surface genuine infrastructure failures verbatim
+                // so callers can distinguish "nb is broken" from
+                // "notebook does not exist". Genuine notebook
+                // absence (nb's pinned diagnostic on stderr) maps
+                // to typed `NotFound`. Any other subprocess
+                // failure (e.g., permission denied, a transient
+                // crash, an nb bug surfacing as `NotFound` in
+                // stderr without the literal `Notebook not found:`
+                // prefix) propagates as the original
+                // `CommandFailed` rather than being swallowed
+                // here. The caller (`ensure_notebook` /
+                // `ensure_existing_notebook`) decides whether to
+                // try to create the notebook on `NotFound` or
+                // surface the error verbatim otherwise.
+                match err {
+                    NbError::ExecutableNotFound { .. } | NbError::Io { .. } => Err(err),
+                    NbError::CommandFailed { ref stderr, .. }
+                        if is_notebook_not_found(stderr, notebook) =>
+                    {
+                        Err(NbError::NotFound {
+                            selector: format!("{notebook}:"),
+                        })
+                    }
+                    other => Err(other),
+                }
+            }
         }
     }
 
@@ -401,17 +433,27 @@ impl NbClient {
         if self.disable_git_signing {
             apply_git_signing_env(&mut command);
         }
+        let joined = format!("nb {}", args.join(" "));
         let output = command
             .spawn()
             .map_err(|e| {
                 if e.kind() == std::io::ErrorKind::NotFound {
-                    NbError::NotFound
+                    NbError::ExecutableNotFound {
+                        path: "nb".to_string(),
+                    }
                 } else {
-                    NbError::Io(e)
+                    NbError::Io {
+                        path: PathBuf::from("nb"),
+                        source: e.into(),
+                    }
                 }
             })?
             .wait_with_output()
-            .await?;
+            .await
+            .map_err(|e| NbError::Io {
+                path: PathBuf::from("nb"),
+                source: e.into(),
+            })?;
 
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
@@ -420,12 +462,16 @@ impl NbClient {
             let stderr = String::from_utf8_lossy(&output.stderr);
             let stdout = String::from_utf8_lossy(&output.stdout);
             // nb sometimes writes errors to stdout
-            let msg = if stderr.is_empty() {
+            let stderr_text = if stderr.is_empty() {
                 strip_ansi(&stdout)
             } else {
                 strip_ansi(&stderr)
             };
-            Err(NbError::CommandFailed(msg))
+            Err(NbError::CommandFailed {
+                command: joined,
+                stderr: stderr_text,
+                exit_code: output.status.code(),
+            })
         }
     }
 
@@ -455,15 +501,21 @@ impl NbClient {
             .exec_vec(vec![
                 "notebooks".to_string(),
                 "show".to_string(),
-                notebook,
+                notebook.clone(),
                 "--path".to_string(),
             ])
             .await?;
         let path = output.trim();
         if path.is_empty() {
-            return Err(NbError::CommandFailed(
-                "nb notebooks path output was empty".to_string(),
-            ));
+            // Synthesized CommandFailed.command must match the
+            // argv actually executed by exec_vec, not a
+            // reformatted display string. The executed argv is
+            // `nb notebooks show {notebook} --path`.
+            return Err(NbError::CommandFailed {
+                command: format!("nb notebooks show {notebook} --path"),
+                stderr: "nb notebooks path output was empty".to_string(),
+                exit_code: None,
+            });
         }
         Ok(PathBuf::from(path))
     }
@@ -563,13 +615,49 @@ impl NbClient {
         // line longer than that (e.g. JSON in change-meta notes, code blocks,
         // long URLs). `--print` returns the file verbatim. Do not remove.
         // See `nb-api:issues/2`.
-        self.exec_vec(vec![
+        let args = vec![
             "show".to_string(),
-            selector,
+            selector.clone(),
             "--print".to_string(),
             "--no-color".to_string(),
-        ])
-        .await
+        ];
+        match self.exec_vec(args).await {
+            Ok(stdout) => Ok(stdout),
+            Err(NbError::CommandFailed {
+                command,
+                stderr,
+                exit_code,
+            }) => {
+                // Map genuine `nb` not-found diagnostics to typed
+                // NotFound at this public selector boundary. Other
+                // CommandFailed metadata is preserved (real subprocess
+                // failures, infra issues). The `selector` field
+                // carries the resolved selector verbatim (e.g.,
+                // `home:does-not-exist`) — the original id the
+                // caller passed, qualified against the resolved
+                // notebook, with no decorative verb suffix.
+                //
+                // The exact-match classifier rejects appended
+                // failures (e.g., a retry that succeeds after a
+                // missing-selector error, or a foreign-line
+                // diagnostic with a "not found" substring):
+                // `nb`'s complete normalized diagnostic for THIS
+                // selector must be `! Not found: <selector>` —
+                // not merely start with the prefix.
+                if is_selector_not_found(&stderr, &selector) {
+                    Err(NbError::NotFound {
+                        selector: selector.clone(),
+                    })
+                } else {
+                    Err(NbError::CommandFailed {
+                        command,
+                        stderr,
+                        exit_code,
+                    })
+                }
+            }
+            Err(err) => Err(err),
+        }
     }
 
     /// Probe the textual classification of a selector via `nb`'s
@@ -681,9 +769,10 @@ impl NbClient {
     ) -> Result<String, NbError> {
         validate_folder_option(folder)?;
         if queries.is_empty() {
-            return Err(NbError::CommandFailed(
-                "at least one search query is required".to_string(),
-            ));
+            return Err(NbError::ValidationError {
+                reason: "at least one search query is required".to_string(),
+                location: None,
+            });
         }
 
         let notebook = self.resolve_notebook(notebook).await?;
@@ -836,14 +925,23 @@ impl NbClient {
                         outputs.push(output.to_string());
                     }
                 }
-                Err(NbError::CommandFailed(message)) if is_empty_tasks_error(&message) => {
+                Err(NbError::CommandFailed { stderr, .. }) if is_empty_tasks_error(&stderr) => {
                     saw_empty = true;
                 }
                 Err(err) => return Err(err),
             }
         }
         if outputs.is_empty() && saw_empty {
-            return Err(NbError::CommandFailed(empty_tasks_message(status)));
+            // The `nb` subprocess actually succeeded (exit 0);
+            // it simply returned no tasks. This is a policy-level
+            // empty-result, not a command failure. Map to
+            // ValidationError rather than fabricate a
+            // CommandFailed with `exit_code: Some(0)` (which
+            // would be factually misleading).
+            return Err(NbError::ValidationError {
+                reason: empty_tasks_message(status),
+                location: None,
+            });
         }
         Ok(outputs.join("\n"))
     }
@@ -1035,9 +1133,137 @@ fn append_warning(mut output: String, warning: String) -> String {
     output
 }
 
+/// Returns `true` if `stderr` from an `nb show <sel>` invocation
+/// matches the exact `nb 7.24.0` selector-absence diagnostic
+/// shape for the given expected selector. The complete
+/// normalized diagnostic must equal `! Not found: <expected>`,
+/// with no other content (no appended text, no mismatched
+/// selector name, no other failure-mode substring).
+///
+/// Diagnostic normalization: ANSI escape sequences and
+/// singleton control bytes (e.g., the Shift-In byte `\x0f`)
+/// that `nb 7.24.0` emits between the diagnostic-bang and the
+/// visible text are dropped. The criterion applies to the
+/// resulting printable form.
+///
+/// Verified failure modes that MUST NOT match even though they
+/// mention a "not found" string:
+/// - `"Permission denied: file not found: /etc/x"` (real
+///   subprocess failure with a non-existent path substring).
+/// - `"Notebook not found: scratch"` (notebook-absence shape,
+///   different classifier).
+/// - `"! error: not found during expansion"` (real error with
+///   "not found" mid-sentence, not the canonical shape).
+///
+/// Note: this helper is a transient bridge while `NbClient`
+/// still wraps `nb` as a subprocess. The native rewrite
+/// (`nb-api:todos/2`) will let `show_note` and friends read
+/// the on-disk file directly via the P1 note-document-model,
+/// removing the need to classify `nb` stderr at all. Whether
+/// this helper is deleted is a separate review cycle when the
+/// native rewrite lands; the deletion is NOT automatic.
+fn is_selector_not_found(stderr: &str, expected_selector: &str) -> bool {
+    exact_normalized_diagnostic(stderr, "Not found: ", expected_selector)
+}
+
+/// Returns `true` if `stderr` from `nb notebooks show <name>
+/// --path` matches the exact `nb 7.24.0` notebook-absence
+/// diagnostic shape for the given expected notebook name. The
+/// complete normalized diagnostic must equal
+/// `! Notebook not found: <expected>`. See
+/// [`is_selector_not_found`] for normalization details and
+/// verified failure-mode negatives.
+fn is_notebook_not_found(stderr: &str, expected_notebook: &str) -> bool {
+    exact_normalized_diagnostic(stderr, "Notebook not found: ", expected_notebook)
+}
+
+/// Verify the normalized diagnostic for `nb show` / `nb
+/// notebooks show` ABSENCE shapes. Returns `true` only when
+/// the printable form, with the pinned normalization sequence
+/// applied, equals the literal template `<keyword><expected>`.
+///
+/// Normalization sequence (pinned; do not reorder):
+///   1. Reduce to printable form via [`printable_form`] (drops
+///      ANSI escapes and singleton control bytes except
+///      newline / carriage-return / tab).
+///   2. Trim trailing `\n` / `\r` bytes (`trim_end_matches`).
+///   3. Strip exactly one leading `!` diagnostic-bang
+///      (`strip_prefix('!')`).
+///   4. Strip leading ASCII whitespace (`trim_start`).
+///   5. Compare byte-exact against the literal template
+///      `<keyword><expected>`.
+///
+/// Pathological stderr (multiline, trailing garbage, foreign
+/// diagnostic styles) is rejected because the criterion is
+/// byte-exact post-normalization. This prevents appended
+/// failures (e.g., a retry that succeeds after a missing-
+/// selector error) from being absorbed as a "not found" when
+/// they were actually transient.
+fn exact_normalized_diagnostic(stderr: &str, keyword: &str, expected_value: &str) -> bool {
+    let printable = printable_form(stderr);
+    let trimmed = printable.trim_end_matches(&['\n', '\r'][..]);
+    let after_bang = match trimmed.strip_prefix('!').map(str::trim_start) {
+        Some(rest) => rest,
+        None => return false,
+    };
+    let expected = format!("{keyword}{expected_value}");
+    after_bang == expected
+}
+
+/// Reduce `stderr` to its printable-canonical form by
+/// dropping ANSI escape sequences and singleton control
+/// characters while preserving spaces, tabs, and newlines.
+///
+/// `nb 7.24.0` decorates its error diagnostics with mixed
+/// ANSI/control bytes between the diagnostic-bang and the
+/// visible text (e.g., `!<ANSI reset><SI> Not found: ...`).
+/// Without this normalization, the byte-exact classifiers
+/// above cannot reach the visible prefix. The function is
+/// intentionally narrow: it only normalizes the bytes that
+/// `nb 7.24.0` is known to emit; non-printable bytes inside
+/// an unrelated error's message will be dropped, which is
+/// acceptable because the classifiers compare against the
+/// pinned literal template and would not match a different
+/// message anyway.
+fn printable_form(stderr: &str) -> String {
+    let mut out = String::with_capacity(stderr.len());
+    let mut chars = stderr.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            // Skip an ANSI control sequence: CSI (`ESC [` ... )
+            // or Fe (`ESC <byte>`).
+            if chars.peek() == Some(&'[') {
+                chars.next();
+                while let Some(&nc) = chars.peek() {
+                    chars.next();
+                    if (0x40..=0x7e).contains(&(nc as u32)) {
+                        break;
+                    }
+                }
+            } else {
+                chars.next();
+            }
+            continue;
+        }
+        // Drop singleton control bytes (SI/SO/...) while
+        // preserving tab/newline. nb's diagnostic decoration
+        // uses these; ordinary messages do not contain
+        // unprintable bytes in the visible region.
+        let code = c as u32;
+        if code < 0x20 && c != '\t' && c != '\n' && c != '\r' {
+            continue;
+        }
+        out.push(c);
+    }
+    out
+}
+
 fn validate_notebook_name(name: &str) -> Result<(), NbError> {
     if name.trim().is_empty() || name.contains(':') || name.contains('/') || name.contains('\\') {
-        return Err(NbError::CommandFailed(NOTEBOOK_FIELD_MESSAGE.to_string()));
+        return Err(NbError::ValidationError {
+            reason: NOTEBOOK_FIELD_MESSAGE.to_string(),
+            location: None,
+        });
     }
     Ok(())
 }
@@ -1051,17 +1277,22 @@ fn validate_folder_option(folder: Option<&str>) -> Result<(), NbError> {
 
 fn validate_folder_path(path: &str) -> Result<(), NbError> {
     if path.trim().is_empty() || path.contains(':') {
-        return Err(NbError::CommandFailed(FOLDER_FIELD_MESSAGE.to_string()));
+        return Err(NbError::ValidationError {
+            reason: FOLDER_FIELD_MESSAGE.to_string(),
+            location: None,
+        });
     }
     Ok(())
 }
 
 fn validate_destination(destination: &str) -> Result<(), NbError> {
     if destination.trim().is_empty() || destination.contains(':') {
-        return Err(NbError::CommandFailed(
-            "Invalid destination: use a folder path or filename only, not a notebook-qualified selector."
-                .to_string(),
-        ));
+        return Err(NbError::ValidationError {
+            reason:
+                "Invalid destination: use a folder path or filename only, not a notebook-qualified selector."
+                    .to_string(),
+            location: None,
+        });
     }
     Ok(())
 }
@@ -1072,10 +1303,12 @@ fn parse_qualified_selector(selector: &str) -> Result<Option<(&str, &str)>, NbEr
     };
     validate_notebook_name(notebook)?;
     if path.trim().is_empty() || path.contains(':') {
-        return Err(NbError::CommandFailed(
-            "Invalid selector: use at most one notebook qualifier, as `<notebook>:<folder>/<id>`."
-                .to_string(),
-        ));
+        return Err(NbError::ValidationError {
+            reason:
+                "Invalid selector: use at most one notebook qualifier, as `<notebook>:<folder>/<id>`."
+                    .to_string(),
+            location: None,
+        });
     }
     Ok(Some((notebook, path)))
 }
@@ -1348,12 +1581,20 @@ fn child_folder_names(path: &std::path::Path) -> Result<Vec<String>, NbError> {
     let read_dir = match std::fs::read_dir(path) {
         Ok(entries) => entries,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(err) => return Err(NbError::Io(err)),
+        Err(err) => {
+            return Err(NbError::Io {
+                path: path.to_path_buf(),
+                source: err.into(),
+            });
+        }
     };
 
     let mut names = Vec::new();
     for entry in read_dir {
-        let entry = entry?;
+        let entry = entry.map_err(|e| NbError::Io {
+            path: path.to_path_buf(),
+            source: e.into(),
+        })?;
         let Some(name) = entry.file_name().to_str().map(|value| value.to_string()) else {
             continue;
         };
@@ -1363,7 +1604,12 @@ fn child_folder_names(path: &std::path::Path) -> Result<Vec<String>, NbError> {
         let meta = match entry.metadata() {
             Ok(meta) => meta,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(err) => return Err(NbError::Io(err)),
+            Err(err) => {
+                return Err(NbError::Io {
+                    path: path.to_path_buf(),
+                    source: err.into(),
+                });
+            }
         };
         if meta.is_dir() {
             names.push(name);

@@ -571,8 +571,8 @@ async fn add_validation_runs_before_resolve_notebook() {
                 // non-existent notebook never triggered the
                 // CommandFailed path.
             }
-            Err(NbError::CommandFailed(message)) => panic!(
-                "expected DuplicateTitleHeading, but resolve_notebook fired first: {message:?}"
+            Err(NbError::CommandFailed { stderr, .. }) => panic!(
+                "expected DuplicateTitleHeading, but resolve_notebook fired first: {stderr:?}"
             ),
             other => panic!("expected DuplicateTitleHeading, got: {other:?}"),
         }

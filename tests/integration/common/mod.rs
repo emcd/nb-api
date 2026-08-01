@@ -23,29 +23,44 @@ use nb_api::testing::NbTestEnv;
 /// is Unix-only (Bash script + executable-bit chmod).
 #[cfg(unix)]
 const SHIM_SCRIPT_TEMPLATE: &str = r#"#!/usr/bin/env bash
-# Pass through to real nb UNLESS both:
-# 1. SHIM_OUTPUT is set (the shim test is active), AND
+# Pass through to real nb UNLESS:
+# 1. SHIM_OUTPUT is SET (even to an empty string — the helper
+#    always sets it when active), AND
 # 2. The invocation is list-like (any arg matches "list" or
-#    ends with ":list", e.g. "scratch:list").
+#    ends with ":list", e.g. "scratch:list") OR a notebook
+#    path probe (`notebooks show <nb> --path`).
 # Without the subcommand check, the shim would echo
 # SHIM_OUTPUT for any concurrent `nb` invocation
 # (e.g., a sibling test's `nb notebooks add` during
 # fixture init), corrupting the sibling's notebook
-# creation. The subcommand check routes non-list
-# invocations to real nb regardless of SHIM_OUTPUT.
+# creation. The subcommand check routes other invocations
+# to real nb regardless of SHIM_OUTPUT.
 # REAL_NB is the absolute path to the real `nb` binary,
 # resolved against the unmodified PATH by the Rust
 # helper before prepending the shim dir. Defaults to
 # /usr/local/bin/nb if unset (defensive fallback).
+shim_active=false
+if [[ -v SHIM_OUTPUT ]]; then
+  shim_active=true
+fi
 shim_output="${SHIM_OUTPUT:-}"
-list_invocation=false
+shim_invocation=false
 for arg in "$@"; do
   if [[ "$arg" == "list" || "$arg" == *:list* ]]; then
-    list_invocation=true
+    shim_invocation=true
     break
   fi
 done
-if [[ -n "$shim_output" && "$list_invocation" == "true" ]]; then
+# Notebook-path probe: `nb notebooks show <nb> --path`. The
+# qualified form `<nb>:notebooks show --path` is the legacy
+# shape the cycle-4 refactor replaced; it is not a real `nb`
+# invocation and so does not need to be matched here.
+if [[ "$shim_invocation" == "false" ]]; then
+  if [[ "$1" == "notebooks" && "$2" == "show" && "$4" == "--path" ]]; then
+    shim_invocation=true
+  fi
+fi
+if [[ "$shim_active" == "true" && "$shim_invocation" == "true" ]]; then
   printf '%s' "$shim_output"
   exit 0
 fi
@@ -277,6 +292,62 @@ fn resolve_nb_in_path(path_var: Option<&OsString>) -> Option<std::path::PathBuf>
 /// which restores `PATH` / `SHIM_OUTPUT` / `NB_DIR` / `HOME` /
 /// `GIT_*` to their pre-helper values before the tempdir is
 /// dropped (avoiding the "deleted tempdir in PATH" poisoning
+/// Lazy, process-wide handle to the shim directory. Created once
+/// on first call to `with_shim_nb_env` and PERSISTS for the
+/// lifetime of the test process — it is never deleted. This
+/// closes a TOCTOU race where a concurrent `NbTestEnv::new()`
+/// (which runs WITHOUT ENV_LOCK) would inherit a PATH that
+/// still pointed at a freshly deleted shim directory, fail
+/// `execvp` with ENOENT, and produce a sibling-test failure
+/// ("bash: /tmp/nb-shim-XXX/nb: No such file or directory").
+/// Keeping the on-disk file alive for the whole process makes
+/// the resolution race-free: either the file is there (exec
+/// succeeds) or PATH no longer references it (exec falls
+/// through). There is no "deleted-between-PATH-lookup-and-
+/// exec" window.
+#[cfg(unix)]
+static SHIM_DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
+/// Resolve the real `nb` binary against the unmodified PATH
+/// and create the persistent shim directory (once per
+/// process).
+#[cfg(unix)]
+fn ensure_shim_dir() -> &'static std::path::Path {
+    SHIM_DIR.get_or_init(|| {
+        let path_var = std::env::var_os("PATH");
+        let real_nb = resolve_nb_in_path(path_var.as_ref()).unwrap_or_else(|| {
+            panic!(
+                "with_shim_nb_env: could not find `nb` in PATH. \
+                 Ensure `nb` is installed and discoverable. \
+                 Checked PATH={:?}",
+                path_var
+            )
+        });
+        let dir = tempfile::Builder::new()
+            .prefix("nb-shim-")
+            .tempdir()
+            .expect("create shim tempdir");
+        let path = dir.path().to_path_buf();
+        // Leak the TempDir so its Drop (and the on-disk
+        // removal it triggers) NEVER runs. The on-disk dir
+        // is created fresh per process; the cost is one
+        // ~10KB directory per `cargo test` invocation,
+        // recovered by the test runner's tmpdir hygiene.
+        std::mem::forget(dir);
+        std::fs::write(
+            path.join("nb"),
+            SHIM_SCRIPT_TEMPLATE.replace("__REAL_NB__", &real_nb.display().to_string()),
+        )
+        .expect("write shim script");
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(path.join("nb"), std::fs::Permissions::from_mode(0o755))
+                .expect("chmod shim script");
+        }
+        path
+    })
+}
+
 /// of subsequent tests).
 #[cfg(unix)]
 #[allow(dead_code, clippy::await_holding_lock)]
@@ -286,43 +357,11 @@ where
     Fut: Future<Output = R>,
 {
     let _guard = lock_env();
-    let _snap = EnvSnapshot::capture(ENV_VARS_OF_INTEREST);
-
-    // Resolve the real `nb` binary against the unmodified PATH
-    // BEFORE prepending the shim dir. The shim uses this path
-    // for pass-through (`exec "${REAL_NB}"`), so the helper
-    // works on both local machines (`nb` at `/usr/local/bin/nb`)
-    // and CI (`nb` at `$HOME/.local/bin/nb` per `qa` workflow's
-    // `Install nb` step). If no `nb` is found in PATH, fail
-    // setup clearly rather than hard-coding a fallback (which
-    // would recreate the portability failure).
-    let path_var = std::env::var_os("PATH");
-    let real_nb = resolve_nb_in_path(path_var.as_ref()).unwrap_or_else(|| {
-        panic!(
-            "with_shim_nb_env: could not find `nb` in PATH. \
-             Ensure `nb` is installed and discoverable. \
-             Checked PATH={:?}",
-            path_var
-        )
-    });
-
-    let shim_dir = tempfile::Builder::new()
-        .prefix("nb-shim-")
-        .tempdir()
-        .expect("create shim tempdir");
-    let shim_path = shim_dir.path();
-    std::fs::write(
-        shim_path.join("nb"),
-        SHIM_SCRIPT_TEMPLATE.replace("__REAL_NB__", &real_nb.display().to_string()),
-    )
-    .expect("write shim script");
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(shim_path.join("nb"), std::fs::Permissions::from_mode(0o755))
-            .expect("chmod shim script");
-    }
+    let shim_path = ensure_shim_dir();
 
     // SAFETY: serialized by ENV_LOCK (held above).
+    let _snap = EnvSnapshot::capture(ENV_VARS_OF_INTEREST);
+    let path_var = std::env::var_os("PATH");
     let new_path = match path_var.as_ref() {
         Some(p) => format!("{}:{}", shim_path.display(), p.to_string_lossy()),
         None => shim_path.display().to_string(),
@@ -340,9 +379,11 @@ where
         std::env::set_var("HOME", env.home_dir());
     }
 
-    // EnvSnapshot's Drop restores PATH, SHIM_OUTPUT, NB_DIR,
-    // HOME, GIT_* to the values captured at function entry —
-    // panic-safe (runs on unwind as well as on normal return).
+    // Run the closure. EnvSnapshot's Drop restores PATH,
+    // SHIM_OUTPUT, NB_DIR, HOME, GIT_* to the values captured at
+    // function entry — panic-safe (runs on unwind as well as on
+    // normal return). TempDir's Drop auto-deletes the on-disk
+    // shim directory.
     f().await
 }
 

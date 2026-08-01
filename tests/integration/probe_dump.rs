@@ -2,8 +2,15 @@
 // produced in probe_empirical test 1. Reads the files via the
 // harness's `nb show` command and prints raw bytes for analysis.
 //
+// The probe function is `#[ignore]` so it does NOT run under
+// `cargo test --all-features` (which would otherwise execute
+// it since the `testing` feature is enabled). The probe
+// requires a system-installed `nb` binary; running it under
+// the normal all-features test matrix makes the suite
+// environment-dependent.
+//
 // Run after `cargo test --test probe_empirical --features testing`:
-//   cargo test --test probe_dump --features testing -- --nocapture
+//   cargo test --test probe_dump --features testing -- --ignored --nocapture
 
 #![cfg(feature = "testing")]
 

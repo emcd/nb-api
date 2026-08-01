@@ -122,3 +122,14 @@ Use `documentation/agents/nbspec.md` to learn:
      https://raw.githubusercontent.com/emcd/agents-common/master/examples/nb-notes/team-organization/README.md
      Then link the note here, for example:
      - Team org, role ownership, signoff policy, and merge workflow: `coordination/general/<n>` -->
+
+## Deviations
+
+- **Whitespace gate** is `scripts/check-whitespace.sh`, not
+  `.gitattributes`. The `whitespace` attribute is documented to
+  silence `git apply` and `git diff` for working-tree/index/staged
+  comparisons, but does NOT silence `git diff --check` between two
+  commits. Empirical commit-to-commit testing invalidated the
+  `.gitattributes` exemption; the two-pass path-scoped script is the
+  narrow replacement. See `scripts/README.md` and the embedded
+  rationale in the script.

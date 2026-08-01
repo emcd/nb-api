@@ -404,10 +404,14 @@ async fn show_probe_failure_falls_through_to_command_failed() {
 
         let result = client.show_note("does-not-exist", None).await;
         match result {
-            Err(NbError::CommandFailed(message)) => {
+            // Per R2-F6 (MCP Owner cycle-2): genuine `nb` selector
+            // absence is now surfaced as typed `NbError::NotFound`,
+            // not `CommandFailed`. The selector field carries the
+            // original `<notebook>:id` selector string.
+            Err(NbError::NotFound { selector }) => {
                 assert!(
-                    message.contains("Not found") || message.contains("not found"),
-                    "expected missing-selector diagnostic, got: {message:?}"
+                    selector.contains("does-not-exist"),
+                    "expected missing-selector diagnostic in NotFound, got: {selector:?}"
                 );
             }
             Err(NbError::UnsupportedShowTarget { actual_type, .. }) => {
@@ -415,7 +419,7 @@ async fn show_probe_failure_falls_through_to_command_failed() {
                     "probe failure must not be substituted with UnsupportedShowTarget; got actual_type={actual_type:?}"
                 );
             }
-            other => panic!("expected CommandFailed, got: {other:?}"),
+            other => panic!("expected NotFound for missing selector, got: {other:?}"),
         }
     })
     .await;
@@ -460,6 +464,241 @@ async fn show_probe_sweep_over_mixed_items() {
                 assert_eq!(actual_type, "zip");
             }
             other => panic!("expected UnsupportedShowTarget, got: {other:?}"),
+        }
+    })
+    .await;
+}
+
+// ---------- narrow error mapping for show_note / check_notebook ----------
+
+/// `show_note` with a missing id surfaces typed `NotFound`. The
+/// `selector` field carries the original resolved selector
+/// (e.g., `home:does-not-exist`) verbatim — without any
+/// decorative verb suffix added by the client. Under the
+/// previous cycle-3 implementation the selector was rewritten
+/// as `format!("{} show", selector)` (e.g.,
+/// `home:does-not-exist show`), which leaked the subcommand
+/// into the diagnostic.
+#[tokio::test]
+async fn show_note_missing_selector_notfound_carries_qualified_id_verbatim() {
+    let env = NbTestEnv::new().expect("fixture initialization");
+    with_isolated_env(&env, false, || async {
+        let client = NbClient::new(&Config {
+            notebook: Some(env.notebook().to_string()),
+            create_notebook: false,
+            allow_top_level_notes: true,
+            ..Config::default()
+        })
+        .expect("client construction");
+
+        let result = client.show_note("does-not-exist", None).await;
+        match result {
+            Err(NbError::NotFound { selector }) => {
+                let expected = format!("{}:does-not-exist", env.notebook());
+                assert_eq!(
+                    selector, expected,
+                    "NotFound.selector must carry the original \
+                     `<notebook>:<id>` string verbatim; got: {selector:?}"
+                );
+                // The previous bug suffix " show" must NOT be
+                // present under any conditions.
+                assert!(
+                    !selector.ends_with(" show"),
+                    "NotFound.selector must not contain a decorative \
+                     verb suffix; got: {selector:?}"
+                );
+            }
+            other => panic!("expected NotFound for missing selector, got: {other:?}"),
+        }
+    })
+    .await;
+}
+
+/// When `show_note` is called with an explicit notebook that
+/// does not exist, the inner `check_notebook` must surface the
+/// genuine notebook-absence diagnostic as a typed error rather
+/// than swallow it via a broad case-insensitive substring match
+/// or skip past it. With `create_notebook: false`, `ensure_notebook`
+/// propagates the absence as `ValidationError` rather than
+/// attempting creation; the test pins that surfacing.
+#[tokio::test]
+async fn show_note_nonexistent_notebook_returns_validation_error_when_create_disabled() {
+    let env = NbTestEnv::new().expect("fixture initialization");
+    with_isolated_env(&env, false, || async {
+        let client = NbClient::new(&Config {
+            notebook: Some(env.notebook().to_string()),
+            create_notebook: false,
+            allow_top_level_notes: true,
+            ..Config::default()
+        })
+        .expect("client construction");
+
+        // Pass an explicit notebook name that is not registered
+        // with the test fixture; nb emits its pinned
+        // "Notebook not found: <name>" diagnostic.
+        let result = client
+            .show_note("anything", Some("nonexistent-notebook-for-r3-f2"))
+            .await;
+        match result {
+            Err(NbError::ValidationError { reason, .. }) => {
+                assert!(
+                    reason.contains("not found"),
+                    "expected validation error to mention absence; got: {reason:?}"
+                );
+                assert!(
+                    reason.contains("nonexistent-notebook-for-r3-f2"),
+                    "expected validation error to mention the missing \
+                     notebook name; got: {reason:?}"
+                );
+            }
+            // Critical anti-regression assertions: under the
+            // previous broad-substring classifier the path
+            // could reach NotFound when the failure was a real
+            // permission-denied; pin that we surface the typed
+            // validation error instead.
+            Err(NbError::NotFound { selector }) => panic!(
+                "expected ValidationError for missing notebook, \
+                 got NotFound with selector {selector:?}"
+            ),
+            Err(other) => panic!("expected ValidationError for missing notebook, got: {other:?}"),
+            Ok(s) => panic!(
+                "expected ValidationError for missing notebook, \
+                 got Ok with content: {s:?}"
+            ),
+        }
+    })
+    .await;
+}
+
+/// Qualified-selector path (`<notebook>:<item>`) calls
+/// `ensure_existing_notebook`, which propagates typed
+/// `NbError::NotFound` verbatim rather than converting to
+/// `ValidationError`. This is the cycle-4a rework correction:
+/// the typed `NotFound` was erased to `ValidationError` at the
+/// qualified-selector boundary under the previous
+/// implementation, losing the variant distinction.
+#[tokio::test]
+async fn show_note_qualified_selector_nonexistent_notebook_propagates_typed_not_found() {
+    let env = NbTestEnv::new().expect("fixture initialization");
+    with_isolated_env(&env, false, || async {
+        let client = NbClient::new(&Config {
+            notebook: Some(env.notebook().to_string()),
+            create_notebook: false,
+            allow_top_level_notes: true,
+            ..Config::default()
+        })
+        .expect("client construction");
+
+        // `<nonexistent-notebook>:any-item` exercises the
+        // qualified-selector path: `parse_qualified_selector`
+        // returns Some(("nonexistent-notebook", "any-item")),
+        // and `ensure_existing_notebook("nonexistent-notebook")`
+        // is called. Under the corrected rework, the typed
+        // `NotFound` propagates to the caller as typed
+        // NotFound, not as ValidationError or CommandFailed.
+        let result = client
+            .show_note("nonexistent-notebook-for-r3-f2:item", None)
+            .await;
+        match result {
+            Err(NbError::NotFound { selector }) => {
+                // The selector carries the notebook name with a
+                // trailing colon (the shape produced by
+                // `check_notebook`'s notebook probe). It
+                // identifies the missing notebook without
+                // conflating with the path component of the
+                // user's qualified selector.
+                assert_eq!(
+                    selector, "nonexistent-notebook-for-r3-f2:",
+                    "NotFound.selector must carry the missing notebook \
+                     identifier with trailing colon (check_notebook's \
+                     pinned shape)"
+                );
+            }
+            Err(NbError::ValidationError { reason, .. }) => panic!(
+                "qualified-selector path must propagate typed NotFound, \
+                 not erase to ValidationError: got reason={reason:?}"
+            ),
+            Err(NbError::CommandFailed { stderr, .. }) => panic!(
+                "qualified-selector path must map to typed NotFound, \
+                 not surface raw CommandFailed: stderr={stderr:?}"
+            ),
+            Err(other) => panic!("expected typed NotFound for qualified selector, got: {other:?}"),
+            Ok(_) => panic!("qualified-selector notebook absence must not return Ok"),
+        }
+    })
+    .await;
+}
+
+// ---------- C4B-F2-1 closure: show_notebook_path successful-empty-output regression ----------
+//
+// Per cycle-4c closure matrix C4B-F2-1 (PARTIAL): the
+// implementation text in `CommandFailed.command` for the
+// successful-but-empty case was fixed in commit b1b162b but no
+// public-interface regression covered it. This test drives the
+// `show_notebook_path` public API against a `with_shim_nb_env`
+// shim that returns empty stdout for the notebook-path probe,
+// and asserts the synthesized `command` field matches the
+// actual argv (`nb notebooks show {notebook} --path`) rather
+// than the pre-fix incorrect display string
+// (`nb {notebook}:notebooks show --path`).
+//
+// Unix-only because `with_shim_nb_env` requires a Bash script
+// + executable-bit chmod + `:`-separated PATH.
+
+#[cfg(unix)]
+use crate::common::with_shim_nb_env;
+
+#[cfg(unix)]
+#[tokio::test]
+async fn show_notebook_path_successful_empty_output_command_field_is_actual_argv() {
+    let env = NbTestEnv::new().expect("fixture initialization");
+    // The shim emits zero bytes for `nb notebooks show
+    // {notebook} --path`. `show_notebook_path` interprets this
+    // as a successful invocation returning no path and synthesizes
+    // a `CommandFailed` for the empty-output contract failure
+    // path with the actual argv as the `command` field.
+    let crafted = "";
+    with_shim_nb_env(&env, crafted, || async {
+        let client = NbClient::new(&Config {
+            notebook: Some(env.notebook().to_string()),
+            create_notebook: false,
+            allow_top_level_notes: true,
+            ..Config::default()
+        })
+        .expect("client construction");
+
+        let result = client.show_notebook_path(Some(env.notebook())).await;
+        match result {
+            Ok(_) => panic!(
+                "show_notebook_path must return Err for empty stdout, not Ok; \
+                 this is the empty-output contract failure path"
+            ),
+            Err(NbError::CommandFailed {
+                command,
+                stderr,
+                exit_code,
+                ..
+            }) => {
+                assert_eq!(
+                    command,
+                    format!("nb notebooks show {} --path", env.notebook()),
+                    "successful-empty-output command field must match the actual \
+                     argv `nb notebooks show {{notebook}} --path`, not the legacy \
+                     display string `nb {{notebook}}:notebooks show --path`. \
+                     C4B-F2-1 partial regression."
+                );
+                assert_eq!(
+                    stderr, "nb notebooks path output was empty",
+                    "synthesized stderr must identify the empty-output cause"
+                );
+                assert_eq!(
+                    exit_code, None,
+                    "synthesized exit_code must be None (subprocess succeeded with empty output)"
+                );
+            }
+            Err(other) => panic!(
+                "expected NbError::CommandFailed for empty-output contract failure, got: {other:?}"
+            ),
         }
     })
     .await;
