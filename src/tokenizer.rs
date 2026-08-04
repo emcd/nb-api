@@ -1,6 +1,6 @@
 //! Format-agnostic tokenizer for `nb` source bytes.
 //!
-//! Per Decision 17 Revision 4, the tokenizer owns the **BOM-only
+//! The tokenizer owns the **BOM-only
 //! preamble** and emits one [`Line`] per physical line. It does
 //! not look for `##`/`#`/`=` or any marker — it has no notion of
 //! Markdown or any other format.
@@ -21,8 +21,6 @@
 //! The [`tokenize`] function returns `(Preamble, Vec<Line>)` and
 //! is the only entry point.
 
-#![allow(clippy::useless_vec, clippy::single_range_in_vec_init)]
-
 use std::ops::Range;
 
 /// The UTF-8 byte-order mark: `EF BB BF`.
@@ -32,7 +30,7 @@ const UTF8_BOM: &[u8] = b"\xef\xbb\xbf";
 ///
 /// Zero bytes (`0..0`) when the source begins with no BOM;
 /// three bytes (`0..3`) when the source begins with the UTF-8
-/// BOM. Per Decision 17 Revision 4 (R3-D2), leading whitespace
+/// BOM. Leading whitespace
 /// and leading blank lines do NOT belong to the preamble — they
 /// are ordinary `Line` tokens emitted by [`tokenize`] and owned
 /// later by `separator_ranges` / a body fragment.
@@ -80,7 +78,7 @@ impl Preamble {
 /// `range` spans `[line_start, terminator_end)` — i.e.,
 /// everything the line owns in the source. The assembler
 /// reuses these ranges directly without re-deriving them from
-/// byte cursors (per Decision 17 Rev4: tokens carry per-line
+/// byte cursors (tokens carry per-line
 /// ranges; the assembler reads them as-is).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Line<'a> {

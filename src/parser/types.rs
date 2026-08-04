@@ -3,10 +3,10 @@
 use std::ops::Range;
 
 // =================================================================
-// Private types for the layered pipeline (Decision 17 Revision 4)
+// Private types for the layered tokenizer/classifier/assembler pipeline
 // =================================================================
 
-/// Per Decision 17 Revision 3, an H2-like heading inside a
+/// An H2-like heading inside a
 /// Bookmark Content/Source body context can play one of two
 /// roles:
 ///
@@ -20,7 +20,7 @@ use std::ops::Range;
 ///   body-fragmentation algorithm absorbs it into the open
 ///   body fragment.
 ///
-/// Per Decision 17 Revision 4, the classifier tags each
+/// The classifier tags each
 /// heading with a `HeadingRole`; the assembler is the only
 /// component that consumes the role. The classifier never
 /// selects canonical metadata (e.g., "which `## Tags` is the

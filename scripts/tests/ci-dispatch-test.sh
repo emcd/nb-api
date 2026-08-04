@@ -3,7 +3,7 @@
 # scripts/tests/ci-dispatch-test.sh
 #
 # Shell integration test for scripts/lib/ci-dispatch.sh.
-# Per cycle-4b verdict C4B-V1-1, the dispatch library must be
+# The dispatch library must be
 # exercised through each event kind and edge case without
 # relying on a live GitHub Actions runner.
 #

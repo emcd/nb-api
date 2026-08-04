@@ -13,7 +13,7 @@ use super::types::{HeadingRole, MarkdownToken};
 /// `MarkdownToken` per line. The classifier is purely
 /// lexical/structural-recognition — never canonical selection.
 ///
-/// Note's heading taxonomy per Decision 17 Revision 4: H1 is a
+/// Note's heading taxonomy: H1 is a
 /// structural title candidate (the Note assembler uses it iff
 /// it is a valid ATX H1; the role carries no meaning for the
 /// Note assembler). All H2+ headings are `InternalBody` —
@@ -55,7 +55,7 @@ pub(crate) fn classify_note(lines: &[Line<'_>]) -> Vec<MarkdownToken> {
 /// Run the **Todo** classifier. The classifier is purely
 /// lexical/structural-recognition — never canonical selection.
 ///
-/// Todo's heading taxonomy per Decision 17 Revision 4: only
+/// Todo's heading taxonomy: only
 /// exact `## Tags` (level=2, no leading indent, no tab,
 /// no closing-hash sequence, no trailing whitespace) is a
 /// `SectionBoundary` candidate. The Todo assembler then
@@ -95,7 +95,7 @@ pub(crate) fn classify_todo(lines: &[Line<'_>]) -> Vec<MarkdownToken> {
 /// Run the **Bookmark** classifier. The classifier is purely
 /// lexical/structural-recognition — never canonical selection.
 ///
-/// Bookmark's heading taxonomy per Decision 17 Revision 4:
+/// Bookmark's heading taxonomy:
 /// ONLY exact unindented `## Tags`, `## Content`, `## Source`
 /// (level=2, no leading indent, no tab after `##`, no
 /// closing-hash sequence, no trailing whitespace) are

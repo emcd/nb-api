@@ -9,11 +9,6 @@ use proptest::{prop_assert, prop_assert_eq, proptest};
 
 use proptest::prelude::*;
 
-#[allow(dead_code)]
-fn ascii_printable() -> impl Strategy<Value = String> {
-    "[ -~]{0,24}"
-}
-
 fn short_title() -> impl Strategy<Value = String> {
     "[A-Za-z][A-Za-z ]{0,7}"
 }
@@ -172,7 +167,7 @@ proptest! {
 
     /// Bookmark with `## Tags` AFTER body (terminal metadata).
     /// Body ends WITHOUT a blank line before `## Tags` —
-    /// the C4B-P1-1 adjacent-section regression. The expected
+    /// the adjacent-section ownership regression. The expected
     /// body is derived INDEPENDENTLY from the generation
     /// inputs and the terminator and separator count vary.
     #[test]
@@ -237,13 +232,12 @@ proptest! {
     }
 }
 
-// ---------- R3-F3: independent-from-doc.body() generators ----------
+// ---------- Independent-from-doc.body() generators ----------
 //
 // The previous proptest block computed the expected fingerprint
-// from `doc.body()` — the production view. Per the R3-F3
-// finding, the test must compute expected values from the
-// generation INPUTS (independently) so a bug in the body
-// selection is caught. The proptests below build byte
+// from `doc.body()` — the production view. Expected domains must
+// be derived from generation INPUTS (independently) so a bug in
+// body selection is caught. The proptests below build byte
 // sequences with known Tags/Content/Source shapes, compute
 // expected `tag_section` and body bytes from the inputs
 // (NOT from the parser output), and assert equality.
@@ -318,7 +312,7 @@ proptest! {
     /// H2), the typed `NotFound` for `tag_section` is the
     /// correct behavior — Tags is body content, not metadata.
     /// The terminator and blank-line separator count vary.
-    /// Per C4B-F3-1 closure: input-derived body and fingerprint
+    /// Input-derived body and fingerprint
     /// assertions are also added (not just `tag_section().is_none()`).
     #[test]
     fn prop_todo_nonterminal_tags(
@@ -643,7 +637,7 @@ fn tag_tokens() -> impl Strategy<Value = Vec<String>> {
     prop::collection::vec(tag_token(), 1..4)
 }
 
-// ---------- C4B-F3-1: proptest v3 builders and expected helpers ----------
+// ---------- Proptest v3 builders and expected helpers ----------
 //
 // The `_v3` builders and `expected_*_v3` helpers extend the
 // original v1 (fixed LF, fixed double-blank) shapes with two
@@ -980,7 +974,7 @@ fn build_bookmark_source_terminal_tags_bytes_v3(
 
 /// Build a Bookmark with `## Content` (body section) directly
 /// followed by terminal `## Tags` with NO blank-line
-/// separator. This is the C4B-P1-1 adjacent-section regression
+/// separator. This is the adjacent-section ownership regression
 /// shape: the parser must preserve the body's trailing
 /// terminator as part of the body, not strip it into a
 /// separator.
@@ -1177,7 +1171,7 @@ fn expected_todo_terminal_tags_v3(
 /// The parser's pre-Tags separator handling emits only ONE
 /// separator (the LAST blank line terminator); the other
 /// `blank_count - 1` blank line terminators are absorbed into
-/// the body fragment. This matches the cycle-4a R2-F1 verdict:
+/// the body fragment. Expected behavior:
 /// a "complete blank line" between body and Tags is a
 /// separator, but the pre-Tags separator handling does not
 /// split multiple blank lines into multiple separator ranges.

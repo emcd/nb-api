@@ -38,7 +38,7 @@ pub(crate) fn append_warning(mut output: String, warning: String) -> String {
 /// (`nb-api:todos/2`) will let `show_note` and friends read
 /// the on-disk file directly via the P1 note-document-model,
 /// removing the need to classify `nb` stderr at all. Whether
-/// this helper is deleted is a separate review cycle when the
+/// this helper is deleted is a separate change when the
 /// native rewrite lands; the deletion is NOT automatic.
 pub(crate) fn is_selector_not_found(stderr: &str, expected_selector: &str) -> bool {
     exact_normalized_diagnostic(stderr, "Not found: ", expected_selector)

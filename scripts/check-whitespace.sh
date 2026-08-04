@@ -50,7 +50,7 @@
 #   2  invalid arguments (bad usage, bad revision, empty/three-dot/option-shaped rev)
 #   3  plumbing error (git could not run the diff even after rev validation)
 #
-# See `nb-api:reviews/2` (cycle-4a R3-V1 + cycle-4b C4B-V1-2) and
+# See `nb-api:reviews/2` and
 # `nb-api:coordination/general/5` for the originating decisions.
 
 set -eu

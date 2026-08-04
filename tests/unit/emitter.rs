@@ -225,9 +225,9 @@ fn round_trip_empty_note() {
     assert_eq!(doc.emit(), bytes);
 }
 
-// ---------- EOF-unterminated final line (cycle-4e regression) ----------
+// ---------- EOF-unterminated final line ----------
 
-/// Cycle-4e tokenizer regression: an EOF-unterminated line
+/// Tokenizer regression: an EOF-unterminated line
 /// with content must produce a `Line` whose `terminator ==
 /// b""` and whose `content` carries the bytes; the prior
 /// implementation misclassified the content as a zero-content

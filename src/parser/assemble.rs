@@ -8,7 +8,7 @@ use super::helpers::{consume_leading_blank_intervals, is_exact_reserved_heading_
 use super::types::{ByteRange, H2Section, HeadingRole, MarkdownToken, ParseFailure};
 
 // =================================================================
-// Per-kind assemblers (Decision 17 Revision 4)
+// Per-kind assemblers
 // =================================================================
 
 /// Note assembler: builds the Note partition from the classified
@@ -25,6 +25,7 @@ use super::types::{ByteRange, H2Section, HeadingRole, MarkdownToken, ParseFailur
 /// 3. **In body**: all subsequent tokens extend `body_end`. The
 ///    body is a single contiguous fragment from the first
 ///    in-body byte to the source end.
+#[allow(clippy::useless_vec, clippy::single_range_in_vec_init)] // body_ranges is Vec by partition contract
 pub(crate) fn assemble_note(
     source: &[u8],
     preamble: &Preamble,
@@ -117,6 +118,7 @@ pub(crate) fn assemble_note(
 /// the FIRST non-blank line (regardless of H1 validity). The
 /// Todo `tag_section_range` is the last H2 Tags section, set
 /// only when the final H2 itself is Tags.
+#[allow(clippy::useless_vec, clippy::single_range_in_vec_init)] // body_ranges is Vec by partition contract
 pub(crate) fn assemble_todo(
     source: &[u8],
     preamble: &Preamble,
@@ -189,8 +191,9 @@ pub(crate) fn assemble_todo(
     if title_range.is_none() && preamble.start_of_lines() >= source.len() {
         return Err(ParseFailure::MissingTitle);
     }
-    // Compute full section extents (heading + body) via the
-    // C4B-P1-1 blank-line terminator stripping rule.
+    // Compute full section extents (heading + body). A trailing
+    // blank-line terminator is stripped from a section only when a
+    // complete blank line precedes the next heading.
     let h2_sections: Vec<H2Section> = compute_section_extents(source, &sections);
     // Compute the tag_section_range. Per the spec, the
     // `tag_section_range` SHALL be set only when the FINAL H2
@@ -379,7 +382,7 @@ pub(crate) fn assemble_bookmark(
         return Err(ParseFailure::MissingTitle);
     }
 
-    // Compute Heading section extents via the C4B-P1-1 inclusive
+    // Compute heading section extents via the inclusive
     // contract: a trailing blank-line terminator is stripped
     // only when the preceding byte is also a line terminator.
     let sections: Vec<H2Section> = compute_section_extents(source, &collected_headings);
@@ -489,7 +492,7 @@ pub(crate) fn assemble_bookmark(
 }
 
 /// Compute H2 section extents (heading + content up to next
-/// heading or end-of-source), with the C4B-P1-1 blank-line
+/// heading or end-of-source), with the blank-line
 /// terminator stripping rule.
 pub(crate) fn compute_section_extents(
     source: &[u8],

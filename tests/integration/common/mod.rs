@@ -53,7 +53,7 @@ for arg in "$@"; do
 done
 # Notebook-path probe: `nb notebooks show <nb> --path`. The
 # qualified form `<nb>:notebooks show --path` is the legacy
-# shape the cycle-4 refactor replaced; it is not a real `nb`
+# shape a prior refactor replaced; it is not a real `nb`
 # invocation and so does not need to be matched here.
 if [[ "$shim_invocation" == "false" ]]; then
   if [[ "$1" == "notebooks" && "$2" == "show" && "$4" == "--path" ]]; then
@@ -242,12 +242,10 @@ impl Drop for EnvSnapshot {
 /// (`$HOME/.local/bin/nb` per the `qa` workflow) as well as on
 /// local machines (`/usr/local/bin/nb`).
 ///
-/// Unix-only: the only caller is [`with_shim_nb_env`] which is
-/// `#[cfg(unix)]`. The non-Unix stub was removed in the sixth
-/// fixup because it was private dead code (no caller on
-/// non-Unix) and would fail warning-denied cross-platform
-/// Clippy. Tests and helpers are gated `#[cfg(unix)]` end to
-/// end, so the resolver has no non-Unix surface.
+/// Unix-only: the only caller is [`with_shim_nb_env`], which is
+/// `#[cfg(unix)]`. There is no non-Unix stub — a private unused
+/// stub would trip warning-denied Clippy on other platforms.
+/// Tests and helpers are gated `#[cfg(unix)]` end to end.
 #[cfg(unix)]
 fn resolve_nb_in_path(path_var: Option<&OsString>) -> Option<std::path::PathBuf> {
     use std::os::unix::fs::PermissionsExt;
@@ -394,13 +392,11 @@ where
 /// `GIT_*` on `Drop`. This test exercises the `Drop`
 /// restoration directly inside one locked critical section so
 /// it is not subject to races from concurrent helper
-/// invocations (MCP Owner caught a racy variant in the
-/// previous fixup round that read env vars before and after
-/// the helper outside `ENV_LOCK`). The test asserts that a
-/// panic inside the locked scope triggers the `Drop` and
-/// restores the captured values, including the `PATH` and
-/// `SHIM_OUTPUT` entries that were added to
-/// `ENV_VARS_OF_INTEREST` in the fourth fixup.
+/// invocations. Reading env vars before/after the helper
+/// outside `ENV_LOCK` is racy; the test asserts that a panic
+/// inside the locked scope triggers `Drop` and restores the
+/// captured values, including `PATH` and `SHIM_OUTPUT` entries
+/// tracked in `ENV_VARS_OF_INTEREST`.
 #[test]
 fn env_snapshot_restores_path_and_shim_output_on_panic() {
     // Hold ENV_LOCK for the ENTIRE test (baseline read, capture,

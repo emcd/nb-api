@@ -183,12 +183,11 @@ async fn show_accepts_todo_via_md_extension() {
 
 #[tokio::test]
 async fn show_accepts_source_data_markup_extensions() {
-    // Per MCP Owner's Phase 2 review feedback: source, data, and
-    // markup extensions (`json`, `py`, `rs`, `yaml`, `csv`, etc.)
-    // are textual and must be accepted by `show`. The semantic
-    // classification via `nb show --type text` delegates the
-    // "what is text" decision to `nb` itself, so the API
-    // automatically accepts whatever `nb` considers text.
+    // Source, data, and markup extensions (`json`, `py`, `rs`,
+    // `yaml`, `csv`, etc.) are textual and must be accepted by
+    // `show`. Classification via `nb show --type text` delegates
+    // the "what is text" decision to `nb` itself, so the API
+    // accepts whatever `nb` considers text.
     let env = NbTestEnv::new().expect("fixture initialization");
     with_isolated_env(&env, false, || async {
         let client = NbClient::new(&Config {
@@ -404,7 +403,7 @@ async fn show_probe_failure_falls_through_to_command_failed() {
 
         let result = client.show_note("does-not-exist", None).await;
         match result {
-            // Per R2-F6 (MCP Owner cycle-2): genuine `nb` selector
+            // Genuine `nb` selector
             // absence is now surfaced as typed `NbError::NotFound`,
             // not `CommandFailed`. The selector field carries the
             // original `<notebook>:id` selector string.
@@ -475,7 +474,7 @@ async fn show_probe_sweep_over_mixed_items() {
 /// `selector` field carries the original resolved selector
 /// (e.g., `home:does-not-exist`) verbatim — without any
 /// decorative verb suffix added by the client. Under the
-/// previous cycle-3 implementation the selector was rewritten
+/// previous implementation the selector was rewritten
 /// as `format!("{} show", selector)` (e.g.,
 /// `home:does-not-exist show`), which leaked the subcommand
 /// into the diagnostic.
@@ -573,7 +572,7 @@ async fn show_note_nonexistent_notebook_returns_validation_error_when_create_dis
 /// Qualified-selector path (`<notebook>:<item>`) calls
 /// `ensure_existing_notebook`, which propagates typed
 /// `NbError::NotFound` verbatim rather than converting to
-/// `ValidationError`. This is the cycle-4a rework correction:
+/// `ValidationError`. Notebook-field validation:
 /// the typed `NotFound` was erased to `ValidationError` at the
 /// qualified-selector boundary under the previous
 /// implementation, losing the variant distinction.
@@ -629,18 +628,14 @@ async fn show_note_qualified_selector_nonexistent_notebook_propagates_typed_not_
     .await;
 }
 
-// ---------- C4B-F2-1 closure: show_notebook_path successful-empty-output regression ----------
+// ---------- show_notebook_path successful-empty-output regression ----------
 //
-// Per cycle-4c closure matrix C4B-F2-1 (PARTIAL): the
-// implementation text in `CommandFailed.command` for the
-// successful-but-empty case was fixed in commit b1b162b but no
-// public-interface regression covered it. This test drives the
-// `show_notebook_path` public API against a `with_shim_nb_env`
-// shim that returns empty stdout for the notebook-path probe,
-// and asserts the synthesized `command` field matches the
-// actual argv (`nb notebooks show {notebook} --path`) rather
-// than the pre-fix incorrect display string
-// (`nb {notebook}:notebooks show --path`).
+// Regression: when `show_notebook_path` succeeds with empty
+// stdout, the synthesized `CommandFailed.command` must carry
+// the actual argv (`nb notebooks show {notebook} --path`), not
+// a rewritten display string such as
+// `nb {notebook}:notebooks show --path`. Drives the public API
+// through `with_shim_nb_env` returning empty stdout.
 //
 // Unix-only because `with_shim_nb_env` requires a Bash script
 // + executable-bit chmod + `:`-separated PATH.
@@ -685,7 +680,7 @@ async fn show_notebook_path_successful_empty_output_command_field_is_actual_argv
                     "successful-empty-output command field must match the actual \
                      argv `nb notebooks show {{notebook}} --path`, not the legacy \
                      display string `nb {{notebook}}:notebooks show --path`. \
-                     C4B-F2-1 partial regression."
+                     successful-empty-output command-field regression."
                 );
                 assert_eq!(
                     stderr, "nb notebooks path output was empty",

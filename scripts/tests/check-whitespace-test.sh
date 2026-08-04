@@ -3,7 +3,7 @@
 # scripts/tests/check-whitespace-test.sh
 #
 # Shell integration test for scripts/check-whitespace.sh.
-# Per cycle-4a verdict (R3-V1) and cycle-4b verdict (C4B-V1-2),
+# Whitespace-gate contract:
 # the script's argument contract, plumbing-error preservation,
 # and pass coverage must be validated through a shell integration
 # test rather than rely on caller-subtree discovery or unquoted
@@ -194,7 +194,7 @@ else
 fi
 
 # --- 8b. Arbitrary non-empty tree base is rejected ---------------------
-# Per C4B-V1-2 closure: only the literal empty-tree SHA is
+# Only the literal empty-tree SHA is
 # accepted as a tree base; non-empty trees must NOT be accepted.
 # Construct a non-empty tree SHA and verify it is REJECTED with
 # exit 2 (revision validation).
@@ -223,7 +223,7 @@ run_test "option in arg1 exits 2" 2 --some-option HEAD
 run_test "dash-dash in arg2 exits 2" 2 HEAD --bogus-flag
 
 # --- 8d. Empty endpoints in either base or head are rejected (exit 2) -
-# Per C4B-V1-2 closure: an empty endpoint means the rev is empty
+# An empty endpoint means the rev is empty
 # (e.g. `..HEAD` or `HEAD..`). Empty revs MUST be classified as
 # usage errors (exit 2), not as plumbing failures (which would
 # be exit 3) and not as legitimate empty-tree SHA substitution.
@@ -232,7 +232,7 @@ run_test "empty base '..HEAD' exits 2" 2 ..HEAD
 run_test "empty head 'HEAD..' exits 2" 2 HEAD..
 
 # --- 8e. Arbitrary (non-empty) tree SHA as the head endpoint is rejected
-# (exit 2). Per C4B-V1-2 closure: tree objects are NOT commits and
+# (exit 2). Tree objects are NOT commits and
 # must be rejected at revision validation, not allowed to pass
 # through to `git diff --check` (which would otherwise treat the
 # tree as a "valid commit-like ref" and produce a confusing
@@ -261,10 +261,10 @@ esac
 
 # --- 10a. Ordinary exit-1: whitespace errors present in range ---
 # Probe whether the current range `5470f88..HEAD` has any
-# ordinary whitespace findings. The pre-C4B-V1-2 test made
-# this invisible via a stdout-text grep; the cycle-4c closure
+# ordinary whitespace findings. An earlier test made
+# this invisible via a stdout-text grep; the current gate
 # requires inducing the actual exit, which requires a range
-# that the gate fails on. Since the curated cycle-4b chain is
+# that the gate fails on. Since the curated fixture chain is
 # clean, we instead fabricate a workspace-cwd commit that
 # introduces a whitespace error, then range that commit.
 

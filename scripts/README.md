@@ -50,10 +50,8 @@ confirmed this: even with the corrected `.gitattributes`
 committed at HEAD, `git diff --check <base>..<head>` still
 reports the EOF blanks.
 
-This script is the narrow replacement. See
-`nb-api:proposals/add-note-document-model/reviews/2` (R3-V1) for
-the originating decision and
-`nb-api:coordination/general/5` for the implementation chain.
+This script is the narrow replacement for commit-to-commit
+whitespace checking where `.gitattributes` is ineffective.
 
 ## tests/check-whitespace-test.sh
 
@@ -65,10 +63,9 @@ Run with:
 bash scripts/tests/check-whitespace-test.sh
 ```
 
-This is NOT a Cargo probe binary (per the cycle-4a verdict R3-V1
-finding that the previous attempt at whitebox tests via
-`#[doc(hidden)] pub` was rejected). The test is a plain `bash`
-script that:
+This is a plain `bash` script (not a Cargo test binary), so it
+does not require widening crate visibility for whitebox access.
+It:
 
 - Verifies the argument contract: no-args and bad-arg both
   exit 2 with a usage message.

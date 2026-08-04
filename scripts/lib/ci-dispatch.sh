@@ -28,7 +28,7 @@
 #
 # Rationale
 # ---------
-# The freeze-point cycle-4a and cycle-4b verdicts require that
+# The CI dispatch contract requires that
 # the whitespace gate covers the EXACT range of commits that
 # just landed, never an empty range and never a single-commit
 # subset of a multi-commit push. Direct `HEAD^..HEAD` fails on
@@ -42,7 +42,7 @@
 # The YAML delegates to `dispatch_base_sha` after sourcing
 # this file.
 #
-# See `nb-api:reviews/2` (cycle-4b verdict C4B-V1-1) and
+# See `nb-api:reviews/2` and
 # `nb-api:coordination/general/5`.
 
 # Resolve the empty-tree SHA once at source time. The literal

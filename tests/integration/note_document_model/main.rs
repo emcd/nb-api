@@ -6,8 +6,6 @@
 //! kind, and the index-invariants over the ownership partition
 //! for every W1 + E1-E11 Resolution Table case.
 
-#![allow(dead_code)] // strategy helpers shared across proptest modules
-
 mod common;
 mod format_dispatch;
 mod heading_rules;

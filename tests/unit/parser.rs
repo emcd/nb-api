@@ -9,7 +9,7 @@
 use std::path::PathBuf;
 
 use nb_api::NbError;
-use nb_api::parser::{DocumentKind, NoteDocument, ParseContext, parse};
+use nb_api::parser::{DocumentKind, ParseContext, parse};
 
 // ---------- W1.1: titled tagged Note ----------
 
@@ -542,16 +542,4 @@ fn tags_str_yields_valid_utf8_tokens() {
     assert_eq!(tokens.len(), 2);
     assert_eq!(tokens[0], Ok("valid"));
     assert_eq!(tokens[1], Ok("beta"));
-}
-
-// ---------- Helper: build a NoteDocument for invariant tests ----------
-
-#[allow(dead_code)]
-pub(crate) fn doc_for(bytes: &[u8], kind: DocumentKind) -> NoteDocument {
-    let path = match kind {
-        DocumentKind::Note => "x.md",
-        DocumentKind::Todo => "x.todo.md",
-        DocumentKind::Bookmark => "x.bookmark.md",
-    };
-    parse(bytes, ParseContext::FromPath(PathBuf::from(path))).unwrap()
 }

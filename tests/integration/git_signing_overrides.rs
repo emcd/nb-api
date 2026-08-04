@@ -31,11 +31,10 @@
 //! initialization: if the sibling spawns `nb` while PATH points
 //! at this test's success-exiting shim, fixture init returns
 //! Ok but no notebook is created, and the sibling fails later
-//! with `Notebook not found: scratch`. Per MCP Owner analysis
-//! on 2026-07-18, the right fix is to isolate this module in
-//! its own binary so the global-state mutation cannot race the
-//! main binary's tests. ENV_LOCK is still acquired inside this
-//! binary to serialize the two tests against each other.
+//! with `Notebook not found: scratch`. Isolating this module in
+//! its own binary keeps the global-state mutation from racing
+//! the main binary's tests. ENV_LOCK is still acquired inside
+//! this binary to serialize the two tests against each other.
 //!
 //! Uses the existing infrastructure: `ENV_LOCK` (serialization
 //! across the two tests in this binary), `EnvSnapshot` (RAII

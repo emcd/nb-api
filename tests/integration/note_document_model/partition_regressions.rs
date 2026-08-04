@@ -26,7 +26,7 @@ fn todo_direct_tags_without_blank_separator_has_empty_body() {
     assert_eq!(count, 0);
 }
 
-// ---------- R2-F4: Bookmark body context terminates properly ----------
+// ---------- Bookmark body context terminates properly ----------
 
 /// Bookmark with Content section preceded by a ## Tags.
 /// The first Tags-before-Content wins per the canonical-selection
@@ -77,7 +77,7 @@ fn bookmark_multiple_content_sections() {
     assert_eq!(body[1], &bytes[38..57]);
 }
 
-// ---------- C4B-P1-1: Bookmark adjacent-section ownership (LF / CR / CRLF) ----------
+// ---------- Bookmark adjacent-section ownership (LF / CR / CRLF) ----------
 //
 // `sections_from_headings` previously stripped a single line
 // terminator from the end of every section without proving it
@@ -90,7 +90,7 @@ fn bookmark_multiple_content_sections() {
 /// Bookmark with Description body line directly followed by
 /// `## Tags` (no blank line, LF terminators). The Description
 /// body fragment must include the `body\n` terminator (not have
-/// it stripped into a separator). Without the C4B-P1-1 fix,
+/// it stripped into a separator). Without the blank-line ownership rule,
 /// the body would have been `body` (without `\n`) and the
 /// fingerprint would have diverged.
 #[test]
@@ -175,7 +175,7 @@ fn bookmark_crlf_body_direct_to_tags_preserves_terminator() {
 
 /// Bookmark with a BLANK line between body and Tags (LF).
 /// Verifies the corrected classifier STILL emits the blank
-/// line as a separator (the C4B-P1-1 fix must not regress
+/// line as a separator (the blank-line ownership rule must not regress
 /// legitimate blank-line separators).
 #[test]
 fn bookmark_lf_blank_separator_still_emitted() {
@@ -216,9 +216,9 @@ fn bookmark_lf_adjacent_headings_no_separator() {
     );
 }
 
-// ---------- R2-F1: Todo pre-Tags blank-line detection (LF / CR / CRLF) ----------
+// ---------- Exact Tags inside Content is a section boundary ----------
 
-/// C4B-D17-1: An exact `## Tags` heading inside a Content section
+/// An exact `## Tags` heading inside a Content section
 /// body context must be classified as `SectionBoundary` (not
 /// `InternalBody`). The bookmark assembler's canonical Tags
 /// selection then recognizes it as the canonical metadata
@@ -245,11 +245,11 @@ fn bookmark_exact_tags_inside_content_is_section_boundary() {
     assert_eq!(
         tags,
         &expected_tags[..],
-        "tag_section must include the exact terminal `## Tags` even though it appears inside Content; pre-fix this was classified as InternalBody"
+        "tag_section must include the exact terminal `## Tags` even though it appears inside Content; must not be absorbed as InternalBody"
     );
 }
 
-// ---------- R2-F1: Todo pre-Tags blank-line detection (LF / CR / CRLF) ----------
+// ---------- Todo pre-Tags blank-line detection (LF / CR / CRLF) ----------
 
 /// Todo with title directly followed by ## Tags (no blank line
 /// at all). Regression: prior fix asserted "no blank" but the
@@ -334,7 +334,7 @@ fn todo_crlf_blank_separator() {
     assert_eq!(body[0], &bytes[14..20]);
 }
 
-// ---------- R2-F7: tags_str() trailing-whitespace and invalid-UTF ----------
+// ---------- tags_str() trailing-whitespace and invalid-UTF ----------
 
 /// Note tags prefix with trailing whitespace is accepted.
 #[test]
@@ -364,7 +364,7 @@ fn tags_str_signals_invalid_utf8_per_item() {
     );
 }
 
-// ---------- R2-F3: IoError mixed-chain structure ----------
+// ---------- IoError mixed-chain structure ----------
 
 /// Verify IoError forward conversion produces a chain with no
 /// duplication. For a leaf `std::io::Error`, the resulting

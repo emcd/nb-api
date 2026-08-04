@@ -29,8 +29,6 @@
 //! [`ParseErrorKind`]: crate::error::ParseErrorKind
 //! [`NbError::ParseError`]: crate::error::NbError::ParseError
 
-#![allow(clippy::useless_vec, clippy::single_range_in_vec_init)]
-
 mod assemble;
 mod classify;
 mod dispatch;
