@@ -74,7 +74,7 @@ path = "tests/unit/io_error_chain.rs"
 
 [[test]]
 name = "note_document_model"
-path = "tests/integration/note_document_model.rs"
+path = "tests/integration/note_document_model/main.rs"
 
 # Isolated test binary for `git_signing_overrides`. Lives in its
 # own Cargo integration-test binary/process so the global PATH
