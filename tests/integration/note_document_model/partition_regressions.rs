@@ -9,7 +9,7 @@ use crate::common::{check_partition, find_subsequence};
 // ---------- Direct Tags (regression for F1: pre_tag < pos panic) ----------
 
 #[test]
-fn regression_f1_direct_tags_no_blank_separator() {
+fn todo_direct_tags_without_blank_separator_has_empty_body() {
     // Todo: title followed immediately by `## Tags` with no
     // intervening blank line. The pre-Tags separator must
     // NOT be emitted, and the body must be empty (not a
@@ -34,7 +34,7 @@ fn regression_f1_direct_tags_no_blank_separator() {
 /// later sections (here: Content) are recognized as separate
 /// sections rather than swallowed into the Tags range.
 #[test]
-fn r2_f4_content_then_terminal_tags() {
+fn bookmark_content_then_terminal_tags() {
     let bytes: &[u8] =
         b"# Bookmark\n\n<URL>\n\n## Tags\n\n#before\n\n## Content\n\nbody\n\n## Tags\n\n#last\n";
     let doc = check_partition(bytes, "x.bookmark.md");
@@ -49,7 +49,7 @@ fn r2_f4_content_then_terminal_tags() {
 /// Same regression: body context must reset so Source is a
 /// distinct section.
 #[test]
-fn r2_f4_source_then_terminal_tags() {
+fn bookmark_source_then_terminal_tags() {
     let bytes: &[u8] = b"# Bookmark\n\n<URL>\n\n## Tags\n\n#before\n\n## Source\n\n```html\nraw\n```\n\n## Tags\n\n#last\n";
     let doc = check_partition(bytes, "x.bookmark.md");
     assert_eq!(doc.kind(), DocumentKind::Bookmark);
@@ -63,7 +63,7 @@ fn r2_f4_source_then_terminal_tags() {
 /// Tests that body-context flag does not "stick" across
 /// boundaries.
 #[test]
-fn r2_f4_multiple_content_sections() {
+fn bookmark_multiple_content_sections() {
     let bytes: &[u8] = b"# Bookmark\n\n<URL>\n\n## Content\n\nfirst\n\n## Content\n\nsecond\n";
     let doc = check_partition(bytes, "x.bookmark.md");
     assert_eq!(doc.kind(), DocumentKind::Bookmark);
@@ -94,7 +94,7 @@ fn r2_f4_multiple_content_sections() {
 /// the body would have been `body` (without `\n`) and the
 /// fingerprint would have diverged.
 #[test]
-fn c4b_p1_1_bookmark_lf_body_direct_to_tags_preserves_terminator() {
+fn bookmark_lf_body_direct_to_tags_preserves_terminator() {
     let bytes: &[u8] = b"# B\n\n<U>\n\n## Description\nbody\n## Tags\n\n#a\n";
     let doc = check_partition(bytes, "x.bookmark.md");
     let body: Vec<&[u8]> = doc.body().collect();
@@ -129,7 +129,7 @@ fn c4b_p1_1_bookmark_lf_body_direct_to_tags_preserves_terminator() {
 /// `## Tags` (no blank line, CR terminators). Same regression
 /// as the LF case but with CR terminators throughout.
 #[test]
-fn c4b_p1_1_bookmark_cr_body_direct_to_tags_preserves_terminator() {
+fn bookmark_cr_body_direct_to_tags_preserves_terminator() {
     let bytes: &[u8] = b"# B\r\r<U>\r\r## Description\rbody\r## Tags\r\r#a\r";
     let doc = check_partition(bytes, "x.bookmark.md");
     let body: Vec<&[u8]> = doc.body().collect();
@@ -153,7 +153,7 @@ fn c4b_p1_1_bookmark_cr_body_direct_to_tags_preserves_terminator() {
 /// `## Tags` (no blank line, CRLF terminators). Same regression
 /// as the LF case but with CRLF terminators throughout.
 #[test]
-fn c4b_p1_1_bookmark_crlf_body_direct_to_tags_preserves_terminator() {
+fn bookmark_crlf_body_direct_to_tags_preserves_terminator() {
     let bytes: &[u8] = b"# B\r\n\r\n<U>\r\n\r\n## Description\r\nbody\r\n## Tags\r\n\r\n#a\r\n";
     let doc = check_partition(bytes, "x.bookmark.md");
     let body: Vec<&[u8]> = doc.body().collect();
@@ -178,7 +178,7 @@ fn c4b_p1_1_bookmark_crlf_body_direct_to_tags_preserves_terminator() {
 /// line as a separator (the C4B-P1-1 fix must not regress
 /// legitimate blank-line separators).
 #[test]
-fn c4b_p1_1_bookmark_lf_blank_separator_still_emitted() {
+fn bookmark_lf_blank_separator_still_emitted() {
     let bytes: &[u8] = b"# B\n\n<U>\n\n## Description\nbody\n\n## Tags\n\n#a\n";
     let doc = check_partition(bytes, "x.bookmark.md");
     let body: Vec<&[u8]> = doc.body().collect();
@@ -203,7 +203,7 @@ fn c4b_p1_1_bookmark_lf_blank_separator_still_emitted() {
 /// (including its terminator), with no separator emitted
 /// between adjacent headings.
 #[test]
-fn c4b_p1_1_bookmark_lf_adjacent_headings_no_separator() {
+fn bookmark_lf_adjacent_headings_no_separator() {
     let bytes: &[u8] = b"# B\n\n<U>\n\n## Description\n## Tags\n\n#a\n";
     let doc = check_partition(bytes, "x.bookmark.md");
     let body: Vec<&[u8]> = doc.body().collect();
@@ -226,7 +226,7 @@ fn c4b_p1_1_bookmark_lf_adjacent_headings_no_separator() {
 /// occurring inside Content would be absorbed as body
 /// content.
 #[test]
-fn c4b_d17_1_exact_tags_inside_content_is_section_boundary() {
+fn bookmark_exact_tags_inside_content_is_section_boundary() {
     // Bookmark: title, url, Content with body, and SOLE terminal
     // `## Tags` inside the Content body region (no Tags after
     // Content closes). The `## Tags` line must be classified
@@ -256,7 +256,7 @@ fn c4b_d17_1_exact_tags_inside_content_is_section_boundary() {
 /// test input actually contained a blank line, so the real
 /// title-direct case was never tested.
 #[test]
-fn r2_f1_title_direct_to_tags_no_blank_at_all() {
+fn todo_title_direct_to_tags_no_blank_at_all() {
     // Title line, then ## Tags on the next line with no blank
     // separator between. Both lines use LF terminators.
     let bytes: &[u8] = b"# [ ] Task\n## Tags\n\n#alpha\n";
@@ -271,7 +271,7 @@ fn r2_f1_title_direct_to_tags_no_blank_at_all() {
 
 /// Todo with body ending in newline, no blank line, then Tags.
 #[test]
-fn r2_f1_body_no_blank_before_tags() {
+fn todo_body_no_blank_before_tags() {
     let bytes: &[u8] = b"# [ ] Task\n\nbody\n## Tags\n\n#alpha\n";
     let doc = check_partition(bytes, "x.todo.md");
     assert_eq!(doc.kind(), DocumentKind::Todo);
@@ -287,7 +287,7 @@ fn r2_f1_body_no_blank_before_tags() {
 /// Todo with single LF blank line before Tags. The LF must
 /// be a SEPARATOR, not part of the body.
 #[test]
-fn r2_f1_lf_blank_separator() {
+fn todo_lf_blank_separator() {
     let bytes: &[u8] = b"# [ ] Task\n\nbody\n\n## Tags\n\n#alpha\n";
     let doc = check_partition(bytes, "x.todo.md");
     assert_eq!(doc.kind(), DocumentKind::Todo);
@@ -300,7 +300,7 @@ fn r2_f1_lf_blank_separator() {
 
 /// Todo with single CR blank line before Tags.
 #[test]
-fn r2_f1_cr_blank_separator() {
+fn todo_cr_blank_separator() {
     let bytes: &[u8] = b"# [ ] Task\r\rbody\r\r## Tags\r\r#alpha\r";
     let doc = check_partition(bytes, "x.todo.md");
     assert_eq!(doc.kind(), DocumentKind::Todo);
@@ -320,7 +320,7 @@ fn r2_f1_cr_blank_separator() {
 /// count as ONE blank line; the prior implementation split
 /// CRLF between separator and body.
 #[test]
-fn r2_f1_crlf_blank_separator() {
+fn todo_crlf_blank_separator() {
     let bytes: &[u8] = b"# [ ] Task\r\n\r\nbody\r\n\r\n## Tags\r\n\r\n#alpha\r\n";
     let doc = check_partition(bytes, "x.todo.md");
     assert_eq!(doc.kind(), DocumentKind::Todo);
@@ -338,7 +338,7 @@ fn r2_f1_crlf_blank_separator() {
 
 /// Note tags prefix with trailing whitespace is accepted.
 #[test]
-fn r2_f7_trailing_whitespace_tag_accepted() {
+fn tags_str_trailing_whitespace_tag_accepted() {
     let bytes: &[u8] = b"# Title\n\n#alpha #beta   \n\nbody\n";
     let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md"))).unwrap();
     assert!(doc.tags_prefix().is_some());
@@ -350,7 +350,7 @@ fn r2_f7_trailing_whitespace_tag_accepted() {
 /// containing invalid UTF-8 yields `Err(Utf8Error)` when
 /// surfaced via `tags_str()`.
 #[test]
-fn r2_f7_tags_str_signals_invalid_utf8_per_item() {
+fn tags_str_signals_invalid_utf8_per_item() {
     // Tags prefix line with one valid ASCII token and one
     // token containing an invalid UTF-8 byte sequence.
     let bytes: &[u8] = b"# Title\n\n#valid #bad\xff\xffhere\n\nbody\n";
@@ -370,7 +370,7 @@ fn r2_f7_tags_str_signals_invalid_utf8_per_item() {
 /// duplication. For a leaf `std::io::Error`, the resulting
 /// `IoError` has no source link.
 #[test]
-fn r2_f3_leaf_io_error_has_no_source() {
+fn io_error_leaf_has_no_source() {
     use nb_api::IoError;
     let single = IoError::from(std::io::Error::new(
         std::io::ErrorKind::BrokenPipe,

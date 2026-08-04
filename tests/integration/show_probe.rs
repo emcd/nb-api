@@ -537,7 +537,7 @@ async fn show_note_nonexistent_notebook_returns_validation_error_when_create_dis
         // with the test fixture; nb emits its pinned
         // "Notebook not found: <name>" diagnostic.
         let result = client
-            .show_note("anything", Some("nonexistent-notebook-for-r3-f2"))
+            .show_note("anything", Some("nonexistent-notebook-for-absence-mapping"))
             .await;
         match result {
             Err(NbError::ValidationError { reason, .. }) => {
@@ -546,7 +546,7 @@ async fn show_note_nonexistent_notebook_returns_validation_error_when_create_dis
                     "expected validation error to mention absence; got: {reason:?}"
                 );
                 assert!(
-                    reason.contains("nonexistent-notebook-for-r3-f2"),
+                    reason.contains("nonexistent-notebook-for-absence-mapping"),
                     "expected validation error to mention the missing \
                      notebook name; got: {reason:?}"
                 );
@@ -597,7 +597,7 @@ async fn show_note_qualified_selector_nonexistent_notebook_propagates_typed_not_
         // `NotFound` propagates to the caller as typed
         // NotFound, not as ValidationError or CommandFailed.
         let result = client
-            .show_note("nonexistent-notebook-for-r3-f2:item", None)
+            .show_note("nonexistent-notebook-for-absence-mapping:item", None)
             .await;
         match result {
             Err(NbError::NotFound { selector }) => {
@@ -608,7 +608,7 @@ async fn show_note_qualified_selector_nonexistent_notebook_propagates_typed_not_
                 // conflating with the path component of the
                 // user's qualified selector.
                 assert_eq!(
-                    selector, "nonexistent-notebook-for-r3-f2:",
+                    selector, "nonexistent-notebook-for-absence-mapping:",
                     "NotFound.selector must carry the missing notebook \
                      identifier with trailing colon (check_notebook's \
                      pinned shape)"

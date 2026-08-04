@@ -137,7 +137,7 @@ fn bookmark_assembler_distinguishes_section_boundary_from_internal_body_role() {
 /// — `tag_section` MUST be `None` for this fixture.
 #[test]
 #[allow(non_snake_case)]
-fn cycle_4e_h3_tags_does_not_become_canonical_tag_section() {
+fn bookmark_h3_tags_does_not_become_canonical_tag_section() {
     let bytes: &[u8] = b"# Bookmark\n<U>\n\n### Tags\n\n#alpha\n";
     let doc = parse(
         bytes,
@@ -159,7 +159,7 @@ fn cycle_4e_h3_tags_does_not_become_canonical_tag_section() {
 /// whitespace). `tag_section` MUST be `None`.
 #[test]
 #[allow(non_snake_case)]
-fn cycle_4e_indented_tags_does_not_become_canonical_tag_section() {
+fn bookmark_indented_tags_does_not_become_canonical_tag_section() {
     let bytes: &[u8] = b"# Bookmark\n<U>\n\n ## Tags\n\n#alpha\n";
     let doc = parse(
         bytes,
@@ -181,7 +181,7 @@ fn cycle_4e_indented_tags_does_not_become_canonical_tag_section() {
 /// MUST be `None`.
 #[test]
 #[allow(non_snake_case)]
-fn cycle_4e_tab_after_hashes_does_not_become_canonical_tag_section() {
+fn bookmark_tab_after_hashes_does_not_become_canonical_tag_section() {
     let bytes: &[u8] = b"# Bookmark\n<U>\n\n##\tTags\n\n#alpha\n";
     let doc = parse(
         bytes,
@@ -205,7 +205,7 @@ fn cycle_4e_tab_after_hashes_does_not_become_canonical_tag_section() {
 /// `None`.
 #[test]
 #[allow(non_snake_case)]
-fn cycle_4e_closing_hashes_does_not_become_canonical_tag_section() {
+fn bookmark_closing_hashes_does_not_become_canonical_tag_section() {
     let bytes: &[u8] = b"# Bookmark\n<U>\n\n## Tags ##\n\n#alpha\n";
     let doc = parse(
         bytes,
@@ -231,7 +231,7 @@ fn cycle_4e_closing_hashes_does_not_become_canonical_tag_section() {
 /// the URL line.
 #[test]
 #[allow(non_snake_case)]
-fn cycle_4e_eof_unterminated_bookmark_title_and_url() {
+fn bookmark_eof_unterminated_title_and_url() {
     let bytes: &[u8] = b"# Bookmark\n<U>";
     let doc = parse(
         bytes,
@@ -262,7 +262,7 @@ fn cycle_4e_eof_unterminated_bookmark_title_and_url() {
 /// this regression confirms `tag_section` is `None`.
 #[test]
 #[allow(non_snake_case)]
-fn cycle_4f_todo_h3_tags_does_not_become_terminal_metadata() {
+fn todo_h3_tags_does_not_become_terminal_metadata() {
     let bytes: &[u8] = b"# [ ] Task\n\nbody\n\n### Tags\n\n#alpha\n";
     let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("x.todo.md")))
         .expect("parse must succeed");
@@ -282,7 +282,7 @@ fn cycle_4f_todo_h3_tags_does_not_become_terminal_metadata() {
 /// assembler must NOT promote it to canonical tag_section.
 #[test]
 #[allow(non_snake_case)]
-fn cycle_4f_todo_indented_tags_does_not_become_terminal_metadata() {
+fn todo_indented_tags_does_not_become_terminal_metadata() {
     let bytes: &[u8] = b"# [ ] Task\n\nbody\n\n ## Tags\n\n#alpha\n";
     let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("x.todo.md")))
         .expect("parse must succeed");
@@ -301,7 +301,7 @@ fn cycle_4f_todo_indented_tags_does_not_become_terminal_metadata() {
 /// assembler must NOT promote it to canonical tag_section.
 #[test]
 #[allow(non_snake_case)]
-fn cycle_4f_todo_tab_after_hashes_does_not_become_terminal_metadata() {
+fn todo_tab_after_hashes_does_not_become_terminal_metadata() {
     let bytes: &[u8] = b"# [ ] Task\n\nbody\n\n##\tTags\n\n#alpha\n";
     let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("x.todo.md")))
         .expect("parse must succeed");
@@ -320,7 +320,7 @@ fn cycle_4f_todo_tab_after_hashes_does_not_become_terminal_metadata() {
 /// assembler must NOT promote it to canonical tag_section.
 #[test]
 #[allow(non_snake_case)]
-fn cycle_4f_todo_closing_hashes_does_not_become_terminal_metadata() {
+fn todo_closing_hashes_does_not_become_terminal_metadata() {
     let bytes: &[u8] = b"# [ ] Task\n\nbody\n\n## Tags ##\n\n#alpha\n";
     let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("x.todo.md")))
         .expect("parse must succeed");
@@ -339,7 +339,7 @@ fn cycle_4f_todo_closing_hashes_does_not_become_terminal_metadata() {
 /// promoted to canonical tag_section with full extent.
 #[test]
 #[allow(non_snake_case)]
-fn cycle_4f_todo_exact_terminal_tags_positive_coverage() {
+fn todo_exact_terminal_tags_is_metadata() {
     let bytes: &[u8] = b"# [ ] Task\n\nbody\n\n## Tags\n\n#alpha\n";
     let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("x.todo.md")))
         .expect("parse must succeed");
