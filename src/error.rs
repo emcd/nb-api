@@ -57,6 +57,7 @@ use serde::{Deserialize, Serialize};
 /// for variants whose source field is itself an `Error`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum NbError {
     /// An `nb` subprocess invocation failed (non-zero exit, or
     /// spawning failed for a non-NotFound reason).
@@ -169,6 +170,79 @@ pub enum NbError {
         extension: String,
         supported: Vec<String>,
     },
+
+    /// Process-shared gate queue wait exceeded. Notebook was not mutated.
+    GateTimeout { gate: String, timeout_ms: u64 },
+
+    /// `Transaction::commit` refused because the notebook worktree/index is dirty.
+    DirtyBaseline { guidance: String },
+
+    /// Plan-op path collision against snapshot or earlier plan ops.
+    PathCollision {
+        path: String,
+        plan_index: Option<u32>,
+    },
+
+    /// Validation/apply failure tied to a plan entry.
+    PlanValidation {
+        kind: String,
+        message: String,
+        plan_index: Option<u32>,
+    },
+
+    /// Commit completion is unknown (e.g. transport timeout after checkpoint may have started).
+    IndeterminateCommit {
+        pre_revision: String,
+        post_revision_observed: Option<String>,
+        guidance: String,
+    },
+
+    /// Cleanup after a known failed apply could not verify clean `pre_revision`.
+    RecoveryRequired {
+        pre_revision: String,
+        post_revision_observed: Option<String>,
+        status_observed: Option<String>,
+        preserved_paths: Option<Vec<String>>,
+        guidance: String,
+    },
+
+    /// Body fingerprint precondition failed.
+    FingerprintMismatch {
+        target: crate::types::NoteTarget,
+        guidance: String,
+    },
+
+    /// Line number/anchor precondition failed.
+    AnchorMismatch {
+        target: String,
+        number: u32,
+        guidance: String,
+    },
+
+    /// Substring `expected_count` did not match actual matches.
+    OccurrenceMismatch { expected: u32, actual: u32 },
+
+    /// Overlapping line edits in one batch.
+    OverlappingEdits { indices: Vec<u32> },
+
+    /// Invalid `show_note_lines` window.
+    InvalidLineWindow {
+        offset: u32,
+        limit: u32,
+        total_lines: u32,
+    },
+
+    /// Empty substring pattern refused at enqueue/apply.
+    EmptySubstringPattern,
+
+    /// Contiguous-body-only op invoked on a multi-fragment document.
+    FragmentedBody {
+        fragment_count: u32,
+        guidance: String,
+    },
+
+    /// Document structure is not supported for the requested op.
+    UnsupportedStructure { reason: String },
 }
 
 impl std::fmt::Display for NbError {
@@ -223,6 +297,75 @@ impl std::fmt::Display for NbError {
                     f,
                     "unsupported document format: {extension:?} (supported: {supported:?})"
                 )
+            }
+            Self::GateTimeout { gate, timeout_ms } => {
+                write!(f, "gate timeout waiting on {gate} after {timeout_ms}ms")
+            }
+            Self::DirtyBaseline { guidance } => {
+                write!(f, "dirty baseline: {guidance}")
+            }
+            Self::PathCollision { path, plan_index } => {
+                write!(f, "path collision at {path:?} (plan_index={plan_index:?})")
+            }
+            Self::PlanValidation {
+                kind,
+                message,
+                plan_index,
+            } => write!(
+                f,
+                "plan validation ({kind}) at index {plan_index:?}: {message}"
+            ),
+            Self::IndeterminateCommit {
+                pre_revision,
+                post_revision_observed,
+                guidance,
+            } => write!(
+                f,
+                "indeterminate commit (pre={pre_revision}, post={post_revision_observed:?}): {guidance}"
+            ),
+            Self::RecoveryRequired {
+                pre_revision,
+                guidance,
+                ..
+            } => write!(
+                f,
+                "recovery required (pre_revision={pre_revision}): {guidance}"
+            ),
+            Self::FingerprintMismatch { target, guidance } => {
+                write!(f, "fingerprint mismatch for {target:?}: {guidance}")
+            }
+            Self::AnchorMismatch {
+                target,
+                number,
+                guidance,
+            } => write!(f, "anchor mismatch for {target} line {number}: {guidance}"),
+            Self::OccurrenceMismatch { expected, actual } => {
+                write!(
+                    f,
+                    "occurrence mismatch: expected={expected} actual={actual}"
+                )
+            }
+            Self::OverlappingEdits { indices } => {
+                write!(f, "overlapping edits at indices {indices:?}")
+            }
+            Self::InvalidLineWindow {
+                offset,
+                limit,
+                total_lines,
+            } => write!(
+                f,
+                "invalid line window offset={offset} limit={limit} total_lines={total_lines}"
+            ),
+            Self::EmptySubstringPattern => write!(f, "empty substring pattern"),
+            Self::FragmentedBody {
+                fragment_count,
+                guidance,
+            } => write!(
+                f,
+                "fragmented body ({fragment_count} fragments): {guidance}"
+            ),
+            Self::UnsupportedStructure { reason } => {
+                write!(f, "unsupported structure: {reason}")
             }
         }
     }

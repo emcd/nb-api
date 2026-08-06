@@ -14,6 +14,10 @@ use nb_api::{Config, NbClient};
 
 use crate::common::with_isolated_env;
 
+fn show_text(note: &nb_api::ShowNote) -> String {
+    String::from_utf8_lossy(&note.source.as_bytes().expect("source bytes")).into_owned()
+}
+
 /// A long unbroken line that, if word-wrapped, would not appear
 /// verbatim in the show output. 500 'x' chars exceeds any reasonable
 /// wrap width and contains no whitespace to wrap at.
@@ -34,12 +38,13 @@ async fn show_preserves_long_unbroken_line_verbatim() {
         })
         .expect("client construction");
 
-        client
+        let outcome = client
             .add_note(Some("long-line"), LONG_LINE, &[], None, None)
             .await
             .expect("add note");
+        let path = outcome.ops[0].path.as_deref().expect("path");
 
-        let output = client.show_note("1", None).await.expect("show note");
+        let output = show_text(&client.show_note(path, None).await.expect("show note"));
         assert!(
             output.contains(LONG_LINE),
             "show output did not contain the long line verbatim; \

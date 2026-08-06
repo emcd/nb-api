@@ -1,74 +1,7 @@
 //! CLI argv builders and small path/tag normalizers for `nb` invocations.
 
 use crate::error::NbError;
-use crate::{EditMode, SearchMode, TaskStatus};
-
-pub(crate) fn edit_args(selector: String, content: &str, mode: EditMode) -> Vec<String> {
-    let mut args = vec!["edit".to_string(), selector];
-    match mode {
-        EditMode::Overwrite => args.push("--overwrite".to_string()),
-        EditMode::Append => {}
-        EditMode::Prepend => args.push("--prepend".to_string()),
-    }
-    args.push("--content".to_string());
-    args.push(content.to_string());
-    args
-}
-
-pub(crate) fn task_command_args(
-    action: &str,
-    selector: String,
-    task_number: Option<u32>,
-) -> Vec<String> {
-    let mut args = vec![action.to_string(), selector];
-    if let Some(number) = task_number {
-        args.push(number.to_string());
-    }
-    args
-}
-
-pub(crate) fn todo_command_args(
-    notebook: &str,
-    title: &str,
-    description: Option<&str>,
-    tasks: &[String],
-    tags: &[String],
-    folder: Option<&str>,
-) -> Vec<String> {
-    let mut args = vec![format!("{notebook}:todo"), "add".to_string()];
-
-    // Folder path comes as a positional argument before the title.
-    if let Some(folder) = folder {
-        args.push(folder_scope(folder));
-    }
-
-    args.push(title.to_string());
-
-    if let Some(description) = description {
-        args.push("--description".to_string());
-        args.push(description.to_string());
-    }
-
-    for task in tasks {
-        args.push("--task".to_string());
-        args.push(task.to_string());
-    }
-
-    for tag in tags {
-        args.push("--tags".to_string());
-        args.push(normalize_tag(tag));
-    }
-
-    args
-}
-
-pub(crate) fn folder_scope(folder: &str) -> String {
-    if folder.ends_with('/') {
-        folder.to_string()
-    } else {
-        format!("{folder}/")
-    }
-}
+use crate::{SearchMode, TaskStatus};
 
 pub(crate) fn normalize_tag(tag: &str) -> String {
     if tag.starts_with('#') {
@@ -80,11 +13,6 @@ pub(crate) fn normalize_tag(tag: &str) -> String {
 
 pub(crate) fn normalize_folder(folder: &str) -> String {
     folder.trim_matches('/').to_string()
-}
-
-pub(crate) fn mkdir_selector(notebook: &str, path: &str) -> String {
-    let normalized = normalize_folder(path);
-    format!("{}:{}", notebook, normalized)
 }
 
 pub(crate) fn tasks_scope(notebook: &str, folder: Option<&str>) -> String {

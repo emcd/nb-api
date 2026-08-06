@@ -14,6 +14,7 @@ mod empty_result_hints;
 mod git_env_scrub;
 mod show_line_wrap;
 mod show_probe;
+mod transaction;
 
 #[cfg(feature = "testing-tokio")]
 #[path = "async_helpers.rs"]

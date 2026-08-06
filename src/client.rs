@@ -1,7 +1,7 @@
 //! [`NbClient`] method implementations.
 
 use std::collections::VecDeque;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::LazyLock;
 
@@ -9,21 +9,32 @@ use regex::Regex;
 use tokio::process::Command;
 
 use crate::argv::{
-    child_folder_names, edit_args, empty_tasks_message, is_empty_tasks_error, mkdir_selector,
-    normalize_folder, search_command_args, task_command_args, tasks_command_args, tasks_scope,
-    todo_command_args,
+    child_folder_names, empty_tasks_message, is_empty_tasks_error, normalize_folder,
+    search_command_args, tasks_command_args, tasks_scope,
 };
 use crate::diagnostics::{append_warning, is_notebook_not_found, is_selector_not_found};
 use crate::error::NbError;
+use crate::fingerprint;
+use crate::fingerprint::Fingerprint;
+use crate::gate;
 use crate::git::derive_git_notebook_name;
 use crate::git_env::scrub_git_env;
 use crate::git_signing::apply_git_signing_env;
+use crate::lines::{
+    note_line_from_body_line, require_contiguous_body, search_lines, split_body_lines,
+};
 use crate::output::strip_empty_result_hint;
+use crate::parser::{ParseContext, parse};
+use crate::transaction::{self, Transaction};
+use crate::types::{
+    BodyFragment, ByteString, CommitOutcome, LineEdit, NoteTarget, Occurrence, SearchNoteLines,
+    ShowNote, ShowNoteLines,
+};
 use crate::validate::{
     detect_duplicate_title_heading, parse_qualified_selector, validate_destination,
     validate_folder_option, validate_folder_path, validate_notebook_name,
 };
-use crate::{Config, EditMode, NbClient, SearchMode, TaskStatus};
+use crate::{Config, NbClient, SearchMode, TaskStatus};
 
 /// Regex to match ANSI/ISO 2022 escape sequences.
 ///
@@ -77,7 +88,65 @@ impl NbClient {
             create_notebook: config.create_notebook,
             disable_git_signing: config.disable_git_signing,
             allow_top_level_notes: config.allow_top_level_notes,
+            gate_timeout: config.gate_timeout,
         })
+    }
+
+    /// Begin a collect-then-commit [`Transaction`] for `notebook`.
+    ///
+    /// Construction performs no durable I/O and does not acquire the gate.
+    pub async fn transaction(&self, notebook: Option<&str>) -> Result<Transaction, NbError> {
+        let notebook = self.resolve_notebook_name(notebook)?;
+        // Prefer filesystem existence under NB_DIR so plan construction does
+        // not invoke `nb` (which can auto-checkpoint a dirty worktree).
+        if notebook_dir_from_env(&notebook).is_none() {
+            self.ensure_notebook(&notebook).await?;
+        }
+        Ok(Transaction::new(self.clone(), notebook))
+    }
+
+    /// Notebook path without acquiring the notebook gate (caller holds gate or
+    /// is still resolving identity).
+    ///
+    /// Prefers `$NB_DIR/<notebook>` when that directory exists so path
+    /// resolution does not invoke `nb` (which can auto-checkpoint and clear a
+    /// dirty baseline before `Transaction::commit` inspects status).
+    pub(crate) async fn show_notebook_path_unguarded(
+        &self,
+        notebook: Option<&str>,
+    ) -> Result<PathBuf, NbError> {
+        let notebook = self.resolve_notebook_name(notebook)?;
+        if let Some(path) = notebook_dir_from_env(&notebook) {
+            return Ok(path);
+        }
+        self.ensure_notebook(&notebook).await?;
+        let output = self
+            .exec_vec(vec![
+                "notebooks".to_string(),
+                "show".to_string(),
+                notebook.clone(),
+                "--path".to_string(),
+            ])
+            .await?;
+        let path = output.trim();
+        if path.is_empty() {
+            return Err(NbError::CommandFailed {
+                command: format!("nb notebooks show {notebook} --path"),
+                stderr: "nb notebooks path output was empty".to_string(),
+                exit_code: None,
+            });
+        }
+        Ok(PathBuf::from(path))
+    }
+
+    async fn with_notebook_gate<F, T>(&self, notebook: &str, f: F) -> Result<T, NbError>
+    where
+        F: std::future::Future<Output = Result<T, NbError>>,
+    {
+        let root = self.show_notebook_path_unguarded(Some(notebook)).await?;
+        let key = gate::git_common_dir_realpath(&root)?;
+        let _hold = gate::acquire_notebook(key, self.gate_timeout, false).await?;
+        f.await
     }
 
     fn require_folder_for_new_note(&self, folder: Option<&str>) -> Result<(), NbError> {
@@ -354,37 +423,23 @@ impl NbClient {
 
     /// Lists available notebooks.
     pub async fn list_notebooks(&self) -> Result<String, NbError> {
+        let _g = gate::acquire_global(self.gate_timeout).await?;
         // Use --no-color to avoid ANSI escape codes
         self.exec(&["notebooks", "--no-color"]).await
     }
 
     /// Returns the path for a notebook.
     pub async fn show_notebook_path(&self, notebook: Option<&str>) -> Result<PathBuf, NbError> {
-        let notebook = self.resolve_notebook(notebook).await?;
-        let output = self
-            .exec_vec(vec![
-                "notebooks".to_string(),
-                "show".to_string(),
-                notebook.clone(),
-                "--path".to_string(),
-            ])
-            .await?;
-        let path = output.trim();
-        if path.is_empty() {
-            // Synthesized CommandFailed.command must match the
-            // argv actually executed by exec_vec, not a
-            // reformatted display string. The executed argv is
-            // `nb notebooks show {notebook} --path`.
-            return Err(NbError::CommandFailed {
-                command: format!("nb notebooks show {notebook} --path"),
-                stderr: "nb notebooks path output was empty".to_string(),
-                exit_code: None,
-            });
-        }
-        Ok(PathBuf::from(path))
+        let notebook = self.resolve_notebook_name(notebook)?;
+        self.ensure_notebook(&notebook).await?;
+        self.with_notebook_gate(
+            &notebook,
+            self.show_notebook_path_unguarded(Some(&notebook)),
+        )
+        .await
     }
 
-    /// Creates a new note.
+    /// Creates a new note (one-shot transaction; optional auto-name).
     pub async fn add_note(
         &self,
         title: Option<&str>,
@@ -392,13 +447,7 @@ impl NbClient {
         tags: &[String],
         folder: Option<&str>,
         notebook: Option<&str>,
-    ) -> Result<String, NbError> {
-        // Reject duplicate-H1 BEFORE any subprocess invocation or
-        // notebook side effect (including `resolve_notebook`).
-        // The validation is a pure in-process check; no `nb`
-        // side effect can result from the rejection. This is
-        // the general principle: validate input before any
-        // state-mutating call.
+    ) -> Result<CommitOutcome, NbError> {
         if let Some(t) = title
             && let Some(heading) = detect_duplicate_title_heading(t, content)
         {
@@ -407,120 +456,237 @@ impl NbClient {
                 heading,
             });
         }
-        let mut args = Vec::new();
         self.require_folder_for_new_note(folder)?;
         validate_folder_option(folder)?;
-
-        let notebook = self.resolve_notebook(notebook).await?;
-        let cmd = format!("{}:add", notebook);
-        args.push(cmd);
-
-        // Title (if provided)
-        if let Some(t) = title {
-            args.push("--title".to_string());
-            args.push(t.to_string());
-        }
-
-        // Content via --content flag (avoids shell escaping issues)
-        args.push("--content".to_string());
-        args.push(content.to_string());
-
-        // Tags (nb expects #hashtag format)
-        for tag in tags {
-            args.push("--tags".to_string());
-            let tag_str = if tag.starts_with('#') {
-                tag.clone()
-            } else {
-                format!("#{}", tag)
-            };
-            args.push(tag_str);
-        }
-
-        // Folder
-        if let Some(f) = folder {
-            args.push("--folder".to_string());
-            args.push(f.to_string());
-        }
-
-        self.exec_vec(args)
-            .await
-            .map(|output| self.append_notebook_warning(output, &notebook))
+        let filename = transaction::auto_filename("md");
+        let path = transaction::join_folder_file(folder, &filename);
+        let mut tx = self.transaction(notebook).await?;
+        tx.add_note(&path, title, content, tags)?;
+        tx.commit().await
     }
 
-    /// Shows a note's content.
-    pub async fn show_note(&self, id: &str, notebook: Option<&str>) -> Result<String, NbError> {
-        let (_, selector) = self.resolve_target_selector(id, notebook).await?;
-        // Probe the selector's classification before reading.
-        // `nb show <selector> --type text` reports whether the
-        // type is text (rc 0) or not (rc non-zero). If the type
-        // is not text, a follow-up `nb show <selector> --type`
-        // reports the actual_type for the error diagnostic. When
-        // the probe cannot classify (selector not found, internal
-        // error), fall through to the original show path so
-        // existing missing-selector diagnostics are preserved.
-        // The semantic check delegates "what is text" to `nb`
-        // itself, ensuring forward compatibility as `nb` adds
-        // new textual types.
-        match self.probe_show_classification(&selector).await {
+    /// Shows a note as a structured [`ShowNote`] (gate-held).
+    pub async fn show_note(&self, id: &str, notebook: Option<&str>) -> Result<ShowNote, NbError> {
+        let (notebook, selector) = self.resolve_target_selector(id, notebook).await?;
+        self.with_notebook_gate(&notebook, async {
+            self.show_note_inner(&notebook, &selector).await
+        })
+        .await
+    }
+
+    async fn show_note_inner(&self, notebook: &str, selector: &str) -> Result<ShowNote, NbError> {
+        match self.probe_show_classification(selector).await {
             ShowClassification::NonTextual { actual_type } => {
                 return Err(NbError::UnsupportedShowTarget {
-                    selector: selector.clone(),
+                    selector: selector.to_string(),
                     actual_type,
                 });
             }
-            ShowClassification::Textual | ShowClassification::ProbeFailure => {
-                // Proceed to content read (Textual) or fall
-                // through to original show (ProbeFailure).
-            }
+            ShowClassification::Textual | ShowClassification::ProbeFailure => {}
         }
-        // Pass `--print` so `nb show` writes stored bytes to stdout instead of
-        // piping through the renderer/pager. The renderer path word-wraps at
-        // ~80 columns when stdout is a pipe, silently corrupting any stored
-        // line longer than that (e.g. JSON in change-meta notes, code blocks,
-        // long URLs). `--print` returns the file verbatim. Do not remove.
-        // See `nb-api:issues/2`.
-        let args = vec![
-            "show".to_string(),
-            selector.clone(),
-            "--print".to_string(),
-            "--no-color".to_string(),
-        ];
-        match self.exec_vec(args).await {
-            Ok(stdout) => Ok(stdout),
-            Err(NbError::CommandFailed {
-                command,
-                stderr,
-                exit_code,
-            }) => {
-                // Map genuine `nb` not-found diagnostics to typed
-                // NotFound at this public selector boundary. Other
-                // CommandFailed metadata is preserved (real subprocess
-                // failures, infra issues). The `selector` field
-                // carries the resolved selector verbatim (e.g.,
-                // `home:does-not-exist`) — the original id the
-                // caller passed, qualified against the resolved
-                // notebook, with no decorative verb suffix.
-                //
-                // The exact-match classifier rejects appended
-                // failures (e.g., a retry that succeeds after a
-                // missing-selector error, or a foreign-line
-                // diagnostic with a "not found" substring):
-                // `nb`'s complete normalized diagnostic for THIS
-                // selector must be `! Not found: <selector>` —
-                // not merely start with the prefix.
-                if is_selector_not_found(&stderr, &selector) {
-                    Err(NbError::NotFound {
-                        selector: selector.clone(),
-                    })
-                } else {
-                    Err(NbError::CommandFailed {
-                        command,
-                        stderr,
-                        exit_code,
-                    })
-                }
+        let path = self.resolve_item_path(selector).await?;
+        let root = self.show_notebook_path_unguarded(Some(notebook)).await?;
+        let rel = path_relative_to(&root, &path)?;
+        let source = std::fs::read(&path).map_err(|e| NbError::Io {
+            path: path.clone(),
+            source: e.into(),
+        })?;
+        let doc = match parse(&source, ParseContext::FromPath(PathBuf::from(&rel))) {
+            Ok(doc) => doc,
+            // nb may classify additional textual extensions as showable; map
+            // unrecognized formats to a Note partition for structured show.
+            Err(NbError::UnsupportedDocumentFormat { .. }) => {
+                parse(&source, ParseContext::Explicit(crate::DocumentKind::Note))?
             }
-            Err(err) => Err(err),
+            Err(err) => return Err(err),
+        };
+        let fragments: Vec<BodyFragment> = doc
+            .body()
+            .enumerate()
+            .map(|(i, bytes)| BodyFragment {
+                index: i as u32,
+                bytes: ByteString::from_bytes(bytes),
+            })
+            .collect();
+        let body_contiguous = fragments.len() <= 1;
+        let body_bytes = doc.body_bytes();
+        let tags: Vec<String> = doc
+            .tags_str()
+            .filter_map(|t| t.ok().map(|s| s.trim_start_matches('#').to_string()))
+            .collect();
+        let title = doc.title().map(ByteString::from_bytes);
+        let title_text = doc.title_str().and_then(|r| {
+            r.ok().map(|s| {
+                s.trim_end_matches('\n')
+                    .trim_start_matches('#')
+                    .trim()
+                    .to_string()
+            })
+        });
+        Ok(ShowNote {
+            selector: selector.to_string(),
+            path: rel,
+            kind: doc.kind(),
+            todo_state: doc.todo_state(),
+            title,
+            title_text,
+            tags,
+            body_fragments: fragments,
+            body_contiguous,
+            body: ByteString::from_bytes(body_bytes),
+            fingerprint: fingerprint::fingerprint(&doc),
+            source: ByteString::from_bytes(source),
+        })
+    }
+
+    /// Enumerate body lines for a contiguous-body note.
+    pub async fn show_note_lines(
+        &self,
+        target: NoteTarget,
+        offset: Option<u32>,
+        limit: Option<u32>,
+        notebook: Option<&str>,
+    ) -> Result<ShowNoteLines, NbError> {
+        let (notebook, selector) = self.resolve_note_target(&target, notebook).await?;
+        self.with_notebook_gate(&notebook, async {
+            let shown = self.show_note_inner(&notebook, &selector).await?;
+            let source = shown.source.as_bytes()?;
+            let doc = parse(&source, ParseContext::FromPath(PathBuf::from(&shown.path)))?;
+            let body = require_contiguous_body(&doc)?;
+            let lines = split_body_lines(&body);
+            let total_lines = lines.len() as u32;
+            let offset = offset.unwrap_or(1);
+            let limit = limit.unwrap_or(100);
+            if offset == 0 {
+                return Err(NbError::InvalidLineWindow {
+                    offset,
+                    limit,
+                    total_lines,
+                });
+            }
+            if total_lines == 0 {
+                if offset != 1 {
+                    return Err(NbError::InvalidLineWindow {
+                        offset,
+                        limit,
+                        total_lines,
+                    });
+                }
+                return Ok(ShowNoteLines {
+                    selector: shown.selector,
+                    path: shown.path,
+                    kind: shown.kind,
+                    total_lines: 0,
+                    offset,
+                    limit,
+                    next_offset: None,
+                    lines: Vec::new(),
+                    title: shown.title,
+                    tags: shown.tags,
+                    body_fingerprint: shown.fingerprint,
+                });
+            }
+            if offset > total_lines + 1 {
+                return Err(NbError::InvalidLineWindow {
+                    offset,
+                    limit,
+                    total_lines,
+                });
+            }
+            let start_idx = (offset - 1) as usize;
+            let end_idx = (start_idx + limit as usize).min(lines.len());
+            let window: Vec<_> = lines[start_idx..end_idx]
+                .iter()
+                .map(|l| note_line_from_body_line(l, &body))
+                .collect();
+            let next_offset = if end_idx < lines.len() {
+                Some(offset + window.len() as u32)
+            } else {
+                None
+            };
+            Ok(ShowNoteLines {
+                selector: shown.selector,
+                path: shown.path,
+                kind: shown.kind,
+                total_lines,
+                offset,
+                limit,
+                next_offset,
+                lines: window,
+                title: shown.title,
+                tags: shown.tags,
+                body_fingerprint: shown.fingerprint,
+            })
+        })
+        .await
+    }
+
+    /// Search body line texts for a byte pattern (contiguous body only).
+    pub async fn search_note_lines(
+        &self,
+        target: NoteTarget,
+        pattern: &[u8],
+        notebook: Option<&str>,
+    ) -> Result<SearchNoteLines, NbError> {
+        let (notebook, selector) = self.resolve_note_target(&target, notebook).await?;
+        self.with_notebook_gate(&notebook, async {
+            let shown = self.show_note_inner(&notebook, &selector).await?;
+            let source = shown.source.as_bytes()?;
+            let doc = parse(&source, ParseContext::FromPath(PathBuf::from(&shown.path)))?;
+            let body = require_contiguous_body(&doc)?;
+            let hits = search_lines(&body, pattern)?;
+            Ok(SearchNoteLines {
+                selector: shown.selector,
+                path: shown.path,
+                kind: shown.kind,
+                hits,
+                body_fingerprint: shown.fingerprint,
+            })
+        })
+        .await
+    }
+
+    async fn resolve_item_path(&self, selector: &str) -> Result<PathBuf, NbError> {
+        let output = self
+            .exec_vec(vec![
+                "show".to_string(),
+                selector.to_string(),
+                "--path".to_string(),
+                "--no-color".to_string(),
+            ])
+            .await
+            .map_err(|err| match err {
+                NbError::CommandFailed { stderr, .. }
+                    if is_selector_not_found(&stderr, selector) =>
+                {
+                    NbError::NotFound {
+                        selector: selector.to_string(),
+                    }
+                }
+                other => other,
+            })?;
+        let path = output.trim();
+        if path.is_empty() {
+            return Err(NbError::CommandFailed {
+                command: format!("nb show {selector} --path"),
+                stderr: "empty path".into(),
+                exit_code: None,
+            });
+        }
+        Ok(PathBuf::from(path))
+    }
+
+    async fn resolve_note_target(
+        &self,
+        target: &NoteTarget,
+        notebook: Option<&str>,
+    ) -> Result<(String, String), NbError> {
+        match target {
+            NoteTarget::Selector { value } => self.resolve_target_selector(value, notebook).await,
+            NoteTarget::Path { value } => {
+                let notebook = self.resolve_notebook(notebook).await?;
+                Ok((notebook.clone(), format!("{notebook}:{value}")))
+            }
         }
     }
 
@@ -648,57 +814,55 @@ impl NbClient {
         self.exec_vec(args).await
     }
 
-    /// Edits a note using the provided content mode.
-    ///
-    /// See [`EditMode`] for the vocabulary rationale (the variant
-    /// previously named `Replace` is now `Overwrite` to remove the
-    /// vocabulary trap at the root of `nb-api:issues/api/6`).
-    ///
-    /// Requiredness on the consumer side (e.g., the `mode` field on
-    /// `nb-mcp-server`'s `EditArgs`) is a consumer-layer concern,
-    /// not enforced here.
-    pub async fn edit_note(
+    /// Deletes a note (one-shot transaction).
+    pub async fn delete_note(
         &self,
         id: &str,
-        content: &str,
-        mode: EditMode,
         notebook: Option<&str>,
-    ) -> Result<String, NbError> {
-        let (notebook, selector) = self.resolve_target_selector(id, notebook).await?;
-        let output = self.exec_vec(edit_args(selector, content, mode)).await?;
-        Ok(self.append_notebook_warning(output, &notebook))
+    ) -> Result<CommitOutcome, NbError> {
+        let (nb, selector) = self.resolve_target_selector(id, notebook).await?;
+        let target = self.note_target_for_selector(&nb, &selector).await?;
+        let mut tx = self.transaction(Some(&nb)).await?;
+        tx.delete_note(target)?;
+        tx.commit().await
     }
 
-    /// Deletes a note.
-    pub async fn delete_note(&self, id: &str, notebook: Option<&str>) -> Result<String, NbError> {
-        let (notebook, selector) = self.resolve_target_selector(id, notebook).await?;
-        let output = self
-            .exec_vec(vec!["delete".to_string(), selector, "--force".to_string()])
-            .await?;
-        Ok(self.append_notebook_warning(output, &notebook))
-    }
-
-    /// Moves or renames a note.
+    /// Moves or renames a note (one-shot transaction).
     pub async fn move_note(
         &self,
         id: &str,
         destination: &str,
         notebook: Option<&str>,
-    ) -> Result<String, NbError> {
+    ) -> Result<CommitOutcome, NbError> {
         validate_destination(destination)?;
-        let (notebook, selector) = self.resolve_target_selector(id, notebook).await?;
-        let output = self
-            .exec_vec(vec![
-                "move".to_string(),
-                selector,
-                destination.to_string(),
-                "--force".to_string(),
-            ])
-            .await?;
-        Ok(self.append_notebook_warning(output, &notebook))
+        let (nb, selector) = self.resolve_target_selector(id, notebook).await?;
+        let target = self.note_target_for_selector(&nb, &selector).await?;
+        let mut tx = self.transaction(Some(&nb)).await?;
+        tx.move_note(target, destination)?;
+        tx.commit().await
     }
 
-    /// Creates a todo item.
+    async fn note_target_for_selector(
+        &self,
+        notebook: &str,
+        selector: &str,
+    ) -> Result<NoteTarget, NbError> {
+        let root = self.show_notebook_path_unguarded(Some(notebook)).await?;
+        let stripped = selector
+            .rsplit_once(':')
+            .map(|(_, rest)| rest)
+            .unwrap_or(selector);
+        let direct = root.join(stripped);
+        if direct.is_file() {
+            return Ok(NoteTarget::path(stripped));
+        }
+        // Fall back to `nb show --path` for numeric ids / titles.
+        let abs = self.resolve_item_path(selector).await?;
+        let rel = path_relative_to(&root, &abs)?;
+        Ok(NoteTarget::path(rel))
+    }
+
+    /// Creates a todo item (one-shot transaction; optional auto-name).
     pub async fn add_todo(
         &self,
         title: &str,
@@ -707,49 +871,116 @@ impl NbClient {
         tags: &[String],
         folder: Option<&str>,
         notebook: Option<&str>,
-    ) -> Result<String, NbError> {
+    ) -> Result<CommitOutcome, NbError> {
         self.require_folder_for_new_note(folder)?;
         validate_folder_option(folder)?;
-        let notebook = self.resolve_notebook(notebook).await?;
-        let output = self
-            .exec_vec(todo_command_args(
-                &notebook,
-                title,
-                description,
-                tasks,
-                tags,
-                folder,
-            ))
-            .await?;
-        Ok(self.append_notebook_warning(output, &notebook))
+        let filename = transaction::auto_filename("todo.md");
+        let path = transaction::join_folder_file(folder, &filename);
+        let mut tx = self.transaction(notebook).await?;
+        tx.add_todo(&path, title, description, tasks, tags)?;
+        tx.commit().await
     }
 
-    /// Marks a todo as done.
+    /// Marks a todo as done (one-shot transaction).
     pub async fn mark_task_done(
         &self,
         id: &str,
         task_number: Option<u32>,
         notebook: Option<&str>,
-    ) -> Result<String, NbError> {
-        let (notebook, selector) = self.resolve_target_selector(id, notebook).await?;
-        let output = self
-            .exec_vec(task_command_args("do", selector, task_number))
-            .await?;
-        Ok(self.append_notebook_warning(output, &notebook))
+    ) -> Result<CommitOutcome, NbError> {
+        let (nb, selector) = self.resolve_target_selector(id, notebook).await?;
+        let target = self.note_target_for_selector(&nb, &selector).await?;
+        let mut tx = self.transaction(Some(&nb)).await?;
+        tx.mark_task_done(target, task_number)?;
+        tx.commit().await
     }
 
-    /// Marks a todo as not done.
+    /// Marks a todo as not done (one-shot transaction).
     pub async fn unmark_task_done(
         &self,
         id: &str,
         task_number: Option<u32>,
         notebook: Option<&str>,
-    ) -> Result<String, NbError> {
-        let (notebook, selector) = self.resolve_target_selector(id, notebook).await?;
-        let output = self
-            .exec_vec(task_command_args("undo", selector, task_number))
-            .await?;
-        Ok(self.append_notebook_warning(output, &notebook))
+    ) -> Result<CommitOutcome, NbError> {
+        let (nb, selector) = self.resolve_target_selector(id, notebook).await?;
+        let target = self.note_target_for_selector(&nb, &selector).await?;
+        let mut tx = self.transaction(Some(&nb)).await?;
+        tx.unmark_task_done(target, task_number)?;
+        tx.commit().await
+    }
+
+    /// Replace contiguous body bytes (one-shot).
+    pub async fn replace_note_body(
+        &self,
+        target: NoteTarget,
+        new_body: impl AsRef<[u8]>,
+        fingerprint: Fingerprint,
+        notebook: Option<&str>,
+    ) -> Result<CommitOutcome, NbError> {
+        let mut tx = self.transaction(notebook).await?;
+        tx.replace_note_body(target, new_body, fingerprint)?;
+        tx.commit().await
+    }
+
+    /// Substring edit on contiguous body (one-shot).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn edit_note_substring(
+        &self,
+        target: NoteTarget,
+        pattern: impl AsRef<[u8]>,
+        replacement: impl AsRef<[u8]>,
+        occurrence: Occurrence,
+        expected_count: u32,
+        fingerprint: Option<Fingerprint>,
+        notebook: Option<&str>,
+    ) -> Result<CommitOutcome, NbError> {
+        let mut tx = self.transaction(notebook).await?;
+        tx.edit_note_substring(
+            target,
+            pattern,
+            replacement,
+            occurrence,
+            expected_count,
+            fingerprint,
+        )?;
+        tx.commit().await
+    }
+
+    /// Line-oriented body edit batch (one-shot).
+    pub async fn edit_note_lines(
+        &self,
+        target: NoteTarget,
+        edits: Vec<LineEdit>,
+        notebook: Option<&str>,
+    ) -> Result<CommitOutcome, NbError> {
+        let mut tx = self.transaction(notebook).await?;
+        tx.edit_note_lines(target, edits)?;
+        tx.commit().await
+    }
+
+    /// Retitle a note without changing path (one-shot).
+    pub async fn retitle_note(
+        &self,
+        target: NoteTarget,
+        title: impl AsRef<[u8]>,
+        notebook: Option<&str>,
+    ) -> Result<CommitOutcome, NbError> {
+        let mut tx = self.transaction(notebook).await?;
+        tx.retitle_note(target, title)?;
+        tx.commit().await
+    }
+
+    /// Add/remove tags (one-shot).
+    pub async fn edit_note_tags(
+        &self,
+        target: NoteTarget,
+        add: &[String],
+        remove: &[String],
+        notebook: Option<&str>,
+    ) -> Result<CommitOutcome, NbError> {
+        let mut tx = self.transaction(notebook).await?;
+        tx.edit_note_tags(target, add, remove)?;
+        tx.commit().await
     }
 
     /// Lists checklist items within todos.
@@ -841,7 +1072,7 @@ impl NbClient {
         Ok(scopes)
     }
 
-    /// Creates a bookmark.
+    /// Creates a bookmark (one-shot transaction; optional auto-name).
     pub async fn add_bookmark(
         &self,
         url: &str,
@@ -850,45 +1081,14 @@ impl NbClient {
         comment: Option<&str>,
         folder: Option<&str>,
         notebook: Option<&str>,
-    ) -> Result<String, NbError> {
-        let mut args = Vec::new();
+    ) -> Result<CommitOutcome, NbError> {
         self.require_folder_for_new_note(folder)?;
         validate_folder_option(folder)?;
-
-        // Build the destination path with optional folder
-        let notebook = self.resolve_notebook(notebook).await?;
-        let dest = match folder {
-            Some(f) => format!("{}:{}/", notebook, f),
-            None => format!("{}:", notebook),
-        };
-
-        let cmd = format!("{}bookmark", dest);
-        args.push(cmd);
-        args.push(url.to_string());
-
-        if let Some(t) = title {
-            args.push("--title".to_string());
-            args.push(t.to_string());
-        }
-
-        if let Some(c) = comment {
-            args.push("--comment".to_string());
-            args.push(c.to_string());
-        }
-
-        for tag in tags {
-            args.push("--tags".to_string());
-            let tag_str = if tag.starts_with('#') {
-                tag.clone()
-            } else {
-                format!("#{}", tag)
-            };
-            args.push(tag_str);
-        }
-
-        self.exec_vec(args)
-            .await
-            .map(|output| self.append_notebook_warning(output, &notebook))
+        let filename = transaction::auto_filename("bookmark.md");
+        let path = transaction::join_folder_file(folder, &filename);
+        let mut tx = self.transaction(notebook).await?;
+        tx.add_bookmark(&path, url, title, tags, comment)?;
+        tx.commit().await
     }
 
     /// Lists folders in a notebook.
@@ -923,27 +1123,22 @@ impl NbClient {
             .map(|output| strip_empty_result_hint(&output))
     }
 
-    /// Creates a folder.
-    pub async fn add_folder(&self, path: &str, notebook: Option<&str>) -> Result<String, NbError> {
+    /// Creates a folder (one-shot transaction).
+    pub async fn add_folder(
+        &self,
+        path: &str,
+        notebook: Option<&str>,
+    ) -> Result<CommitOutcome, NbError> {
         validate_folder_path(path)?;
-        let notebook = self.resolve_notebook(notebook).await?;
-        let folder_path = mkdir_selector(&notebook, path);
-        let output = self
-            .exec_vec(vec!["add".to_string(), "folder".to_string(), folder_path])
-            .await?;
-        Ok(self.append_notebook_warning(output, &notebook))
+        let mut tx = self.transaction(notebook).await?;
+        tx.add_folder(path)?;
+        tx.commit().await
     }
 
     /// Imports a file or URL into the notebook as a note.
     ///
-    /// Invokes `nb import`, which only handles notes (HTML,
-    /// Markdown, plain text, and other source formats that
-    /// `nb` can convert into a note body). The `_note` suffix
-    /// is correct because `nb import` cannot create bookmarks
-    /// or folders — those use `add_bookmark` and `add_folder`
-    /// respectively. The `source` may be a local file path or
-    /// a URL; HTML sources may be converted to Markdown via
-    /// `convert = true`.
+    /// One-shot only under the process-shared notebook gate. Not a
+    /// [`Transaction`] plan op in 0.3.0.
     pub async fn import_note(
         &self,
         source: &str,
@@ -957,31 +1152,58 @@ impl NbClient {
         validate_folder_option(folder)?;
 
         let notebook = self.resolve_notebook(notebook).await?;
-        let cmd = format!("{}:import", notebook);
-        args.push(cmd);
-
-        // Source path or URL
-        args.push(source.to_string());
-
-        // Convert HTML to Markdown
-        if convert {
-            args.push("--convert".to_string());
-        }
-
-        // Destination: notebook:folder/filename or just folder/filename
-        // nb import expects destination as a positional argument after source
-        if folder.is_some() || filename.is_some() {
-            let dest = match (folder, filename) {
-                (Some(f), Some(n)) => format!("{}/{}", f, n),
-                (Some(f), None) => format!("{}/", f),
-                (None, Some(n)) => n.to_string(),
-                (None, None) => unreachable!(),
-            };
-            args.push(dest);
-        }
-
-        self.exec_vec(args)
-            .await
-            .map(|output| self.append_notebook_warning(output, &notebook))
+        self.with_notebook_gate(&notebook, async {
+            let cmd = format!("{}:import", notebook);
+            args.push(cmd);
+            args.push(source.to_string());
+            if convert {
+                args.push("--convert".to_string());
+            }
+            if folder.is_some() || filename.is_some() {
+                let dest = match (folder, filename) {
+                    (Some(f), Some(n)) => format!("{}/{}", f, n),
+                    (Some(f), None) => format!("{}/", f),
+                    (None, Some(n)) => n.to_string(),
+                    (None, None) => unreachable!(),
+                };
+                args.push(dest);
+            }
+            self.exec_vec(args)
+                .await
+                .map(|output| self.append_notebook_warning(output, &notebook))
+        })
+        .await
     }
+}
+
+fn notebook_dir_from_env(notebook: &str) -> Option<PathBuf> {
+    let nb_dir = std::env::var_os("NB_DIR")?;
+    let path = PathBuf::from(nb_dir).join(notebook);
+    if path.is_dir() && path.join(".git").exists() {
+        Some(path)
+    } else {
+        None
+    }
+}
+
+fn path_relative_to(root: &Path, path: &Path) -> Result<String, NbError> {
+    let root = root.canonicalize().map_err(|e| NbError::Io {
+        path: root.to_path_buf(),
+        source: e.into(),
+    })?;
+    let path = path.canonicalize().map_err(|e| NbError::Io {
+        path: path.to_path_buf(),
+        source: e.into(),
+    })?;
+    let rel = path
+        .strip_prefix(&root)
+        .map_err(|_| NbError::ValidationError {
+            reason: format!(
+                "path {} is not under notebook root {}",
+                path.display(),
+                root.display()
+            ),
+            location: None,
+        })?;
+    Ok(rel.to_string_lossy().replace('\\', "/"))
 }

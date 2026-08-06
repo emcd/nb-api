@@ -22,6 +22,10 @@ use nb_api::{Config, NbClient, NbError};
 
 use crate::common::with_isolated_env;
 
+fn show_text(note: &nb_api::ShowNote) -> String {
+    String::from_utf8_lossy(&note.source.as_bytes().expect("source bytes")).into_owned()
+}
+
 /// Add a note with an explicit extension to the fixture's notebook.
 ///
 /// The public `NbClient::add_note` API does not expose a `--type` flag,
@@ -70,7 +74,7 @@ async fn show_accepts_md_extension() {
             .await
             .expect("add .md note");
 
-        let output = client.show_note("1", None).await.expect("show .md note");
+        let output = show_text(&client.show_note("1", None).await.expect("show .md note"));
         assert!(
             output.contains("hello md"),
             "show output missing content: {output:?}"
@@ -93,7 +97,7 @@ async fn show_accepts_txt_extension() {
 
         add_note_with_type(&env, env.notebook(), "beta", "hello txt", "txt");
 
-        let output = client.show_note("1", None).await.expect("show .txt note");
+        let output = show_text(&client.show_note("1", None).await.expect("show .txt note"));
         assert!(
             output.contains("hello txt"),
             "show output missing content: {output:?}"
@@ -116,7 +120,7 @@ async fn show_accepts_org_extension() {
 
         add_note_with_type(&env, env.notebook(), "gamma", "hello org", "org");
 
-        let output = client.show_note("1", None).await.expect("show .org note");
+        let output = show_text(&client.show_note("1", None).await.expect("show .org note"));
         assert!(
             output.contains("hello org"),
             "show output missing content: {output:?}"
@@ -139,7 +143,7 @@ async fn show_accepts_text_extension() {
 
         add_note_with_type(&env, env.notebook(), "delta", "hello text", "text");
 
-        let output = client.show_note("1", None).await.expect("show .text note");
+        let output = show_text(&client.show_note("1", None).await.expect("show .text note"));
         assert!(
             output.contains("hello text"),
             "show output missing content: {output:?}"
@@ -172,7 +176,7 @@ async fn show_accepts_todo_via_md_extension() {
             .await
             .expect("add todo");
 
-        let output = client.show_note("1", None).await.expect("show todo");
+        let output = show_text(&client.show_note("1", None).await.expect("show todo"));
         assert!(
             output.contains("task one"),
             "show output missing todo title: {output:?}"
@@ -204,22 +208,22 @@ async fn show_accepts_source_data_markup_extensions() {
         add_note_with_type(&env, env.notebook(), "yamlnote", "k: v", "yaml");
         add_note_with_type(&env, env.notebook(), "csvnote", "a,b,c", "csv");
 
-        let json_out = client.show_note("1", None).await.expect("show .json");
+        let json_out = show_text(&client.show_note("1", None).await.expect("show .json"));
         assert!(
             json_out.contains("\"k\":\"v\""),
             "json output: {json_out:?}"
         );
 
-        let py_out = client.show_note("2", None).await.expect("show .py");
+        let py_out = show_text(&client.show_note("2", None).await.expect("show .py"));
         assert!(py_out.contains("def f()"), "py output: {py_out:?}");
 
-        let rs_out = client.show_note("3", None).await.expect("show .rs");
+        let rs_out = show_text(&client.show_note("3", None).await.expect("show .rs"));
         assert!(rs_out.contains("fn main()"), "rs output: {rs_out:?}");
 
-        let yaml_out = client.show_note("4", None).await.expect("show .yaml");
+        let yaml_out = show_text(&client.show_note("4", None).await.expect("show .yaml"));
         assert!(yaml_out.contains("k: v"), "yaml output: {yaml_out:?}");
 
-        let csv_out = client.show_note("5", None).await.expect("show .csv");
+        let csv_out = show_text(&client.show_note("5", None).await.expect("show .csv"));
         assert!(csv_out.contains("a,b,c"), "csv output: {csv_out:?}");
     })
     .await;
@@ -244,7 +248,7 @@ async fn show_accepts_uppercase_extension_via_native_classification() {
 
         add_note_with_type(&env, env.notebook(), "uppermd", "uppercase content", "MD");
 
-        let output = client.show_note("1", None).await.expect("show .MD");
+        let output = show_text(&client.show_note("1", None).await.expect("show .MD"));
         assert!(
             output.contains("uppercase content"),
             "show .MD output: {output:?}"
@@ -275,10 +279,12 @@ async fn show_accepts_extensionless_file() {
         let note_path = env.nb_dir().join(env.notebook()).join("extless");
         std::fs::write(&note_path, b"extensionless content\n").expect("write extensionless file");
 
-        let output = client
-            .show_note("extless", None)
-            .await
-            .expect("show extensionless");
+        let output = show_text(
+            &client
+                .show_note("extless", None)
+                .await
+                .expect("show extensionless"),
+        );
         assert!(
             output.contains("extensionless content"),
             "show extless output: {output:?}"
@@ -442,20 +448,21 @@ async fn show_probe_sweep_over_mixed_items() {
         })
         .expect("client construction");
 
-        client
+        let alpha = client
             .add_note(Some("alpha"), "alpha body", &[], None, None)
             .await
             .expect("add .md");
+        let alpha_path = alpha.ops[0].path.as_deref().expect("alpha path");
         add_note_with_type(&env, env.notebook(), "beta", "beta body", "txt");
         add_note_with_type(&env, env.notebook(), "gamma", "gamma body", "zip");
 
-        let ok = client.show_note("1", None).await.expect("show .md");
+        let ok = show_text(&client.show_note(alpha_path, None).await.expect("show .md"));
         assert!(ok.contains("alpha body"));
-        let ok = client.show_note("2", None).await.expect("show .txt");
+        let ok = show_text(&client.show_note("beta.txt", None).await.expect("show .txt"));
         assert!(ok.contains("beta body"));
 
         let err = client
-            .show_note("3", None)
+            .show_note("gamma.zip", None)
             .await
             .expect_err("show .zip must reject");
         match err {

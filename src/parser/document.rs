@@ -19,6 +19,7 @@ use super::helpers::{parse_todo_state_from_title, tag_token_spans_in};
 /// [`DocumentKind::Bookmark`] is for `.bookmark.md` files.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(rename_all = "lowercase")]
 pub enum DocumentKind {
     Note,
     Todo,
@@ -32,6 +33,7 @@ pub enum DocumentKind {
 /// marker (permissive acceptance).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(rename_all = "lowercase")]
 pub enum TodoState {
     Open,
     Done,
@@ -311,16 +313,43 @@ impl NoteDocument {
         }
     }
 
-    /// Iterator over body byte ranges (in source order).
-    pub fn body(&self) -> BodyFragments<'_> {
-        let ranges = match &self.partition {
+    /// Body partition ranges in source order (half-open byte offsets).
+    pub fn body_ranges(&self) -> Vec<Range<usize>> {
+        match &self.partition {
             Partition::Note(note) => note.body_ranges.clone(),
             Partition::Todo(todo) => todo.body_ranges.clone(),
             Partition::Bookmark(bookmark) => bookmark.body_ranges.clone(),
-        };
+        }
+    }
+
+    /// Iterator over body byte ranges (in source order).
+    pub fn body(&self) -> BodyFragments<'_> {
         BodyFragments {
             source: &self.source,
-            ranges: ranges.into_iter(),
+            ranges: self.body_ranges().into_iter(),
+        }
+    }
+
+    /// Concatenated body fragment bytes in source order (fingerprint domain).
+    pub fn body_bytes(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        for fragment in self.body() {
+            out.extend_from_slice(fragment);
+        }
+        out
+    }
+
+    /// Title line byte range when present (includes trailing newline).
+    pub fn title_byte_range(&self) -> Option<Range<usize>> {
+        self.title_range()
+    }
+
+    /// Tags-prefix (Note) or tags-section (Todo/Bookmark) byte range.
+    pub fn tags_byte_range(&self) -> Option<Range<usize>> {
+        match &self.partition {
+            Partition::Note(note) => note.tags_prefix_range.clone(),
+            Partition::Todo(todo) => todo.tag_section_range.clone(),
+            Partition::Bookmark(bookmark) => bookmark.tag_section_range.clone(),
         }
     }
 

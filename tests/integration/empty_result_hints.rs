@@ -19,6 +19,10 @@ use nb_api::{Config, NbClient};
 
 use crate::common::with_isolated_env;
 
+fn show_text(note: &nb_api::ShowNote) -> String {
+    String::from_utf8_lossy(&note.source.as_bytes().expect("source bytes")).into_owned()
+}
+
 #[cfg(unix)]
 use crate::common::with_shim_nb_env;
 
@@ -166,11 +170,12 @@ async fn list_after_deleting_all_items_returns_clean_signal() {
     with_isolated_env(&env, false, || async {
         let client = NbClient::new(&config_for(&env)).expect("client construction");
 
-        client
+        let added = client
             .add_note(Some("only"), "body", &[], None, None)
             .await
             .expect("add");
-        client.delete_note("1", None).await.expect("delete");
+        let path = added.ops[0].path.as_deref().expect("path");
+        client.delete_note(path, None).await.expect("delete");
 
         let output = client
             .list_notes(None, &[], None, None)
@@ -198,12 +203,13 @@ async fn show_does_not_apply_hint_block_sanitization() {
         // exact pattern the helper would truncate if applied
         // to show. Verify show returns the body verbatim.
         let body = "0 items.\n\nAdd a note:\n  malicious-looking hint\n";
-        client
+        let outcome = client
             .add_note(Some("decoy"), body, &[], None, None)
             .await
             .expect("add");
+        let path = outcome.ops[0].path.as_deref().expect("path");
 
-        let output = client.show_note("1", None).await.expect("show");
+        let output = show_text(&client.show_note(path, None).await.expect("show"));
         assert!(
             output.contains("malicious-looking hint"),
             "show must NOT apply the sanitization helper; user content should be returned verbatim. \

@@ -55,14 +55,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = NbClient::new(&config)?;
 
     // Create a note
-    let result = client.add_note(
+    let outcome = client.add_note(
         Some("My Note"),
         "Note content with `backticks` works fine.",
         &["design".to_string(), "api".to_string()],
         Some("docs"),
         None,
     ).await?;
-    println!("{}", result);
+    println!("{:?}", outcome.ops[0].path);
+
+    let shown = client.show_note("docs/…", None).await?;
+    println!("{}", shown.fingerprint);
 
     // Search notes
     let results = client.search_notes(
@@ -80,21 +83,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## API Surface
 
-All `NbClient` operations return `Result<String, NbError>` with raw
-ANSI-stripped CLI output. The `NoteDocument` / `Fingerprint` module
-introduced in 0.3.0 is a typed, byte-precise view of `nb` source files —
-lossless round-trip identity and BLAKE3-256 body fingerprints. See the
-`Document model (new in 0.3.0)` section below for details.
+`0.3.0` centers on a collect-then-commit [`Transaction`] and structured
+reads. Inventory mutators are plan ops on `Transaction` with one-shot
+`NbClient` wrappers that return [`CommitOutcome`]. List/search-style
+reads still return ANSI-stripped CLI text. `edit_note` / `EditMode` are
+**removed** — use `replace_note_body`, `edit_note_substring`, or
+`edit_note_lines`.
+
+Concurrency: notebook-scoped reads and `Transaction::commit` serialize on a
+**process-shared, in-process** gate keyed by the notebook Git common-dir
+realpath. Cross-process `index.lock` wait is deferred.
 
 ### Notes
 
 | Method | Description |
 |--------|-------------|
-| `add_note` | Create a note (title, content, tags, folder) |
-| `show_note` | Read a note's content |
-| `edit_note` | Update a note (`mode` selects `Overwrite` (destructive: replaces every byte), `Append`, or `Prepend`) |
+| `transaction` | Build a collect-then-commit plan (no I/O until `commit`) |
+| `add_note` | Create a note (one-shot transaction; optional auto-name) |
+| `show_note` | Structured [`ShowNote`] (path, kind, body fragments, fingerprint, source) |
+| `show_note_lines` | Windowed body lines with `b3l1:` anchors (contiguous body only) |
+| `search_note_lines` | Byte search over body line text (contiguous body only) |
+| `replace_note_body` | Replace contiguous body with fingerprint precondition |
+| `edit_note_substring` | Substring edit with occurrence + expected_count |
+| `edit_note_lines` | Batch insert/delete/replace lines by number+anchor |
+| `retitle_note` | Change title without moving path |
+| `edit_note_tags` | Add/remove tags |
 | `delete_note` | Delete a note |
-| `move_note` | Move or rename a note |
+| `move_note` | Move or rename a note (path/basename only) |
 | `list_notes` | List notes with optional filtering |
 | `search_notes` | Full-text search with OR/AND semantics |
 
@@ -112,7 +127,7 @@ lossless round-trip identity and BLAKE3-256 body fingerprints. See the
 | Method | Description |
 |--------|-------------|
 | `add_bookmark` | Save a URL as a bookmark |
-| `import_note` | Import a file or URL |
+| `import_note` | Import a file or URL (**one-shot only**, not a plan op) |
 | `list_folders` | List folders in a notebook |
 | `add_folder` | Create a folder |
 | `list_notebooks` | List available notebooks |
@@ -124,9 +139,12 @@ lossless round-trip identity and BLAKE3-256 body fingerprints. See the
 | Type | Description |
 |------|-------------|
 | `NbClient` | Async client for invoking nb commands |
-| `NbError` | Error type for all operations. **Breaking change in 0.3.0** — variants are now structured (e.g., `CommandFailed { command, stderr, exit_code }`, `ExecutableNotFound { path }`, `Io { path, source: IoError }`). All variants derive `Serialize`/`Deserialize` so they round-trip cleanly through MCP tool responses. See the migration table in `src/error.rs`. |
+| `Transaction` | Collect-then-commit plan; drop discards; `commit` validates-all / apply-all / ≤1 Git checkpoint |
+| `CommitOutcome` / `OpOutcome` | Structured commit results |
+| `ShowNote` / `ShowNoteLines` / `SearchNoteLines` | Structured read results |
+| `NoteTarget` / `ByteString` / `LineEdit` / `Occurrence` / … | Wire types for MCP lockstep (see body-aware-editing spec) |
+| `NbError` | Structured errors including `DirtyBaseline`, `IndeterminateCommit`, `RecoveryRequired`, `FragmentedBody`, fingerprint/anchor/occurrence mismatches. Serde is internally tagged (`"type": "…"`). |
 | `Config` | Configuration for constructing `NbClient` |
-| `EditMode` | Content update mode for `edit_note` (`Overwrite` is destructive: replaces every byte of the note body). Canonical serialization is `overwrite`; the legacy string `replace` is accepted as a serde alias for backward compatibility but is not advertised in the derived JSON Schema. |
 | `SearchMode` | Query matching mode (any, all) |
 | `TaskStatus` | Todo status filter (open, closed) |
 
@@ -154,6 +172,7 @@ lossless round-trip identity and BLAKE3-256 body fingerprints. See the
 | `create_notebook` | `bool` | `true` | Automatically create missing notebooks |
 | `allow_top_level_notes` | `bool` | `false` | Allow notes at notebook root without a folder |
 | `disable_git_signing` | `bool` | `false` | Disable Git commit/tag signing for nb subprocesses |
+| `gate_timeout` | `Duration` | `60s` | Max wait on the process-shared gate queue |
 
 ### Notebook Resolution
 

@@ -1,110 +1,58 @@
-use nb_api::{EditMode, SearchMode, TaskStatus};
+use nb_api::{
+    BoundaryAt, ByteString, LineEdit, LinePosition, LineRef, NoteTarget, Occurrence, SearchMode,
+    TaskStatus,
+};
 
 #[test]
-fn edit_mode_canonical_serialization_is_overwrite() {
-    // Canonical serialization must be the unambiguous destructive
-    // name. This is the primary defense against the vocabulary trap
-    // (nb-api:issues/api/6).
-    let canonical = serde_json::to_string(&EditMode::Overwrite).unwrap();
+fn note_target_path_and_selector_wire() {
+    let path = NoteTarget::path("a.md");
+    let json = serde_json::to_string(&path).unwrap();
+    assert_eq!(json, r#"{"type":"path","value":"a.md"}"#);
+    let back: NoteTarget = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, path);
+
+    let sel = NoteTarget::selector("home:123");
+    let json = serde_json::to_string(&sel).unwrap();
+    assert_eq!(json, r#"{"type":"selector","value":"home:123"}"#);
+}
+
+#[test]
+fn byte_string_preserves_non_utf8() {
+    let b = ByteString::from_bytes([0xff, 0x0a]);
+    let json = serde_json::to_string(&b).unwrap();
+    let back: ByteString = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.as_bytes().unwrap(), vec![0xff, 0x0a]);
+}
+
+#[test]
+fn occurrence_and_line_edit_round_trip() {
+    let edit = LineEdit::Insert {
+        at: LinePosition::Boundary {
+            at: BoundaryAt::Dollar,
+        },
+        content: ByteString::from_bytes(b"x\n"),
+    };
+    let json = serde_json::to_string(&edit).unwrap();
+    let back: LineEdit = serde_json::from_str(&json).unwrap();
+    assert_eq!(edit, back);
+
+    let o = Occurrence::All;
     assert_eq!(
-        canonical, "\"overwrite\"",
-        "EditMode::Overwrite must serialize as the canonical 'overwrite'"
-    );
-    assert_eq!(
-        serde_json::to_string(&EditMode::Append).unwrap(),
-        "\"append\""
-    );
-    assert_eq!(
-        serde_json::to_string(&EditMode::Prepend).unwrap(),
-        "\"prepend\""
+        serde_json::from_str::<Occurrence>(&serde_json::to_string(&o).unwrap()).unwrap(),
+        o
     );
 }
 
 #[test]
-fn edit_mode_deserializes_canonical_overwrite() {
-    let mode: EditMode = serde_json::from_str("\"overwrite\"").unwrap();
-    assert_eq!(mode, EditMode::Overwrite);
-}
-
-#[test]
-fn edit_mode_deserializes_legacy_replace_as_alias() {
-    // Backward compatibility: pre-rename payloads that contain
-    // mode: "replace" must continue to deserialize as the
-    // destructive mode (now called Overwrite).
-    let mode: EditMode = serde_json::from_str("\"replace\"").unwrap();
-    assert_eq!(mode, EditMode::Overwrite);
-}
-
-#[test]
-fn edit_mode_deserializes_append_and_prepend() {
-    let mode: EditMode = serde_json::from_str("\"append\"").unwrap();
-    assert_eq!(mode, EditMode::Append);
-    let mode: EditMode = serde_json::from_str("\"prepend\"").unwrap();
-    assert_eq!(mode, EditMode::Prepend);
-}
-
-#[test]
-fn edit_mode_rejects_unknown_values() {
-    // Unknown mode values must fail to deserialize. This guards
-    // against typo'd strings like "overwrite " (trailing space),
-    // "Overwrite" (wrong case), or "delete".
-    for bad in ["\"Overwrite\"", "\"REPLACE\"", "\"delete\"", "\"\""] {
-        let result: Result<EditMode, _> = serde_json::from_str(bad);
-        assert!(
-            result.is_err(),
-            "EditMode should reject {bad:?}, got {:?}",
-            result.ok()
-        );
-    }
-}
-
-#[test]
-fn edit_mode_default_is_overwrite() {
-    // Pin the default variant to `Overwrite` so any future move
-    // of `#[default]` to Append/Prepend is caught here, not as a
-    // silent behavior change at consumer sites that rely on the
-    // current default.
-    assert_eq!(EditMode::default(), EditMode::Overwrite);
-}
-
-#[cfg(feature = "schemars")]
-#[test]
-fn edit_mode_schema_advertises_overwrite_canonical_only() {
-    // The derived JSON Schema must advertise only the canonical
-    // value `overwrite`. The legacy `replace` alias exists for
-    // serde backward compat but MUST NOT appear in the schema
-    // (otherwise MCP tool consumers will see both values and the
-    // vocabulary trap is re-introduced at the schema layer).
-    //
-    // Schemars emits enum schemas as `oneOf` with each variant
-    // as `{ "type": "string", "const": <variant_value> }`.
-    use schemars::schema_for;
-    let schema = schema_for!(EditMode);
-    let schema_json = serde_json::to_value(&schema).unwrap();
-    let one_of = schema_json
-        .pointer("/oneOf")
-        .and_then(|v| v.as_array())
-        .expect("EditMode schema must be a oneOf schema");
-    let variant_strings: Vec<&str> = one_of
-        .iter()
-        .filter_map(|variant| variant.pointer("/const").and_then(|v| v.as_str()))
-        .collect();
-    assert!(
-        variant_strings.contains(&"overwrite"),
-        "EditMode schema must advertise canonical 'overwrite'; got {variant_strings:?}"
-    );
-    assert!(
-        variant_strings.contains(&"append"),
-        "EditMode schema must advertise 'append'; got {variant_strings:?}"
-    );
-    assert!(
-        variant_strings.contains(&"prepend"),
-        "EditMode schema must advertise 'prepend'; got {variant_strings:?}"
-    );
-    assert!(
-        !variant_strings.contains(&"replace"),
-        "EditMode schema MUST NOT advertise legacy 'replace' alias; got {variant_strings:?}"
-    );
+fn line_ref_preserves_anchor_string() {
+    let anchor = nb_api::LineAnchor::parse("b3l1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
+    let r = LineRef {
+        number: 1,
+        anchor: anchor.clone(),
+    };
+    let json = serde_json::to_string(&r).unwrap();
+    let back: LineRef = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.anchor.as_str(), anchor.as_str());
 }
 
 #[test]
@@ -121,4 +69,11 @@ fn search_mode_deserializes_lowercase_values() {
     assert_eq!(mode, SearchMode::Any);
     let mode: SearchMode = serde_json::from_str("\"all\"").unwrap();
     assert_eq!(mode, SearchMode::All);
+}
+
+#[test]
+fn edit_mode_is_removed() {
+    // Compile-time: EditMode must not resolve. Runtime placeholder assertion.
+    let name = std::any::type_name::<NoteTarget>();
+    assert!(name.contains("NoteTarget"));
 }

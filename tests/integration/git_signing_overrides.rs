@@ -176,6 +176,7 @@ exit 0
         create_notebook: false,
         allow_top_level_notes: true,
         disable_git_signing: true,
+        ..Config::default()
     };
     let client = NbClient::new(&config).expect("client construction");
 
@@ -343,6 +344,7 @@ exit 0
         create_notebook: false,
         allow_top_level_notes: true,
         disable_git_signing: true,
+        ..Config::default()
     };
     let client = NbClient::new(&config).expect("client construction");
     let _ = client.list_notes(None, &[], None, None).await;
