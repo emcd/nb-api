@@ -69,19 +69,33 @@ const DEFAULT_NOTEBOOK: &str = "scratch";
 const GIT_AUTHOR_NAME: &str = "nb-api tests";
 const GIT_AUTHOR_EMAIL: &str = "nb-api@localhost";
 
-/// System directories always injected into fixture child `PATH` so
-/// shebang interpreters (`env bash`) resolve under PATH poison tests.
-const SAFE_PATH_DIRS: &[&str] = &["/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"];
+/// System / platform directories always injected into fixture child
+/// `PATH` so shebang interpreters (`env bash`) and common `nb`
+/// install locations resolve under PATH poison tests.
+///
+/// Includes Apple Silicon Homebrew (`/opt/homebrew/bin`) and
+/// Intel Homebrew / manual prefixes (`/usr/local/bin`).
+const SAFE_PATH_DIRS: &[&str] = &[
+    "/opt/homebrew/bin",
+    "/opt/homebrew/sbin",
+    "/usr/local/bin",
+    "/usr/local/sbin",
+    "/usr/bin",
+    "/bin",
+    "/usr/sbin",
+    "/sbin",
+];
 
 static NB_BINARY: OnceLock<PathBuf> = OnceLock::new();
 static CHILD_PATH: OnceLock<OsString> = OnceLock::new();
 
-/// Absolute path to the `nb` executable used by fixtures.
+/// Absolute canonical path to the `nb` executable used by fixtures.
 ///
-/// Resolution order: `NB_API_TEST_NB`, fixed install locations,
-/// passwd home `~/.local/bin/nb`, then non-poisoned `PATH` entries.
-/// Does not use process `PATH` alone — concurrent tests may set
-/// `PATH` to a value without `bash`/`nb` (`issues/api/7`).
+/// Resolution order: absolute `NB_API_TEST_NB`, fixed install
+/// locations (incl. Homebrew), passwd home `~/.local/bin/nb`, then
+/// absolute non-poisoned `PATH` entries. Relative override/PATH
+/// candidates are rejected. Concurrent tests may poison process
+/// `PATH` (`issues/api/7`); discovery does not rely on it alone.
 pub fn nb_binary() -> &'static Path {
     NB_BINARY.get_or_init(discover_nb_binary).as_path()
 }
@@ -106,10 +120,9 @@ pub fn fixture_child_path() -> &'static OsString {
 
 fn discover_nb_binary() -> PathBuf {
     if let Some(explicit) = std::env::var_os("NB_API_TEST_NB") {
-        let p = PathBuf::from(explicit);
-        if is_executable_file(&p) {
-            return p;
-        }
+        return resolve_nb_override(Path::new(&explicit)).unwrap_or_else(|reason| {
+            panic!("nb-api testing: invalid NB_API_TEST_NB: {reason}");
+        });
     }
 
     let mut candidates: Vec<PathBuf> = SAFE_PATH_DIRS
@@ -123,24 +136,57 @@ fn discover_nb_binary() -> PathBuf {
 
     if let Some(path_var) = std::env::var_os("PATH") {
         for dir in std::env::split_paths(&path_var) {
-            if path_dir_looks_poisoned(&dir) {
+            if path_dir_looks_poisoned(&dir) || !dir.is_absolute() {
                 continue;
             }
             candidates.push(dir.join("nb"));
         }
     }
 
+    let mut tried = Vec::new();
     for c in &candidates {
-        if is_executable_file(c) {
-            return c.clone();
+        tried.push(c.clone());
+        if let Some(abs) = canonicalize_executable(c) {
+            return abs;
         }
     }
 
     panic!(
         "nb-api testing: could not locate an executable `nb` binary. \
          Install nb 7.24.0 or set NB_API_TEST_NB to its absolute path. \
-         candidates tried: {candidates:?}"
+         candidates tried: {tried:?}"
     );
+}
+
+/// Validate `NB_API_TEST_NB`: must be absolute, exist, be executable,
+/// and is returned in canonical form.
+fn resolve_nb_override(path: &Path) -> Result<PathBuf, String> {
+    if !path.is_absolute() {
+        return Err(format!(
+            "path must be absolute (got relative {:?}); \
+             relative overrides break after fixture current_dir changes",
+            path
+        ));
+    }
+    canonicalize_executable(path).ok_or_else(|| {
+        format!(
+            "path is not an executable file after canonicalize: {:?}",
+            path
+        )
+    })
+}
+
+/// Canonical absolute executable, or `None` if `path` is relative,
+/// missing, or not executable.
+fn canonicalize_executable(path: &Path) -> Option<PathBuf> {
+    if !path.is_absolute() {
+        return None;
+    }
+    let canonical = path.canonicalize().ok()?;
+    if !is_executable_file(&canonical) {
+        return None;
+    }
+    Some(canonical)
 }
 
 fn path_dir_looks_poisoned(dir: &Path) -> bool {
@@ -171,10 +217,14 @@ fn is_executable_file(path: &Path) -> bool {
 
 /// Login home from `/etc/passwd` for the current UID (ignores env
 /// `HOME`, which tests overwrite with fixture tempdirs).
+///
+/// UID discovery is portable across Linux and macOS: prefer absolute
+/// `/usr/bin/id -u` (works without a usable process `PATH`), then
+/// Linux `/proc/self/status` as a fallback.
 fn passwd_home_dir() -> Option<PathBuf> {
     #[cfg(unix)]
     {
-        let uid = passwd_current_uid()?;
+        let uid = current_uid()?;
         let passwd = std::fs::read_to_string("/etc/passwd").ok()?;
         for line in passwd.lines() {
             let mut fields = line.split(':');
@@ -202,17 +252,70 @@ fn passwd_home_dir() -> Option<PathBuf> {
 }
 
 #[cfg(unix)]
-fn passwd_current_uid() -> Option<u32> {
-    // Prefer /proc to avoid a libc dependency solely for geteuid.
+fn current_uid() -> Option<u32> {
+    // Absolute id(1) — does not depend on process PATH (may be poisoned).
+    for id_bin in ["/usr/bin/id", "/bin/id"] {
+        let output = StdCommand::new(id_bin).arg("-u").output().ok()?;
+        if !output.status.success() {
+            continue;
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        if let Ok(uid) = stdout.trim().parse::<u32>() {
+            return Some(uid);
+        }
+    }
+    // Linux-only fallback when id(1) is unavailable.
     let status = std::fs::read_to_string("/proc/self/status").ok()?;
     for line in status.lines() {
         let Some(rest) = line.strip_prefix("Uid:") else {
             continue;
         };
-        // Format: Uid: real effective saved fs
         return rest.split_whitespace().next()?.parse().ok();
     }
     None
+}
+
+#[cfg(test)]
+mod nb_resolve_tests {
+    use super::*;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn relative_nb_override_is_rejected() {
+        let err = resolve_nb_override(Path::new("relative/nb")).unwrap_err();
+        assert!(
+            err.contains("absolute"),
+            "expected absolute-path error, got {err}"
+        );
+    }
+
+    #[test]
+    fn relative_candidate_is_not_canonicalized() {
+        assert!(canonicalize_executable(Path::new("nb")).is_none());
+        assert!(canonicalize_executable(Path::new("./nb")).is_none());
+    }
+
+    #[test]
+    fn absolute_executable_is_canonicalized() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let bin = dir.path().join("fake-nb");
+        fs::write(&bin, b"#!/bin/sh\n").expect("write");
+        fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).expect("chmod");
+        // tempdir path is absolute; canonicalize should succeed.
+        let abs = bin.canonicalize().expect("canonicalize fixture path");
+        let got = canonicalize_executable(&abs).expect("accept absolute executable");
+        assert!(got.is_absolute());
+        assert_eq!(got, abs);
+    }
+
+    #[test]
+    fn safe_path_dirs_include_homebrew_prefix() {
+        assert!(
+            SAFE_PATH_DIRS.contains(&"/opt/homebrew/bin"),
+            "Apple Silicon Homebrew must be in SAFE_PATH_DIRS for poisoned-PATH discovery"
+        );
+    }
 }
 
 /// A captured `nb` subprocess failure: exit status, stdout, and
