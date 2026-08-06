@@ -7,7 +7,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crate::NbClient;
 use crate::error::NbError;
 use crate::fingerprint::{self, Fingerprint};
-use crate::gate::{self, DEFAULT_GATE_TIMEOUT};
+use crate::gate;
 use crate::git;
 use crate::lines::{
     apply_line_edits, apply_substring, require_contiguous_body, splice_body, splice_title,
@@ -107,15 +107,27 @@ impl VirtualTree {
         let mut nodes = HashMap::new();
         let paths = git::list_notebook_paths(root)?;
         for rel in paths {
+            let key = normalize_rel(&rel);
             let abs = root.join(&rel);
-            if abs.is_dir() {
-                nodes.insert(normalize_rel(&rel), VirtualNode::Folder);
-            } else if abs.is_file() {
+            let meta = std::fs::symlink_metadata(&abs).map_err(|e| NbError::Io {
+                path: abs.clone(),
+                source: e.into(),
+            })?;
+            if meta.file_type().is_symlink() {
+                return Err(NbError::UnsupportedStructure {
+                    reason: format!(
+                        "notebook path `{key}` is a symlink; transactions refuse symlink snapshot/materialization"
+                    ),
+                });
+            }
+            if meta.is_dir() {
+                nodes.insert(key, VirtualNode::Folder);
+            } else if meta.is_file() {
                 let bytes = std::fs::read(&abs).map_err(|e| NbError::Io {
                     path: abs,
                     source: e.into(),
                 })?;
-                nodes.insert(normalize_rel(&rel), VirtualNode::File(bytes));
+                nodes.insert(key, VirtualNode::File(bytes));
             }
         }
         Ok(Self { nodes })
@@ -173,12 +185,12 @@ impl VirtualTree {
 }
 
 impl Transaction {
-    pub(crate) fn new(client: NbClient, notebook: String) -> Self {
+    pub(crate) fn new(client: NbClient, notebook: String, gate_timeout: Duration) -> Self {
         Self {
             client,
             notebook,
             plan: Vec::new(),
-            gate_timeout: DEFAULT_GATE_TIMEOUT,
+            gate_timeout,
         }
     }
 
@@ -433,11 +445,22 @@ impl Transaction {
             });
         }
 
+        let ignored_existing: HashSet<String> = git::list_ignored_paths(&notebook_root)?
+            .into_iter()
+            .map(|p| normalize_rel(&p))
+            .collect();
         let mut tree = VirtualTree::from_disk(&notebook_root)?;
         let mut op_meta: Vec<OpMeta> = Vec::with_capacity(self.plan.len());
 
         for (index, op) in self.plan.iter().enumerate() {
-            match validate_and_apply_virtual(&self.notebook, &mut tree, op, index) {
+            match validate_and_apply_virtual(
+                &self.notebook,
+                &notebook_root,
+                &mut tree,
+                &ignored_existing,
+                op,
+                index,
+            ) {
                 Ok(meta) => op_meta.push(meta),
                 Err(err) => {
                     return Err(annotate_plan_index(err, index as u32));
@@ -445,19 +468,55 @@ impl Transaction {
             }
         }
 
+        // Disk baseline before materialize (for rollback of new owned outputs).
+        // Virtual tree already includes planned ops; disk is still pre-apply.
+        let baseline_on_disk: HashSet<String> = {
+            let mut s: HashSet<String> = git::list_notebook_paths(&notebook_root)?
+                .into_iter()
+                .map(|p| normalize_rel(&p))
+                .collect();
+            s.extend(ignored_existing.iter().cloned());
+            s
+        };
+
+        // Force-stage every final file path so ignore rules cannot drop
+        // transaction-owned outputs (new ignored names, `.gitkeep`, etc.).
+        let force_paths: Vec<String> = tree
+            .nodes
+            .iter()
+            .filter_map(|(p, n)| match n {
+                VirtualNode::File(_) => Some(p.clone()),
+                VirtualNode::Folder => None,
+            })
+            .collect();
+
+        // Directories that already exist before materialize must never be
+        // pruned during rollback (including empty ignored parents).
+        let baseline_dirs = existing_dirs_under(&notebook_root);
+
         // Materialize to disk under gate, then single checkpoint.
         let apply_result = (|| -> Result<bool, NbError> {
             materialize_tree(&notebook_root, &tree)?;
             git::notebook_commit_all(
                 &notebook_root,
                 &format!("nb-api transaction ({} ops)", self.plan.len()),
+                &force_paths,
             )
         })();
 
         match apply_result {
             Ok(created) => {
                 let revision_id = if created {
-                    Some(git::notebook_head(&notebook_root)?)
+                    match git::notebook_head(&notebook_root) {
+                        Ok(head) => Some(head),
+                        Err(_) => {
+                            return Err(NbError::IndeterminateCommit {
+                                pre_revision,
+                                post_revision_observed: None,
+                                guidance: "git commit may have succeeded but HEAD could not be re-read; do not retry blindly".into(),
+                            });
+                        }
+                    }
                 } else {
                     None
                 };
@@ -488,7 +547,13 @@ impl Transaction {
                         guidance: "checkpoint may have completed; re-read HEAD/status and do not retry the same plan blindly".into(),
                     });
                 }
-                match try_restore(&notebook_root, &pre_revision) {
+                // Owned outputs that did not exist at baseline must be removed
+                // even when ignored (git clean -fd keeps ignored files).
+                let owned_new: Vec<String> = force_paths
+                    .into_iter()
+                    .filter(|p| !baseline_on_disk.contains(p))
+                    .collect();
+                match try_restore(&notebook_root, &pre_revision, &owned_new, &baseline_dirs) {
                     Ok(()) => Err(err),
                     Err(recovery) => Err(recovery),
                 }
@@ -497,7 +562,47 @@ impl Transaction {
     }
 }
 
-fn try_restore(notebook_root: &Path, pre_revision: &str) -> Result<(), NbError> {
+/// All directory paths under the notebook root before materialize (relative,
+/// `/`-separated). Used so rollback never deletes pre-existing dirs.
+fn existing_dirs_under(notebook_root: &Path) -> HashSet<String> {
+    let mut dirs = HashSet::new();
+    fn walk(base: &Path, rel: &Path, out: &mut HashSet<String>) {
+        let entries = match std::fs::read_dir(base) {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            if name == ".git" {
+                continue;
+            }
+            let Ok(ft) = entry.file_type() else {
+                continue;
+            };
+            // Do not follow symlinks.
+            if ft.is_symlink() || !ft.is_dir() {
+                continue;
+            }
+            let child_rel = if rel.as_os_str().is_empty() {
+                PathBuf::from(&name)
+            } else {
+                rel.join(&name)
+            };
+            let key = child_rel.to_string_lossy().replace('\\', "/");
+            out.insert(key);
+            walk(&entry.path(), &child_rel, out);
+        }
+    }
+    walk(notebook_root, Path::new(""), &mut dirs);
+    dirs
+}
+
+fn try_restore(
+    notebook_root: &Path,
+    pre_revision: &str,
+    remove_new_owned: &[String],
+    baseline_dirs: &HashSet<String>,
+) -> Result<(), NbError> {
     if let Err(e) = git::notebook_reset_clean(notebook_root, pre_revision) {
         let post = git::notebook_head(notebook_root).ok();
         let status = git::notebook_status_porcelain(notebook_root).ok();
@@ -505,34 +610,195 @@ fn try_restore(notebook_root: &Path, pre_revision: &str) -> Result<(), NbError> 
             pre_revision: pre_revision.to_string(),
             post_revision_observed: post,
             status_observed: status,
-            preserved_paths: None,
+            preserved_paths: Some(remove_new_owned.to_vec()),
             guidance: format!(
                 "cleanup after failed commit could not be verified; inspect HEAD/status before retry. underlying: {e}"
             ),
         });
     }
-    let head = git::notebook_head(notebook_root)?;
-    let dirty = git::notebook_is_dirty(notebook_root)?;
-    if head != pre_revision || dirty {
+    // `git clean -fd` can remove empty untracked dirs (including ignored
+    // parents) once staged children are cleared by reset --hard. Restore any
+    // baseline directory that disappeared.
+    for d in baseline_dirs {
+        let abs = notebook_root.join(d);
+        if !abs.exists()
+            && let Err(e) = std::fs::create_dir_all(&abs)
+        {
+            return Err(NbError::RecoveryRequired {
+                pre_revision: pre_revision.to_string(),
+                post_revision_observed: git::notebook_head(notebook_root).ok(),
+                status_observed: git::notebook_status_porcelain(notebook_root).ok(),
+                preserved_paths: Some(vec![d.clone()]),
+                guidance: format!(
+                    "failed to restore baseline directory `{d}` after cleanup; do not retry blindly. underlying: {e}"
+                ),
+            });
+        }
+    }
+    // Explicitly delete transaction-owned outputs that reset/clean leave behind
+    // when they are Git-ignored untracked files.
+    let mut remaining = Vec::new();
+    for rel in remove_new_owned {
+        let abs = notebook_root.join(rel);
+        match std::fs::symlink_metadata(&abs) {
+            Ok(meta) if meta.file_type().is_symlink() || meta.is_file() => {
+                if let Err(e) = std::fs::remove_file(&abs) {
+                    remaining.push(format!("{rel} ({e})"));
+                }
+            }
+            Ok(meta) if meta.is_dir() => {
+                if let Err(e) = std::fs::remove_dir_all(&abs) {
+                    remaining.push(format!("{rel} ({e})"));
+                }
+            }
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => remaining.push(format!("{rel} ({e})")),
+        }
+        // Prune only empty parents that the transaction created — never a
+        // directory that existed at baseline (e.g. pre-existing ignored parent).
+        if let Some(parent) = parent_path(rel) {
+            let mut cur = parent;
+            loop {
+                if baseline_dirs.contains(&cur) {
+                    break;
+                }
+                let p = notebook_root.join(&cur);
+                match std::fs::remove_dir(&p) {
+                    Ok(()) => {}
+                    Err(_) => break,
+                }
+                match parent_path(&cur) {
+                    Some(next) => cur = next,
+                    None => break,
+                }
+            }
+        }
+    }
+    if !remaining.is_empty() {
+        return Err(NbError::RecoveryRequired {
+            pre_revision: pre_revision.to_string(),
+            post_revision_observed: git::notebook_head(notebook_root).ok(),
+            status_observed: git::notebook_status_porcelain(notebook_root).ok(),
+            preserved_paths: Some(remaining),
+            guidance: "failed to remove transaction-owned outputs after aborted commit; do not retry blindly".into(),
+        });
+    }
+    // Verify none of the new owned paths remain (including ignored).
+    let mut still_present = Vec::new();
+    for rel in remove_new_owned {
+        if notebook_root.join(rel).exists() {
+            still_present.push(rel.clone());
+        }
+    }
+    let head = match restore_verify_head(notebook_root) {
+        Ok(h) => h,
+        Err(e) => {
+            return Err(NbError::RecoveryRequired {
+                pre_revision: pre_revision.to_string(),
+                post_revision_observed: None,
+                status_observed: git::notebook_status_porcelain(notebook_root).ok(),
+                preserved_paths: if still_present.is_empty() {
+                    None
+                } else {
+                    Some(still_present)
+                },
+                guidance: format!(
+                    "cleanup ran but HEAD re-read failed during verification; do not retry blindly. underlying: {e}"
+                ),
+            });
+        }
+    };
+    let dirty = match restore_verify_dirty(notebook_root) {
+        Ok(d) => d,
+        Err(e) => {
+            return Err(NbError::RecoveryRequired {
+                pre_revision: pre_revision.to_string(),
+                post_revision_observed: Some(head),
+                status_observed: git::notebook_status_porcelain(notebook_root).ok(),
+                preserved_paths: if still_present.is_empty() {
+                    None
+                } else {
+                    Some(still_present)
+                },
+                guidance: format!(
+                    "cleanup ran but dirty-status check failed during verification; do not retry blindly. underlying: {e}"
+                ),
+            });
+        }
+    };
+    if head != pre_revision || dirty || !still_present.is_empty() {
         return Err(NbError::RecoveryRequired {
             pre_revision: pre_revision.to_string(),
             post_revision_observed: Some(head),
             status_observed: git::notebook_status_porcelain(notebook_root).ok(),
-            preserved_paths: None,
-            guidance: "cleanup ran but HEAD/status verification failed; do not retry blindly"
-                .into(),
+            preserved_paths: if still_present.is_empty() {
+                None
+            } else {
+                Some(still_present)
+            },
+            guidance:
+                "cleanup ran but HEAD/status/owned-path verification failed; do not retry blindly"
+                    .into(),
         });
     }
     Ok(())
 }
 
+/// HEAD observation used only in post-cleanup verification.
+fn restore_verify_head(notebook_root: &Path) -> Result<String, NbError> {
+    #[cfg(feature = "testing")]
+    if std::env::var_os("NB_API_FAIL_RESTORE_HEAD").is_some() {
+        return Err(NbError::CommandFailed {
+            command: "nb-api://fail-restore-head".into(),
+            stderr: "injected HEAD verify failure for rollback tests".into(),
+            exit_code: Some(1),
+        });
+    }
+    git::notebook_head(notebook_root)
+}
+
+/// Dirty-status observation used only in post-cleanup verification.
+fn restore_verify_dirty(notebook_root: &Path) -> Result<bool, NbError> {
+    #[cfg(feature = "testing")]
+    if std::env::var_os("NB_API_FAIL_RESTORE_DIRTY").is_some() {
+        return Err(NbError::CommandFailed {
+            command: "nb-api://fail-restore-dirty".into(),
+            stderr: "injected dirty-status verify failure for rollback tests".into(),
+            exit_code: Some(1),
+        });
+    }
+    git::notebook_is_dirty(notebook_root)
+}
+
 fn materialize_tree(root: &Path, tree: &VirtualTree) -> Result<(), NbError> {
-    // Remove tracked files not present as files in the virtual tree (deleted/moved).
+    // Preflight: no path may traverse an existing symlink ancestor (including
+    // ignored directory symlinks excluded from the virtual snapshot).
+    for rel in tree.nodes.keys() {
+        refuse_symlink_ancestors(root, rel)?;
+    }
+
+    // Remove tracked/untracked/ignored files not present as files in the virtual tree.
     let disk_paths = git::list_notebook_paths(root)?;
     for rel in &disk_paths {
         let key = normalize_rel(rel);
         let abs = root.join(rel);
-        if abs.is_file() {
+        let meta = match std::fs::symlink_metadata(&abs) {
+            Ok(m) => m,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => {
+                return Err(NbError::Io {
+                    path: abs,
+                    source: e.into(),
+                });
+            }
+        };
+        if meta.file_type().is_symlink() {
+            return Err(NbError::UnsupportedStructure {
+                reason: format!("refusing to materialize through symlink `{key}`"),
+            });
+        }
+        if meta.is_file() {
             match tree.nodes.get(&key) {
                 Some(VirtualNode::File(_)) => {}
                 _ => {
@@ -546,6 +812,15 @@ fn materialize_tree(root: &Path, tree: &VirtualTree) -> Result<(), NbError> {
     }
     for (rel, node) in &tree.nodes {
         let abs = root.join(rel);
+        // Never write through an existing symlink leaf or ancestor.
+        refuse_symlink_ancestors(root, rel)?;
+        if let Ok(meta) = std::fs::symlink_metadata(&abs)
+            && meta.file_type().is_symlink()
+        {
+            return Err(NbError::UnsupportedStructure {
+                reason: format!("refusing to write through symlink `{rel}`"),
+            });
+        }
         match node {
             VirtualNode::Folder => {
                 std::fs::create_dir_all(&abs).map_err(|e| NbError::Io {
@@ -570,6 +845,51 @@ fn materialize_tree(root: &Path, tree: &VirtualTree) -> Result<(), NbError> {
     Ok(())
 }
 
+/// Reject `rel` when any existing path component under `root` is a symlink.
+///
+/// Uses no-follow metadata so ignored directory symlinks (absent from the
+/// virtual snapshot) cannot redirect `create_dir_all` / `write` outside the
+/// notebook root.
+fn refuse_symlink_ancestors(root: &Path, rel: &str) -> Result<(), NbError> {
+    let mut acc = PathBuf::new();
+    for part in rel.split('/').filter(|p| !p.is_empty()) {
+        acc.push(part);
+        let abs = root.join(&acc);
+        match std::fs::symlink_metadata(&abs) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                let key = acc.to_string_lossy().replace('\\', "/");
+                return Err(NbError::UnsupportedStructure {
+                    reason: format!(
+                        "refusing path through symlink `{key}`; transactions do not follow symlinks"
+                    ),
+                });
+            }
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => break,
+            Err(e) => {
+                return Err(NbError::Io {
+                    path: abs,
+                    source: e.into(),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn outcome_selector(notebook: &str, target: &NoteTarget, resolved_path: &str) -> String {
+    match target {
+        NoteTarget::Selector { value } => {
+            if value.contains(':') {
+                value.clone()
+            } else {
+                format!("{notebook}:{value}")
+            }
+        }
+        NoteTarget::Path { .. } => format!("{notebook}:{resolved_path}"),
+    }
+}
+
 struct OpMeta {
     path: Option<String>,
     selector: Option<String>,
@@ -579,7 +899,9 @@ struct OpMeta {
 
 fn validate_and_apply_virtual(
     notebook: &str,
+    notebook_root: &Path,
     tree: &mut VirtualTree,
+    ignored_existing: &HashSet<String>,
     op: &PlanOp,
     _index: usize,
 ) -> Result<OpMeta, NbError> {
@@ -590,12 +912,7 @@ fn validate_and_apply_virtual(
             content,
             tags,
         } => {
-            if tree.exists(path) {
-                return Err(NbError::PathCollision {
-                    path: path.clone(),
-                    plan_index: None,
-                });
-            }
+            refuse_create_collision(notebook_root, tree, ignored_existing, path)?;
             let bytes = build_note_bytes(title.as_deref(), content, tags);
             let fp = fingerprint_bytes(&bytes, path)?;
             tree.insert_file(path.clone(), bytes);
@@ -613,12 +930,7 @@ fn validate_and_apply_virtual(
             tasks,
             tags,
         } => {
-            if tree.exists(path) {
-                return Err(NbError::PathCollision {
-                    path: path.clone(),
-                    plan_index: None,
-                });
-            }
+            refuse_create_collision(notebook_root, tree, ignored_existing, path)?;
             let bytes = build_todo_bytes(title, description.as_deref(), tasks, tags);
             let fp = fingerprint_bytes(&bytes, path)?;
             tree.insert_file(path.clone(), bytes);
@@ -636,12 +948,7 @@ fn validate_and_apply_virtual(
             tags,
             comment,
         } => {
-            if tree.exists(path) {
-                return Err(NbError::PathCollision {
-                    path: path.clone(),
-                    plan_index: None,
-                });
-            }
+            refuse_create_collision(notebook_root, tree, ignored_existing, path)?;
             let bytes = build_bookmark_bytes(url, title.as_deref(), tags, comment.as_deref());
             let fp = fingerprint_bytes(&bytes, path)?;
             tree.insert_file(path.clone(), bytes);
@@ -653,13 +960,15 @@ fn validate_and_apply_virtual(
             })
         }
         PlanOp::AddFolder { path } => {
-            if tree.exists(path) {
-                return Err(NbError::PathCollision {
-                    path: path.clone(),
-                    plan_index: None,
-                });
-            }
+            refuse_create_collision(notebook_root, tree, ignored_existing, path)?;
+            let keep = format!("{path}/.gitkeep");
+            refuse_create_collision(notebook_root, tree, ignored_existing, &keep)?;
             tree.insert_folder(path.clone());
+            // Git cannot track empty dirs; persist a keep file so the folder
+            // survives commit/checkout/clone. Force-staged at checkpoint.
+            if !tree.exists(&keep) {
+                tree.insert_file(keep, Vec::new());
+            }
             Ok(OpMeta {
                 path: Some(path.clone()),
                 selector: None,
@@ -668,7 +977,7 @@ fn validate_and_apply_virtual(
             })
         }
         PlanOp::DeleteNote { target } => {
-            let path = resolve_target_path(tree, target)?;
+            let path = resolve_target_path(tree, ignored_existing, target)?;
             if !tree.exists(&path) {
                 return Err(NbError::NotFound {
                     selector: target.value().to_string(),
@@ -676,8 +985,8 @@ fn validate_and_apply_virtual(
             }
             tree.remove(&path);
             Ok(OpMeta {
-                path: Some(path),
-                selector: Some(format!("{notebook}:{}", target.value())),
+                path: Some(path.clone()),
+                selector: Some(outcome_selector(notebook, target, &path)),
                 noop: false,
                 fingerprint: None,
             })
@@ -686,14 +995,9 @@ fn validate_and_apply_virtual(
             target,
             destination,
         } => {
-            let from = resolve_target_path(tree, target)?;
+            let from = resolve_target_path(tree, ignored_existing, target)?;
             let to = resolve_move_destination(&from, destination);
-            if tree.exists(&to) {
-                return Err(NbError::PathCollision {
-                    path: to,
-                    plan_index: None,
-                });
-            }
+            refuse_create_collision(notebook_root, tree, ignored_existing, &to)?;
             tree.rename(&from, &to)?;
             Ok(OpMeta {
                 path: Some(to.clone()),
@@ -706,7 +1010,7 @@ fn validate_and_apply_virtual(
             target,
             task_number,
         } => {
-            let path = resolve_target_path(tree, target)?;
+            let path = resolve_target_path(tree, ignored_existing, target)?;
             let bytes = tree
                 .get_file(&path)
                 .ok_or_else(|| NbError::NotFound {
@@ -718,8 +1022,8 @@ fn validate_and_apply_virtual(
             let fp = fingerprint_bytes(&new_bytes, &path)?;
             tree.insert_file(path.clone(), new_bytes);
             Ok(OpMeta {
-                path: Some(path),
-                selector: Some(format!("{notebook}:{}", target.value())),
+                path: Some(path.clone()),
+                selector: Some(outcome_selector(notebook, target, &path)),
                 noop,
                 fingerprint: Some(fp),
             })
@@ -728,7 +1032,7 @@ fn validate_and_apply_virtual(
             target,
             task_number,
         } => {
-            let path = resolve_target_path(tree, target)?;
+            let path = resolve_target_path(tree, ignored_existing, target)?;
             let bytes = tree
                 .get_file(&path)
                 .ok_or_else(|| NbError::NotFound {
@@ -740,8 +1044,8 @@ fn validate_and_apply_virtual(
             let fp = fingerprint_bytes(&new_bytes, &path)?;
             tree.insert_file(path.clone(), new_bytes);
             Ok(OpMeta {
-                path: Some(path),
-                selector: Some(format!("{notebook}:{}", target.value())),
+                path: Some(path.clone()),
+                selector: Some(outcome_selector(notebook, target, &path)),
                 noop,
                 fingerprint: Some(fp),
             })
@@ -751,7 +1055,7 @@ fn validate_and_apply_virtual(
             new_body,
             fingerprint: expected,
         } => {
-            let path = resolve_target_path(tree, target)?;
+            let path = resolve_target_path(tree, ignored_existing, target)?;
             let bytes = tree
                 .get_file(&path)
                 .ok_or_else(|| NbError::NotFound {
@@ -759,6 +1063,9 @@ fn validate_and_apply_virtual(
                 })?
                 .to_vec();
             let doc = parse_doc(&bytes, &path)?;
+            // Contiguity before fingerprint so fragmented bodies always surface
+            // FragmentedBody even with a stale fingerprint.
+            require_contiguous_body(&doc)?;
             let current = fingerprint::fingerprint(&doc);
             if &current != expected {
                 return Err(NbError::FingerprintMismatch {
@@ -766,14 +1073,13 @@ fn validate_and_apply_virtual(
                     guidance: "body fingerprint does not match; re-read and retry".into(),
                 });
             }
-            require_contiguous_body(&doc)?;
             let new_bytes = splice_body(&doc, new_body)?;
             let fp = fingerprint_bytes(&new_bytes, &path)?;
             let noop = new_bytes == bytes;
             tree.insert_file(path.clone(), new_bytes);
             Ok(OpMeta {
-                path: Some(path),
-                selector: Some(format!("{notebook}:{}", target.value())),
+                path: Some(path.clone()),
+                selector: Some(outcome_selector(notebook, target, &path)),
                 noop,
                 fingerprint: Some(fp),
             })
@@ -786,7 +1092,7 @@ fn validate_and_apply_virtual(
             expected_count,
             fingerprint: expected,
         } => {
-            let path = resolve_target_path(tree, target)?;
+            let path = resolve_target_path(tree, ignored_existing, target)?;
             let bytes = tree
                 .get_file(&path)
                 .ok_or_else(|| NbError::NotFound {
@@ -794,6 +1100,7 @@ fn validate_and_apply_virtual(
                 })?
                 .to_vec();
             let doc = parse_doc(&bytes, &path)?;
+            let body = require_contiguous_body(&doc)?;
             if let Some(exp) = expected {
                 let current = fingerprint::fingerprint(&doc);
                 if &current != exp {
@@ -803,7 +1110,6 @@ fn validate_and_apply_virtual(
                     });
                 }
             }
-            let body = require_contiguous_body(&doc)?;
             let new_body =
                 apply_substring(&body, pattern, replacement, occurrence, *expected_count)?;
             let new_bytes = splice_body(&doc, &new_body)?;
@@ -811,14 +1117,14 @@ fn validate_and_apply_virtual(
             let noop = new_bytes == bytes;
             tree.insert_file(path.clone(), new_bytes);
             Ok(OpMeta {
-                path: Some(path),
-                selector: Some(format!("{notebook}:{}", target.value())),
+                path: Some(path.clone()),
+                selector: Some(outcome_selector(notebook, target, &path)),
                 noop,
                 fingerprint: Some(fp),
             })
         }
         PlanOp::EditNoteLines { target, edits } => {
-            let path = resolve_target_path(tree, target)?;
+            let path = resolve_target_path(tree, ignored_existing, target)?;
             let bytes = tree
                 .get_file(&path)
                 .ok_or_else(|| NbError::NotFound {
@@ -833,14 +1139,14 @@ fn validate_and_apply_virtual(
             let noop = new_bytes == bytes;
             tree.insert_file(path.clone(), new_bytes);
             Ok(OpMeta {
-                path: Some(path),
-                selector: Some(format!("{notebook}:{}", target.value())),
+                path: Some(path.clone()),
+                selector: Some(outcome_selector(notebook, target, &path)),
                 noop,
                 fingerprint: Some(fp),
             })
         }
         PlanOp::RetitleNote { target, title } => {
-            let path = resolve_target_path(tree, target)?;
+            let path = resolve_target_path(tree, ignored_existing, target)?;
             let bytes = tree
                 .get_file(&path)
                 .ok_or_else(|| NbError::NotFound {
@@ -859,8 +1165,8 @@ fn validate_and_apply_virtual(
             let noop = new_bytes == bytes;
             tree.insert_file(path.clone(), new_bytes);
             Ok(OpMeta {
-                path: Some(path),
-                selector: Some(format!("{notebook}:{}", target.value())),
+                path: Some(path.clone()),
+                selector: Some(outcome_selector(notebook, target, &path)),
                 noop,
                 fingerprint: Some(fp),
             })
@@ -870,7 +1176,7 @@ fn validate_and_apply_virtual(
             add,
             remove,
         } => {
-            let path = resolve_target_path(tree, target)?;
+            let path = resolve_target_path(tree, ignored_existing, target)?;
             let bytes = tree
                 .get_file(&path)
                 .ok_or_else(|| NbError::NotFound {
@@ -883,8 +1189,8 @@ fn validate_and_apply_virtual(
             let noop = new_bytes == bytes;
             tree.insert_file(path.clone(), new_bytes);
             Ok(OpMeta {
-                path: Some(path),
-                selector: Some(format!("{notebook}:{}", target.value())),
+                path: Some(path.clone()),
+                selector: Some(outcome_selector(notebook, target, &path)),
                 noop,
                 fingerprint: Some(fp),
             })
@@ -892,10 +1198,67 @@ fn validate_and_apply_virtual(
     }
 }
 
-fn resolve_target_path(tree: &VirtualTree, target: &NoteTarget) -> Result<String, NbError> {
+fn refuse_create_collision(
+    notebook_root: &Path,
+    tree: &VirtualTree,
+    ignored_existing: &HashSet<String>,
+    path: &str,
+) -> Result<(), NbError> {
+    if ignored_existing.contains(path) {
+        return Err(NbError::PathIgnored {
+            path: path.to_string(),
+            guidance: "path exists as a Git-ignored file; un-ignore or remove it outside the transaction before creating here".into(),
+            plan_index: None,
+        });
+    }
+    // Ignored directory/file symlinks are absent from the virtual tree; reject
+    // creates whose prefix is an ignored symlink (or any on-disk symlink).
+    refuse_symlink_ancestors(notebook_root, path)?;
+    for ig in ignored_existing {
+        if path == ig || path.starts_with(&format!("{ig}/")) {
+            let abs = notebook_root.join(ig);
+            if let Ok(meta) = std::fs::symlink_metadata(&abs)
+                && meta.file_type().is_symlink()
+            {
+                return Err(NbError::UnsupportedStructure {
+                    reason: format!(
+                        "refusing path through symlink `{ig}`; transactions do not follow symlinks"
+                    ),
+                });
+            }
+        }
+    }
+    if tree.exists(path) {
+        return Err(NbError::PathCollision {
+            path: path.to_string(),
+            plan_index: None,
+        });
+    }
+    Ok(())
+}
+
+fn refuse_existing_ignored(ignored_existing: &HashSet<String>, path: &str) -> Result<(), NbError> {
+    if ignored_existing.contains(path) {
+        return Err(NbError::PathIgnored {
+            path: path.to_string(),
+            guidance:
+                "cannot edit, delete, or move an existing Git-ignored path inside a transaction"
+                    .into(),
+            plan_index: None,
+        });
+    }
+    Ok(())
+}
+
+fn resolve_target_path(
+    tree: &VirtualTree,
+    ignored_existing: &HashSet<String>,
+    target: &NoteTarget,
+) -> Result<String, NbError> {
     match target {
         NoteTarget::Path { value } => {
             let path = normalize_rel(value);
+            refuse_existing_ignored(ignored_existing, &path)?;
             if tree.exists(&path) {
                 return Ok(path);
             }
@@ -911,6 +1274,7 @@ fn resolve_target_path(tree: &VirtualTree, target: &NoteTarget) -> Result<String
                 .map(|(_, rest)| rest)
                 .unwrap_or(value.as_str());
             let candidate = normalize_rel(stripped);
+            refuse_existing_ignored(ignored_existing, &candidate)?;
             if tree.exists(&candidate) {
                 return Ok(candidate);
             }
@@ -933,9 +1297,28 @@ fn resolve_target_path(tree: &VirtualTree, target: &NoteTarget) -> Result<String
                 .collect();
             match matches.as_slice() {
                 [one] => Ok(one.clone()),
-                [] => Err(NbError::NotFound {
-                    selector: value.clone(),
-                }),
+                [] => {
+                    // Existing ignored paths are not in the editable tree.
+                    if ignored_existing.contains(&candidate) {
+                        return Err(NbError::PathIgnored {
+                            path: candidate,
+                            guidance: "cannot edit, delete, or move an existing Git-ignored path inside a transaction".into(),
+                            plan_index: None,
+                        });
+                    }
+                    for ig in ignored_existing {
+                        if ig.ends_with(&format!("/{candidate}")) || ig.ends_with(stripped) {
+                            return Err(NbError::PathIgnored {
+                                path: ig.clone(),
+                                guidance: "cannot edit, delete, or move an existing Git-ignored path inside a transaction".into(),
+                                plan_index: None,
+                            });
+                        }
+                    }
+                    Err(NbError::NotFound {
+                        selector: value.clone(),
+                    })
+                }
                 _ => Err(NbError::ValidationError {
                     reason: format!("selector `{value}` is ambiguous across multiple paths"),
                     location: None,
@@ -1248,6 +1631,11 @@ fn annotate_plan_index(err: NbError, index: u32) -> NbError {
             path,
             plan_index: Some(index),
         },
+        NbError::PathIgnored { path, guidance, .. } => NbError::PathIgnored {
+            path,
+            guidance,
+            plan_index: Some(index),
+        },
         NbError::FingerprintMismatch { .. }
         | NbError::AnchorMismatch { .. }
         | NbError::OccurrenceMismatch { .. }
@@ -1284,16 +1672,37 @@ fn validate_target(target: &NoteTarget) -> Result<(), NbError> {
 }
 
 fn validate_create_path(path: &str, file: bool) -> Result<String, NbError> {
-    let path = normalize_rel(path);
-    if path.is_empty() {
+    // Validate the caller-supplied string before any normalization so
+    // absolute and backslash forms cannot be silently rewritten.
+    let raw = path.trim();
+    if raw.is_empty() {
         return Err(NbError::ValidationError {
             reason: "path must not be empty".into(),
             location: None,
         });
     }
-    if path.starts_with('/') || path.contains('\\') {
+    if raw.starts_with('/') || raw.starts_with('\\') || Path::new(raw).is_absolute() {
         return Err(NbError::ValidationError {
-            reason: "path must be notebook-relative without absolute or backslash form".into(),
+            reason: "path must be notebook-relative (absolute paths refused)".into(),
+            location: None,
+        });
+    }
+    if raw.contains('\\') {
+        return Err(NbError::ValidationError {
+            reason: "path must not contain backslash separators".into(),
+            location: None,
+        });
+    }
+    if raw.contains('\0') {
+        return Err(NbError::ValidationError {
+            reason: "path must not contain NUL".into(),
+            location: None,
+        });
+    }
+    let path = normalize_rel(raw);
+    if path.is_empty() {
+        return Err(NbError::ValidationError {
+            reason: "path must not be empty".into(),
             location: None,
         });
     }

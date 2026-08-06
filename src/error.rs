@@ -183,6 +183,16 @@ pub enum NbError {
         plan_index: Option<u32>,
     },
 
+    /// Plan targets or would leave durable state on a Git-ignored path in a
+    /// way that cannot be represented in the single checkpoint (existing
+    /// ignored entry mutation), or requires force-staging (reported only when
+    /// force-stage is unavailable). Prefer rejecting existing-ignored mutators.
+    PathIgnored {
+        path: String,
+        guidance: String,
+        plan_index: Option<u32>,
+    },
+
     /// Validation/apply failure tied to a plan entry.
     PlanValidation {
         kind: String,
@@ -307,6 +317,14 @@ impl std::fmt::Display for NbError {
             Self::PathCollision { path, plan_index } => {
                 write!(f, "path collision at {path:?} (plan_index={plan_index:?})")
             }
+            Self::PathIgnored {
+                path,
+                guidance,
+                plan_index,
+            } => write!(
+                f,
+                "ignored path {path:?} (plan_index={plan_index:?}): {guidance}"
+            ),
             Self::PlanValidation {
                 kind,
                 message,

@@ -165,10 +165,39 @@ pub fn notebook_status_porcelain(notebook_root: &Path) -> Result<String, NbError
     .map(|s| s.trim().to_string())
 }
 
-/// Stage all paths and create one commit. Returns `Ok(true)` if a commit was
+/// Stage paths and create one commit. Returns `Ok(true)` if a commit was
 /// created, `Ok(false)` if there was nothing to commit (pure no-op tree).
-pub fn notebook_commit_all(notebook_root: &Path, message: &str) -> Result<bool, NbError> {
+///
+/// `force_paths` are always `git add -f`'d so transaction-owned outputs that
+/// match ignore rules (e.g. `.gitkeep`, new ignored filenames) enter the
+/// checkpoint. Pre-existing ignored mutators must be rejected before calling.
+///
+/// When the `testing` feature is enabled, `NB_API_FAIL_AFTER_STAGE=1` makes
+/// this return an error after staging (for rollback isolation regressions).
+pub fn notebook_commit_all(
+    notebook_root: &Path,
+    message: &str,
+    force_paths: &[String],
+) -> Result<bool, NbError> {
     git_capture(notebook_root, &["add".into(), "-A".into()])?;
+    for rel in force_paths {
+        // `-f` stages ignored paths; missing paths are skipped (delete cases).
+        let abs = notebook_root.join(rel);
+        if abs.is_file() {
+            git_capture(
+                notebook_root,
+                &["add".into(), "-f".into(), "--".into(), rel.clone()],
+            )?;
+        }
+    }
+    #[cfg(feature = "testing")]
+    if std::env::var_os("NB_API_FAIL_AFTER_STAGE").is_some() {
+        return Err(NbError::CommandFailed {
+            command: "nb-api://fail-after-stage".into(),
+            stderr: "injected staging failure for rollback tests".into(),
+            exit_code: Some(1),
+        });
+    }
     // Detect empty commit: diff --cached --quiet exits 1 when there are staged changes.
     let mut command = Command::new("git");
     crate::git_env::scrub_git_env_std(&mut command);
@@ -211,7 +240,7 @@ pub fn notebook_reset_clean(notebook_root: &Path, revision: &str) -> Result<(), 
     Ok(())
 }
 
-/// List tracked + untracked notebook-relative paths (files only), excluding `.git`.
+/// List tracked + untracked (non-ignored) notebook-relative paths, excluding `.git`.
 pub fn list_notebook_paths(notebook_root: &Path) -> Result<Vec<String>, NbError> {
     let mut paths = Vec::new();
     let tracked = git_capture(notebook_root, &["ls-files".into(), "-z".into()])?;
@@ -268,5 +297,26 @@ pub fn list_notebook_paths(notebook_root: &Path) -> Result<Vec<String>, NbError>
         Ok(())
     }
     walk_dirs(notebook_root, Path::new(""), &mut paths)?;
+    Ok(paths)
+}
+
+/// Existing ignored paths on disk (not part of the editable virtual tree).
+pub fn list_ignored_paths(notebook_root: &Path) -> Result<Vec<String>, NbError> {
+    let ignored = git_capture(
+        notebook_root,
+        &[
+            "ls-files".into(),
+            "--others".into(),
+            "--ignored".into(),
+            "--exclude-standard".into(),
+            "-z".into(),
+        ],
+    )?;
+    let mut paths = Vec::new();
+    for p in ignored.split('\0') {
+        if !p.is_empty() {
+            paths.push(p.to_string());
+        }
+    }
     Ok(paths)
 }

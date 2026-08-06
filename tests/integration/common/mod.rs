@@ -84,6 +84,10 @@ const ENV_VARS_OF_INTEREST: &[&str] = &[
     "GIT_ALTERNATE_OBJECT_DIRECTORIES",
     "PATH",
     "SHIM_OUTPUT",
+    // Transaction rollback fault-injection (testing feature only).
+    "NB_API_FAIL_AFTER_STAGE",
+    "NB_API_FAIL_RESTORE_HEAD",
+    "NB_API_FAIL_RESTORE_DIRTY",
 ];
 
 /// All `GIT_*` routing vars used in the blast-by-prefix scrub. Exposed

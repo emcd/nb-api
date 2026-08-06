@@ -102,7 +102,12 @@ impl NbClient {
         if notebook_dir_from_env(&notebook).is_none() {
             self.ensure_notebook(&notebook).await?;
         }
-        Ok(Transaction::new(self.clone(), notebook))
+        Ok(Transaction::new(self.clone(), notebook, self.gate_timeout))
+    }
+
+    /// Process-shared gate queue timeout configured on this client.
+    pub fn gate_timeout(&self) -> std::time::Duration {
+        self.gate_timeout
     }
 
     /// Notebook path without acquiring the notebook gate (caller holds gate or
@@ -510,18 +515,22 @@ impl NbClient {
             .collect();
         let body_contiguous = fragments.len() <= 1;
         let body_bytes = doc.body_bytes();
+        // Lossy convenience strings; raw title bytes remain authoritative.
         let tags: Vec<String> = doc
-            .tags_str()
-            .filter_map(|t| t.ok().map(|s| s.trim_start_matches('#').to_string()))
-            .collect();
-        let title = doc.title().map(ByteString::from_bytes);
-        let title_text = doc.title_str().and_then(|r| {
-            r.ok().map(|s| {
-                s.trim_end_matches('\n')
+            .tags()
+            .map(|t| {
+                String::from_utf8_lossy(t)
                     .trim_start_matches('#')
-                    .trim()
                     .to_string()
             })
+            .collect();
+        let title = doc.title().map(ByteString::from_bytes);
+        let title_text = doc.title().map(|bytes| {
+            let s = String::from_utf8_lossy(bytes);
+            s.trim_end_matches('\n')
+                .trim_start_matches('#')
+                .trim()
+                .to_string()
         });
         Ok(ShowNote {
             selector: selector.to_string(),
