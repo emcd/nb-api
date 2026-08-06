@@ -41,15 +41,23 @@
 //!
 //! [`NB_DIR`]: https://github.com/xwmx/nb#environment-variables
 //!
-//! # `nb` must be available on `PATH`
+//! # `nb` binary resolution
 //!
-//! The fixture spawns the `nb` CLI during initialization. Tests
-//! using this module assume `nb` resolves on `PATH`. The repository's
-//! `qa` workflow installs `nb` (pinned to the `7.24.0` tag) before
-//! running tests.
+//! The fixture spawns the `nb` CLI during initialization via an
+//! **absolute path** discovered once per process (see
+//! [`nb_binary`]). Child processes receive a **safe `PATH`** that
+//! always includes system directories so `#!/usr/bin/env bash` on
+//! the `nb` script can resolve `bash` even when a concurrent test
+//! has poisoned the parent process `PATH` (see `nb-api:issues/api/7`).
+//!
+//! The repository's `qa` workflow installs `nb` (pinned to the
+//! `7.24.0` tag) before running tests. Override discovery with
+//! `NB_API_TEST_NB` when needed.
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Command as StdCommand, ExitStatus};
+use std::sync::OnceLock;
 
 use crate::git_env::scrub_git_env_std;
 
@@ -60,6 +68,152 @@ const DEFAULT_NOTEBOOK: &str = "scratch";
 
 const GIT_AUTHOR_NAME: &str = "nb-api tests";
 const GIT_AUTHOR_EMAIL: &str = "nb-api@localhost";
+
+/// System directories always injected into fixture child `PATH` so
+/// shebang interpreters (`env bash`) resolve under PATH poison tests.
+const SAFE_PATH_DIRS: &[&str] = &["/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"];
+
+static NB_BINARY: OnceLock<PathBuf> = OnceLock::new();
+static CHILD_PATH: OnceLock<OsString> = OnceLock::new();
+
+/// Absolute path to the `nb` executable used by fixtures.
+///
+/// Resolution order: `NB_API_TEST_NB`, fixed install locations,
+/// passwd home `~/.local/bin/nb`, then non-poisoned `PATH` entries.
+/// Does not use process `PATH` alone — concurrent tests may set
+/// `PATH` to a value without `bash`/`nb` (`issues/api/7`).
+pub fn nb_binary() -> &'static Path {
+    NB_BINARY.get_or_init(discover_nb_binary).as_path()
+}
+
+/// `PATH` value applied to every fixture-spawned child.
+pub fn fixture_child_path() -> &'static OsString {
+    CHILD_PATH.get_or_init(|| {
+        let nb = nb_binary();
+        let mut dirs: Vec<PathBuf> = Vec::new();
+        if let Some(parent) = nb.parent() {
+            dirs.push(parent.to_path_buf());
+        }
+        for d in SAFE_PATH_DIRS {
+            let p = PathBuf::from(d);
+            if !dirs.iter().any(|x| x == &p) {
+                dirs.push(p);
+            }
+        }
+        std::env::join_paths(dirs).unwrap_or_else(|_| OsString::from("/usr/bin:/bin"))
+    })
+}
+
+fn discover_nb_binary() -> PathBuf {
+    if let Some(explicit) = std::env::var_os("NB_API_TEST_NB") {
+        let p = PathBuf::from(explicit);
+        if is_executable_file(&p) {
+            return p;
+        }
+    }
+
+    let mut candidates: Vec<PathBuf> = SAFE_PATH_DIRS
+        .iter()
+        .map(|d| PathBuf::from(d).join("nb"))
+        .collect();
+
+    if let Some(home) = passwd_home_dir() {
+        candidates.push(home.join(".local/bin/nb"));
+    }
+
+    if let Some(path_var) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&path_var) {
+            if path_dir_looks_poisoned(&dir) {
+                continue;
+            }
+            candidates.push(dir.join("nb"));
+        }
+    }
+
+    for c in &candidates {
+        if is_executable_file(c) {
+            return c.clone();
+        }
+    }
+
+    panic!(
+        "nb-api testing: could not locate an executable `nb` binary. \
+         Install nb 7.24.0 or set NB_API_TEST_NB to its absolute path. \
+         candidates tried: {candidates:?}"
+    );
+}
+
+fn path_dir_looks_poisoned(dir: &Path) -> bool {
+    let s = dir.to_string_lossy();
+    s.contains("poisoned")
+        || s.contains("nb-shim-")
+        || s == "/nonexistent"
+        || s.starts_with("/nonexistent")
+}
+
+fn is_executable_file(path: &Path) -> bool {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return false;
+    };
+    if !meta.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        meta.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
+/// Login home from `/etc/passwd` for the current UID (ignores env
+/// `HOME`, which tests overwrite with fixture tempdirs).
+fn passwd_home_dir() -> Option<PathBuf> {
+    #[cfg(unix)]
+    {
+        let uid = passwd_current_uid()?;
+        let passwd = std::fs::read_to_string("/etc/passwd").ok()?;
+        for line in passwd.lines() {
+            let mut fields = line.split(':');
+            let _name = fields.next()?;
+            let _passwd = fields.next()?;
+            let file_uid = fields.next()?.parse::<u32>().ok()?;
+            if file_uid != uid {
+                continue;
+            }
+            let _gid = fields.next()?;
+            let _gecos = fields.next()?;
+            let home = fields.next()?;
+            if !home.is_empty() {
+                return Some(PathBuf::from(home));
+            }
+        }
+        None
+    }
+    #[cfg(not(unix))]
+    {
+        std::env::var_os("USERPROFILE")
+            .or_else(|| std::env::var_os("HOME"))
+            .map(PathBuf::from)
+    }
+}
+
+#[cfg(unix)]
+fn passwd_current_uid() -> Option<u32> {
+    // Prefer /proc to avoid a libc dependency solely for geteuid.
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    for line in status.lines() {
+        let Some(rest) = line.strip_prefix("Uid:") else {
+            continue;
+        };
+        // Format: Uid: real effective saved fs
+        return rest.split_whitespace().next()?.parse().ok();
+    }
+    None
+}
 
 /// A captured `nb` subprocess failure: exit status, stdout, and
 /// stderr preserved separately so callers can inspect all three
@@ -249,10 +403,11 @@ impl NbTestEnv {
     /// Apply the fixture's environment to a `std::process::Command`:
     /// strip inherited `GIT_*` routing vars, set `NB_DIR`, set a
     /// deterministic git author/committer identity, disable commit
-    /// and tag signing, and set `current_dir` to
-    /// [`working_dir`](Self::working_dir).
+    /// and tag signing, pin a safe child `PATH`, and set `current_dir`
+    /// to [`working_dir`](Self::working_dir).
     pub fn configure_std(&self, cmd: &mut StdCommand) {
         scrub_git_env_std(cmd);
+        cmd.env("PATH", fixture_child_path());
         cmd.env("NB_DIR", &self.nb_dir);
         cmd.env("HOME", &self.home_dir);
         cmd.env("GIT_AUTHOR_NAME", GIT_AUTHOR_NAME);
@@ -272,6 +427,7 @@ impl NbTestEnv {
     #[cfg(feature = "testing-tokio")]
     pub fn configure_tokio(&self, cmd: &mut TokioCommand) {
         crate::git_env::scrub_git_env(cmd);
+        cmd.env("PATH", fixture_child_path());
         cmd.env("NB_DIR", &self.nb_dir);
         cmd.env("HOME", &self.home_dir);
         cmd.env("GIT_AUTHOR_NAME", GIT_AUTHOR_NAME);
@@ -287,10 +443,11 @@ impl NbTestEnv {
     }
 
     /// Convenience accessor: a fresh `std::process::Command` for `nb`
-    /// with the fixture's environment applied. Degenerate form of
-    /// `configure_std(Command::new("nb"))`; both call sites are valid.
+    /// with the fixture's environment applied. Uses the absolute
+    /// [`nb_binary`] path so parent-process `PATH` poison cannot
+    /// prevent executable lookup (`issues/api/7`).
     pub fn nb_command(&self) -> StdCommand {
-        let mut cmd = StdCommand::new("nb");
+        let mut cmd = StdCommand::new(nb_binary());
         self.configure_std(&mut cmd);
         cmd
     }
@@ -299,7 +456,7 @@ impl NbTestEnv {
     /// only with the `testing-tokio` Cargo feature.
     #[cfg(feature = "testing-tokio")]
     pub fn nb_command_async(&self) -> TokioCommand {
-        let mut cmd = TokioCommand::new("nb");
+        let mut cmd = TokioCommand::new(nb_binary());
         self.configure_tokio(&mut cmd);
         cmd
     }
@@ -343,8 +500,11 @@ impl NbTestEnv {
         // pointing at the stub; `configure_std` deliberately does
         // not set `NB_NOTEBOOK_PATH` because subsequent operations
         // must resolve the current notebook through `.current`.
-        let mut cmd = StdCommand::new("nb");
+        // Absolute `nb` + safe child PATH: parent PATH may be
+        // poisoned by a concurrent harness test (`issues/api/7`).
+        let mut cmd = StdCommand::new(nb_binary());
         scrub_git_env_std(&mut cmd);
+        cmd.env("PATH", fixture_child_path());
         cmd.env("NB_DIR", &self.nb_dir);
         cmd.env("NB_NOTEBOOK_PATH", &init_stub);
         cmd.env("HOME", &self.home_dir);

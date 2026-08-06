@@ -459,3 +459,25 @@ fn env_snapshot_restores_path_and_shim_output_on_panic() {
          EnvSnapshot::Drop must run on unwind"
     );
 }
+
+/// `NbTestEnv::new` must succeed while process `PATH` lacks `bash`/`nb`.
+///
+/// Regression for `nb-api:issues/api/7`: fixture init used to resolve
+/// `nb` via the parent process PATH and inherit it into the child, so
+/// concurrent PATH poison (`/poisoned/path`) produced
+/// `/usr/bin/env: 'bash': No such file or directory` under parallel
+/// `cargo test --release`.
+#[test]
+fn nb_test_env_new_survives_poisoned_process_path() {
+    let _guard = lock_env();
+    let _snap = EnvSnapshot::capture(ENV_VARS_OF_INTEREST);
+    // SAFETY: serialized by ENV_LOCK; EnvSnapshot restores on drop.
+    unsafe {
+        std::env::set_var("PATH", "/poisoned/path/issues-api-7");
+    }
+    let env = NbTestEnv::new().expect("fixture must init despite poisoned process PATH");
+    assert!(
+        env.nb_dir().join(".current").is_file(),
+        "notebook fixture must exist on disk"
+    );
+}
