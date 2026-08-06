@@ -102,7 +102,7 @@ Use `documentation/agents/nbspec.md` to learn:
 - Commits are acceptable review artifacts when implementation work is delegated by a human operator, coordinator, tech lead, or documented project workflow. Otherwise, ask before committing.
 - Do **not** merge, push, publish review branches, or modify shared branches without explicit human approval.
 - Do **not** bypass commit safety checks (e.g., `--no-verify`, `--no-gpg-sign`) unless the user explicitly approves doing so.
-- If a commit hook rejects a commit, fix the issue, restage the intended files, and rerun `git commit` with the same message. Do **not** amend a previous commit unless the user explicitly asked for an amend.
+- If a commit hook rejects a commit, assume no commit was created unless Git clearly reports otherwise. Fix the hook finding, restage the intended files, and rerun the same `git commit` command.
 - Use present tense, imperative mood verbs (e.g., "Fix" not "Fixed").
 - Write sentences with proper punctuation.
 - Include a `Co-Authored-By:` field as the final line. Should include the model name and a no-reply address.
