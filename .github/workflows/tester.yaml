@@ -113,14 +113,18 @@ jobs:
           NB_NOTEBOOK_PATH="$NB_DIR/.init_stub" "$NB_API_TEST_NB" notebooks add scratch
           printf 'scratch' > "$NB_DIR/.current"
           echo "--- qualified list scratch: ---"
-          "$NB_API_TEST_NB" list "scratch:" --no-color
-          echo "list-rc=$?"
-          echo "--- unqualified list (current) ---"
-          "$NB_API_TEST_NB" list --no-color
-          echo "list2-rc=$?"
+          out=$("$NB_API_TEST_NB" list "scratch:" --no-color 2>&1); rc=$?
+          echo "list-rc=$rc stdout/stderr: $out"
+          echo "--- unqualified list ---"
+          out=$("$NB_API_TEST_NB" list --no-color 2>&1); rc=$?
+          echo "list2-rc=$rc stdout/stderr: $out"
           echo "--- qualified show scratch:1 ---"
-          "$NB_API_TEST_NB" show "scratch:1" --path --no-color
-          echo "show-rc=$?"
+          out=$("$NB_API_TEST_NB" show "scratch:1" --path --no-color 2>&1); rc=$?
+          echo "show-rc=$rc stdout/stderr: $out"
+          echo "--- add a note then re-list ---"
+          "$NB_API_TEST_NB" add "hello" --content "body" >/dev/null 2>&1
+          out=$("$NB_API_TEST_NB" list "scratch:" --no-color 2>&1); rc=$?
+          echo "list3-rc=$rc stdout/stderr: $out"
 
       - name: Test
         run: cargo test --release --all-features
