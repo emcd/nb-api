@@ -28,7 +28,10 @@ jobs:
         shell: bash
         run: |
           set -eu
-          git clone --depth 1 --branch 7.24.0 https://github.com/xwmx/nb.git "$HOME/nb-src"
+          # core.autocrlf=false: the nb bash script MUST keep LF line
+          # endings or Git-for-Windows checks out CRLF and bash breaks
+          # on a 27k-line script.
+          git -c core.autocrlf=false clone --depth 1 --branch 7.24.0 https://github.com/xwmx/nb.git "$HOME/nb-src"
           mkdir -p "$HOME/bin"
           # npm's auto-generated nb.cmd segfaults (node-on-bash). Ship a
           # Git Bash launcher instead: CRLF batch file invoking the real
@@ -47,6 +50,9 @@ jobs:
           ls -la "$HOME/bin"
           echo "nb.cmd:"
           cat "$HOME/bin/nb.cmd"
+          echo "nb line endings (expect LF, no CR):"
+          file "$HOME/bin/nb"
+          if grep -q $'\r' "$HOME/bin/nb"; then echo "!! nb contains CR line endings"; else echo "OK: LF only"; fi
 
       - name: Verify spawnable at shell level
         shell: bash
@@ -55,6 +61,11 @@ jobs:
           export PATH="$HOME/bin:$PATH"
           command -v nb
           cmd.exe //c "where nb"
+          # Isolate the segfault: run bash directly on the script first,
+          # then through the .cmd launcher.
+          echo "--- direct bash on nb script ---"
+          bash "$HOME/bin/nb" --version
+          echo "--- via .cmd launcher ---"
           cmd.exe //c "nb --version"
 
       - name: Run nb-api spawn-surface probe
