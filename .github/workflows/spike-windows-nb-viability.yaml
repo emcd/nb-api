@@ -1,0 +1,75 @@
+# Spike: prove nb 7.24.0 viability under Git Bash on windows-latest.
+#
+# Bounded investigation (see nb-api:todos/api/9). Runs the nb-api spawn
+# surface (client exec sites + git_capture + NbTestEnv init) against the
+# real nb script through a Git Bash .cmd launcher, mirroring what a
+# CreateProcess-based `nb_binary()` would spawn. Not a permanent CI job;
+# delete this workflow after the spike concludes.
+name: spike-windows-nb-viability
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['spike/windows-nb-viability']
+  pull_request:
+    branches: ['*']
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  probe:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install nb (pinned 7.24.0)
+        shell: bash
+        run: |
+          set -eu
+          git clone --depth 1 --branch 7.24.0 https://github.com/xwmx/nb.git "$HOME/nb"
+          mkdir -p "$HOME/bin"
+          # npm's auto-generated nb.cmd segfaults (node-on-bash). Ship a
+          # Git Bash launcher instead: CRLF batch file invoking the real
+          # extensionless bash script via Git Bash, matching CreateProcess
+          # PATHEXT discovery (.cmd).
+          printf '%s\r\n' '@echo off' \
+            'setlocal' \
+            "set \"SCRIPT=$HOME/nb/nb\"" \
+            'set "PATH=%PATH%;C:\Program Files\Git\bin;C:\Program Files\Git\usr\bin"' \
+            '"C:\Program Files\Git\bin\bash.exe" "%SCRIPT%" %*' \
+            'exit /b %ERRORLEVEL%' > "$HOME/bin/nb.cmd"
+          # Also expose the bare bash script for direct-bash probes.
+          cp "$HOME/nb/nb" "$HOME/bin/nb"
+          echo "installed:"
+          ls -la "$HOME/bin"
+          echo "nb.cmd:"
+          cat "$HOME/bin/nb.cmd"
+
+      - name: Verify spawnable at shell level
+        shell: bash
+        run: |
+          set -eu
+          export PATH="$HOME/bin:$PATH"
+          command -v nb
+          cmd.exe //c "where nb"
+          cmd.exe //c "nb --version"
+
+      - name: Run nb-api spawn-surface probe
+        shell: bash
+        run: |
+          set -uo pipefail
+          export NB_BIN="$HOME/bin/nb"
+          export NB_BIN_CMD="$HOME/bin/nb.cmd"
+          export NB_DIR="$HOME/.nb-probe"
+          mkdir -p "$NB_DIR" "$NB_DIR/.init_stub"
+          mkdir -p "$HOME/.nb-home"
+          export HOME="$HOME/.nb-home"
+          # Deterministic git identity (nb's _git_required check).
+          printf '[user]\n\tname = probe\n\temail = probe@localhost\n' > "$HOME/.gitconfig"
+          # Isolated execution cwd (mirrors NbTestEnv working_dir: never
+          # the repo checkout, so no parent-repo git interference).
+          mkdir -p "$HOME/.nb-work"
+          cd "$HOME/.nb-work"
+          bash "$GITHUB_WORKSPACE/.github/scripts/spike-windows-nb-probe.sh"
