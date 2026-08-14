@@ -11,13 +11,21 @@ inputs:
   bin-dir:
     description: >-
       Directory in which the `nb` launcher is placed and prepended to
-      PATH. Defaults to a fresh dir under $RUNNER_TEMP.
+      PATH. Defaults to $HOME/.local/bin — the login-home candidate that
+      `NbTestEnv::nb_binary()` probes when the process PATH is poisoned
+      (issues/api/7), so it must be stable and outside RUNNER_TEMP.
     default: ''
 
 outputs:
   bin-dir:
     description: 'Absolute path of the bin dir containing the `nb` launcher (on PATH).'
     value: ${{ steps.install.outputs.bin-dir }}
+  nb-exec:
+    description: >-
+      Absolute path of the CreateProcess-spawnable `nb` launcher
+      (nb.cmd on Windows, nb on Unix). Set NB_API_TEST_NB to this to make
+      the test harness resolve nb deterministically.
+    value: ${{ steps.install.outputs.nb-exec }}
 
 runs:
   using: composite
@@ -32,7 +40,8 @@ runs:
         if [[ -n "${{ inputs.bin-dir }}" ]]; then
           bin_dir="${{ inputs.bin-dir }}"
         else
-          bin_dir="${RUNNER_TEMP}/nb-bin"
+          # Login home (poison-safe for nb_binary() discovery).
+          bin_dir="${HOME}/.local/bin"
         fi
         mkdir -p "$bin_dir"
 
@@ -56,12 +65,19 @@ runs:
             'set "PATH=%PATH%;C:\Program Files\Git\bin;C:\Program Files\Git\usr\bin"' \
             '"C:\Program Files\Git\bin\bash.exe" nb %*' \
             'exit /b %ERRORLEVEL%' > "${bin_dir}/nb.cmd"
+          # NB_API_TEST_NB / Path::is_absolute need a Windows-native path
+          # (drive-letter prefix); $HOME under Git Bash is MSYS-style
+          # (/c/Users/...) which Rust rejects as relative.
+          bin_dir="$(cygpath -w "${bin_dir}")"
+          nb_exec="${bin_dir}\\nb.cmd"
         else
           ln -sf "${src_dir}/nb" "${bin_dir}/nb"
+          nb_exec="${bin_dir}/nb"
         fi
 
         echo "${bin_dir}" >> "${GITHUB_PATH}"
         echo "bin-dir=${bin_dir}" >> "${GITHUB_OUTPUT}"
+        echo "nb-exec=${nb_exec}" >> "${GITHUB_OUTPUT}"
         echo "installed nb launcher(s):"
         ls -la "${bin_dir}"
 

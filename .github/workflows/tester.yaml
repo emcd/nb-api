@@ -86,15 +86,20 @@ jobs:
         # Shared cross-platform install (Git Bash .cmd launcher on
         # Windows, symlink on Unix), pinned to the version we develop
         # against. See .github/actions/setup-nb/action.yaml.
+        id: setup-nb
         uses: ./.github/actions/setup-nb
         with:
           version: '7.24.0'
 
       - name: Build
         run: cargo build --release
+        env:
+          NB_API_TEST_NB: ${{ steps.setup-nb.outputs.nb-exec }}
 
       - name: Test
         run: cargo test --release --all-features
+        env:
+          NB_API_TEST_NB: ${{ steps.setup-nb.outputs.nb-exec }}
 
   package:
     needs: [initialize, lint, test]
