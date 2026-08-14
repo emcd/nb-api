@@ -890,6 +890,40 @@ impl NbTestEnv {
         // transaction, so a missing baseline is harmless there.
         let notebook_root = self.nb_dir.join(&self.notebook);
         let baseline_result: Result<(), NbTestError> = (|| {
+            // Write the notebook repo's LOCAL config so every subsequent
+            // git invocation (including production `git::git_capture`,
+            // which scrubs GIT_CONFIG_* env) sees byte-identical LF
+            // handling. The GIT_CONFIG_COUNT env override only reaches
+            // fixture-spawned commands; repo-local config persists.
+            // See `nb-api:todos/api/9`.
+            let mut git_config = StdCommand::new("git");
+            scrub_git_env_std(&mut git_config);
+            git_config.env("HOME", &self.home_dir);
+            apply_git_config_env(&mut git_config);
+            git_config.current_dir(&notebook_root);
+            git_config.args(["config", "core.autocrlf", "false"]);
+            let cfg = git_config.output().map_err(|e| NbTestError::Io {
+                context: format!(
+                    "fixture baseline `git config core.autocrlf false` in {}",
+                    notebook_root.display()
+                ),
+                source: e,
+            })?;
+            if !cfg.status.success() {
+                let stdout = String::from_utf8_lossy(&cfg.stdout).into_owned();
+                let stderr = String::from_utf8_lossy(&cfg.stderr).into_owned();
+                return Err(NbTestError::Nb {
+                    context: format!(
+                        "fixture baseline `git config core.autocrlf false` in {}",
+                        notebook_root.display()
+                    ),
+                    failure: NbFailure {
+                        status: cfg.status,
+                        stdout,
+                        stderr,
+                    },
+                });
+            }
             let mut git = StdCommand::new("git");
             scrub_git_env_std(&mut git);
             git.env("HOME", &self.home_dir);
