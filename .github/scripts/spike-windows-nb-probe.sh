@@ -63,8 +63,8 @@ command -v git || echo 'git NOT on PATH'
 command -v bash || echo 'bash NOT on PATH'
 
 # --- Spawnability (the nbspec killer) ---
-run_expect_ok 'spawn nb.cmd via CreateProcess path (cmd.exe)' \
-  cmd.exe //c "\"${NB_BIN_CMD}\" --version"
+run_expect_ok 'spawn nb.cmd via PATH lookup (cmd.exe CreateProcess path)' \
+  cmd.exe //c "nb --version"
 run_expect_ok 'spawn nb bash script via Git Bash directly' \
   bash "$NB_BIN" --version
 
@@ -82,7 +82,17 @@ run_expect_ok 'nb notebooks show scratch --path' \
 run_expect_ok 'nb add note' \
   bash "$NB_BIN" add 'hello from probe'
 
-ID="$(bash "$NB_BIN" ls --no-color | head -1 | awk '{print $1}')"
+# nb ls output: first non-empty line carries the note id in column 1.
+# Strip CR (Git Bash) and ANSI before parsing.
+ID="$(
+  bash "$NB_BIN" ls --no-color 2>/dev/null \
+    | tr -d '\r' \
+    | sed 's/\x1b\[[0-9;]*m//g' \
+    | grep -v '^[[:space:]]*$' \
+    | head -1 \
+    | awk '{print $1}' \
+    | tr -d '[]'
+)"
 printf 'probe note id: %s\n' "${ID:-<none>}"
 
 run_expect_ok 'nb ls --no-color' bash "$NB_BIN" ls --no-color
@@ -96,9 +106,13 @@ run_expect_ok 'nb notebooks --no-color' bash "$NB_BIN" notebooks --no-color
 NOTEBOOK_ROOT="$(bash "$NB_BIN" notebooks show scratch --path)"
 printf 'notebook root: %s\n' "${NOTEBOOK_ROOT:-<none>}"
 if [ -n "$NOTEBOOK_ROOT" ] && [ -d "$NOTEBOOK_ROOT" ]; then
-  run_expect_exit 'git status --porcelain (clean -> empty ok)' 0 \
+  # nb auto-commits on add, so after `nb add note` the tree is already
+  # clean. Create an uncommitted change ourselves to exercise the staged
+  # diff / commit path (notebook_commit_all).
+  printf 'dirty marker\n' > "$NOTEBOOK_ROOT/dirty-probe.txt"
+  run_expect_exit 'git status --porcelain (dirty -> non-empty ok)' 0 \
     git -C "$NOTEBOOK_ROOT" status --porcelain -uall --ignored=no
-  run_expect_exit 'git diff-index --quiet HEAD -- (dirty check exit 0/1)' 0 \
+  run_expect_exit 'git diff-index --quiet HEAD -- (dirty -> exit 1)' 1 \
     git -C "$NOTEBOOK_ROOT" diff-index --quiet HEAD --
   run_expect_ok 'git add -A' git -C "$NOTEBOOK_ROOT" add -A
   run_expect_exit 'git diff --cached --quiet (staged -> exit 1)' 1 \
