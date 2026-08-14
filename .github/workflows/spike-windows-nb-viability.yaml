@@ -28,20 +28,21 @@ jobs:
         shell: bash
         run: |
           set -eu
-          git clone --depth 1 --branch 7.24.0 https://github.com/xwmx/nb.git "$HOME/nb"
+          git clone --depth 1 --branch 7.24.0 https://github.com/xwmx/nb.git "$HOME/nb-src"
           mkdir -p "$HOME/bin"
           # npm's auto-generated nb.cmd segfaults (node-on-bash). Ship a
           # Git Bash launcher instead: CRLF batch file invoking the real
           # extensionless bash script via Git Bash, matching CreateProcess
-          # PATHEXT discovery (.cmd).
+          # PATHEXT discovery (.cmd). SCRIPT is resolved via %~dp0 (cmd's
+          # own directory) so the path stays Windows-native; embedding a
+          # Git-Bash-style $HOME path (C:\... -> /c/...) segfaults.
+          cp "$HOME/nb-src/nb" "$HOME/bin/nb"
           printf '%s\r\n' '@echo off' \
             'setlocal' \
-            "set \"SCRIPT=$HOME/nb/nb\"" \
+            'set "SCRIPT=%~dp0nb"' \
             'set "PATH=%PATH%;C:\Program Files\Git\bin;C:\Program Files\Git\usr\bin"' \
             '"C:\Program Files\Git\bin\bash.exe" "%SCRIPT%" %*' \
             'exit /b %ERRORLEVEL%' > "$HOME/bin/nb.cmd"
-          # Also expose the bare bash script for direct-bash probes.
-          cp "$HOME/nb/nb" "$HOME/bin/nb"
           echo "installed:"
           ls -la "$HOME/bin"
           echo "nb.cmd:"
