@@ -96,41 +96,6 @@ jobs:
         env:
           NB_API_TEST_NB: ${{ steps.setup-nb.outputs.nb-exec }}
 
-      - name: Diagnostic (forward-slash NB_DIR hypothesis) — remove before merge
-        if: matrix.platform == 'windows-latest'
-        shell: bash
-        env:
-          NB_API_TEST_NB: ${{ steps.setup-nb.outputs.nb-exec }}
-        run: |
-          set -x
-          # Forward-slash NB_DIR (mirrors the spike's MSYS path style).
-          export NB_DIR="$HOME/.nb-fs"
-          export HOME="$HOME/.nb-fs-home"
-          mkdir -p "$NB_DIR" "$NB_DIR/.init_stub" "$HOME"
-          printf '[user]\n\tname = probe\n\temail = probe@localhost\n' > "$HOME/.gitconfig"
-          export GIT_AUTHOR_NAME=probe GIT_AUTHOR_EMAIL=probe@localhost
-          export GIT_COMMITTER_NAME=probe GIT_COMMITTER_EMAIL=probe@localhost
-          NB_NOTEBOOK_PATH="$NB_DIR/.init_stub" "$NB_API_TEST_NB" notebooks add scratch
-          printf 'scratch' > "$NB_DIR/.current"
-          # Disable set -e for the probe section so failing subcommands
-          # report rc instead of aborting the step.
-          set +e
-          NB_SCRIPT="$HOME/.local/bin/nb"
-          echo "--- add via .cmd launcher ---"
-          out=$("$NB_API_TEST_NB" add hello --content body 2>&1)
-          echo "cmd-add-rc=$? out: $out"
-          echo "--- add via direct bash script ---"
-          out=$(bash "$NB_SCRIPT" add hello2 --content body 2>&1)
-          echo "bash-add-rc=$? out: $out"
-          echo "--- list scratch: via .cmd launcher ---"
-          out=$("$NB_API_TEST_NB" list scratch: --no-color 2>&1)
-          echo "cmd-list-rc=$? out: $out"
-          echo "--- list scratch: via direct bash ---"
-          out=$(bash "$NB_SCRIPT" list scratch: --no-color 2>&1)
-          echo "bash-list-rc=$? out: $out"
-          echo "--- ls -la scratch dir ---"
-          ls -la "$NB_DIR/scratch" 2>&1 | sed 's/^/  |/'
-
       - name: Test
         run: cargo test --release --all-features
         env:
