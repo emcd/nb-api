@@ -217,15 +217,14 @@ fn three_link_chain_serde_round_trip_preserves_structure() {
 
 /// A → B → B duplication would inflate the chain depth. The
 /// walker must visit each link EXACTLY ONCE. We construct a
-/// 3-link chain and verify depth is preserved AND the chain
-/// has the expected kind counts and the leaf's raw OS code
-/// round-trips verbatim through JSON.
+/// 3-link chain and verify depth is preserved and the leaf's
+/// raw OS code round-trips through JSON.
 ///
-/// The leaf's `IoErrorKind` mapping is platform-dependent
-/// (Linux errno 11 = EAGAIN ⇒ `WouldBlock`, but other
-/// platforms may differ). We therefore assert STRUCTURE
-/// (chain depth, exact `Other` count, exact leaf-link raw
-/// code) instead of hard-coding the leaf's `IoErrorKind`.
+/// The leaf's `IoErrorKind` for raw code 11 is platform-dependent
+/// (Linux EAGAIN ⇒ `WouldBlock`; macOS EDEADLK / Windows
+/// ERROR_BAD_FORMAT ⇒ `Other`). Assert structure only — never a
+/// fixed global `"Other"` string count (that fails when the leaf
+/// is also `Other`).
 #[test]
 fn three_link_chain_has_no_duplication() {
     let leaf = std::io::Error::from_raw_os_error(11);
@@ -241,43 +240,36 @@ fn three_link_chain_has_no_duplication() {
     let json = serde_json::to_string(&snapshot).unwrap();
     let restored: IoError = serde_json::from_str(&json).unwrap();
 
-    // Chain depth: root (top Custom, captured as Other) →
-    // inner Wrap (Other) → leaf io_err.
+    // Chain depth: root (top Custom → Other) → DeepWrap (Other) → leaf.
     assert_eq!(chain_depth(&snapshot), 3, "snapshot depth");
     assert_eq!(chain_depth(&restored), 3, "restored depth");
     assert_eq!(restored, snapshot, "serde round-trip identity");
 
-    // Exactly 2 "Other" entries: root + inner Wrap. The leaf
-    // link's kind is platform-dependent (WouldBlock on Linux
-    // for errno 11, but other platforms differ), so we do
-    // NOT hard-code its kind label — only its raw OS code.
-    let other_count = json.matches("\"Other\"").count();
-    assert_eq!(
-        other_count, 2,
-        "expected exactly 2 \"Other\" entries (root + inner Wrap); \
-         got {other_count} in {json:?}"
-    );
-
-    // Leaf raw OS code preserved verbatim through the chain
-    // walker and serde.
-    let leaf_link = restored
+    assert_eq!(snapshot.kind, IoErrorKind::Other, "root Custom is Other");
+    let mid = snapshot
         .source
         .as_deref()
-        .and_then(|l| l.source.as_deref())
-        .expect("leaf link must be reachable");
+        .expect("mid DeepWrap link must be reachable");
+    assert_eq!(mid.kind, IoErrorKind::Other, "DeepWrap snapshot is Other");
+    assert_eq!(mid.message, "DeepWrap");
+
+    let leaf_link = mid.source.as_deref().expect("leaf link must be reachable");
     assert_eq!(
         leaf_link.os_error,
         Some(11),
         "leaf io_err raw_os_error must round-trip verbatim through the chain walker"
     );
-    // The leaf's exact `message` is platform-dependent
-    // (Linux "Resource temporarily unavailable (os error 11)"
-    // vs. other platforms' errno wording). We assert only
-    // that the message is non-empty and references the OS
-    // code, which is the structural invariant the chain
-    // walker is responsible for.
     assert!(
         !leaf_link.message.is_empty(),
-        "leaf io_err message must be captured (the walker must not discard it)"
+        "leaf message must be non-empty"
+    );
+    assert!(
+        leaf_link.message.contains("11") || leaf_link.message.contains("os error"),
+        "leaf message should reference the OS error; got {:?}",
+        leaf_link.message
+    );
+    assert!(
+        json.contains("\"os_error\":11"),
+        "JSON must carry leaf os_error=11; got {json}"
     );
 }
