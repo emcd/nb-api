@@ -96,19 +96,16 @@ NOTE_FILE="$(
 )"
 ID="${NOTE_FILE%.*}"
 printf 'probe note id: %s (file: %s)\n' "${ID:-<none>}" "${NOTE_FILE:-<none>}"
-printf 'current marker: %s\n' "$(cat "$NB_DIR/.current" 2>/dev/null || echo '<none>')"
-printf 'scratch root ls -la:\n'
-ls -la "$ROOT_FOR_ID" 2>/dev/null | sed 's/^/  |/'
-printf 'NB_DIR ls -la:\n'
-ls -la "$NB_DIR" 2>/dev/null | sed 's/^/  |/'
-printf 'nb ls --no-color raw first 5 lines:\n'
-bash "$NB_BIN" ls --no-color 2>&1 | tr -d '\r' | head -5 | sed 's/^/  |/'
-printf 'nb show with filename selector (client-style):\n'
-bash "$NB_BIN" show "${NOTE_FILE}" --type 2>&1 | tr -d '\r' | head -3 | sed 's/^/  |/' || true
-printf 'nb show qualified scratch:<filename>:\n'
-bash "$NB_BIN" show "scratch:${NOTE_FILE}" --type 2>&1 | tr -d '\r' | head -3 | sed 's/^/  |/' || true
 
 run_expect_ok 'nb ls --no-color' bash "$NB_BIN" ls --no-color
+# Exact client argv forms (src/client.rs exec_vec): qualified selector
+# with --no-color, and the --type text classification probe.
+run_expect_ok 'nb show scratch:<file> --path --no-color' \
+  bash "$NB_BIN" show "scratch:${NOTE_FILE}" --path --no-color
+run_expect_ok 'nb show scratch:<file> --type text --no-color' \
+  bash "$NB_BIN" show "scratch:${NOTE_FILE}" --type text --no-color
+run_expect_ok 'nb show scratch:<file> --type --no-color' \
+  bash "$NB_BIN" show "scratch:${NOTE_FILE}" --type --no-color
 run_expect_ok 'nb show <file> --type' bash "$NB_BIN" show "$NOTE_FILE" --type
 run_expect_ok 'nb show <file> --path' bash "$NB_BIN" show "$NOTE_FILE" --path
 run_expect_ok 'nb show <file> (content)' bash "$NB_BIN" show "$NOTE_FILE"
@@ -136,6 +133,14 @@ if [ -n "$NOTEBOOK_ROOT" ] && [ -d "$NOTEBOOK_ROOT" ]; then
     git -C "$NOTEBOOK_ROOT" -c user.name='probe' -c user.email='probe@localhost' commit -m 'probe commit'
   run_expect_exit 'git diff-index --quiet HEAD -- (clean -> exit 0)' 0 \
     git -C "$NOTEBOOK_ROOT" diff-index --quiet HEAD --
+  run_expect_ok 'git rev-parse HEAD' git -C "$NOTEBOOK_ROOT" rev-parse HEAD
+  run_expect_ok 'git ls-files -z (tracked list)' git -C "$NOTEBOOK_ROOT" ls-files -z
+  run_expect_ok 'git log -1 --oneline' git -C "$NOTEBOOK_ROOT" log -1 --oneline
+  # exercise reset --hard (notebook_reset_clean rollback path)
+  printf 'rollback\n' > "$NOTEBOOK_ROOT/rollback.txt"
+  git -C "$NOTEBOOK_ROOT" add -A
+  run_expect_ok 'git reset --hard HEAD (rollback)' \
+    git -C "$NOTEBOOK_ROOT" reset --hard HEAD
 else
   note_fail 'notebook root resolution' "root=${NOTEBOOK_ROOT:-<empty>}"
 fi
