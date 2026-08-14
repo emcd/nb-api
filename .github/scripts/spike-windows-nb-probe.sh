@@ -84,16 +84,18 @@ run_expect_ok 'nb add note' \
 
 # Derive the note id from the on-disk notebook root (robust to ls
 # ANSI/CRLF/formatting differences): first .md file in the notebook.
+# The client passes full relative filenames as selectors (e.g.
+# show_note("n.md")), so use the filename, not a bare timestamp id.
 ROOT_FOR_ID="$(bash "$NB_BIN" notebooks show scratch --path)"
 printf 'root for id: %s\n' "${ROOT_FOR_ID:-<none>}"
-ID="$(
+NOTE_FILE="$(
   ls -1 "$ROOT_FOR_ID" 2>/dev/null \
     | grep -iE '\.(md|txt)$' \
     | grep -v '^\.' \
-    | head -1 \
-    | sed 's/\.\(md\|txt\)$//'
+    | head -1
 )"
-printf 'probe note id: %s\n' "${ID:-<none>}"
+ID="${NOTE_FILE%.*}"
+printf 'probe note id: %s (file: %s)\n' "${ID:-<none>}" "${NOTE_FILE:-<none>}"
 printf 'current marker: %s\n' "$(cat "$NB_DIR/.current" 2>/dev/null || echo '<none>')"
 printf 'scratch root ls -la:\n'
 ls -la "$ROOT_FOR_ID" 2>/dev/null | sed 's/^/  |/'
@@ -101,16 +103,16 @@ printf 'NB_DIR ls -la:\n'
 ls -la "$NB_DIR" 2>/dev/null | sed 's/^/  |/'
 printf 'nb ls --no-color raw first 5 lines:\n'
 bash "$NB_BIN" ls --no-color 2>&1 | tr -d '\r' | head -5 | sed 's/^/  |/'
-printf 'nb show with .md extension:\n'
-bash "$NB_BIN" show "${ID}.md" --type 2>&1 | tr -d '\r' | head -3 | sed 's/^/  |/' || true
-printf 'nb show qualified scratch:\n'
-bash "$NB_BIN" show "scratch:${ID}" --type 2>&1 | tr -d '\r' | head -3 | sed 's/^/  |/' || true
+printf 'nb show with filename selector (client-style):\n'
+bash "$NB_BIN" show "${NOTE_FILE}" --type 2>&1 | tr -d '\r' | head -3 | sed 's/^/  |/' || true
+printf 'nb show qualified scratch:<filename>:\n'
+bash "$NB_BIN" show "scratch:${NOTE_FILE}" --type 2>&1 | tr -d '\r' | head -3 | sed 's/^/  |/' || true
 
 run_expect_ok 'nb ls --no-color' bash "$NB_BIN" ls --no-color
-run_expect_ok 'nb show <id> --type' bash "$NB_BIN" show "$ID" --type
-run_expect_ok 'nb show <id> --path' bash "$NB_BIN" show "$ID" --path
-run_expect_ok 'nb show <id> (content)' bash "$NB_BIN" show "$ID"
-run_expect_ok 'nb edit <id> --content' bash "$NB_BIN" edit "$ID" --content 'edited body'
+run_expect_ok 'nb show <file> --type' bash "$NB_BIN" show "$NOTE_FILE" --type
+run_expect_ok 'nb show <file> --path' bash "$NB_BIN" show "$NOTE_FILE" --path
+run_expect_ok 'nb show <file> (content)' bash "$NB_BIN" show "$NOTE_FILE"
+run_expect_ok 'nb edit <file> --content' bash "$NB_BIN" edit "$NOTE_FILE" --content 'edited body'
 run_expect_ok 'nb notebooks --no-color' bash "$NB_BIN" notebooks --no-color
 
 # --- Direct git surface (src/git.rs), run inside the notebook dir ---
