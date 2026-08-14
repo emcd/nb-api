@@ -82,20 +82,22 @@ run_expect_ok 'nb notebooks show scratch --path' \
 run_expect_ok 'nb add note' \
   bash "$NB_BIN" add 'hello from probe'
 
-# nb ls output: first non-empty line carries the note id in column 1.
-# Strip CR (Git Bash) and ANSI before parsing.
+# Derive the note id from the on-disk notebook root (robust to ls
+# ANSI/CRLF/formatting differences): first .md file in the notebook.
+ROOT_FOR_ID="$(bash "$NB_BIN" notebooks show scratch --path)"
+printf 'root for id: %s\n' "${ROOT_FOR_ID:-<none>}"
 ID="$(
-  bash "$NB_BIN" ls --no-color 2>/dev/null \
-    | tr -d '\r' \
-    | sed 's/\x1b\[[0-9;]*m//g' \
-    | grep -v '^[[:space:]]*$' \
+  ls -1 "$ROOT_FOR_ID" 2>/dev/null \
+    | grep -iE '\.(md|txt)$' \
+    | grep -v '^\.' \
     | head -1 \
-    | awk '{print $1}' \
-    | tr -d '[]'
+    | sed 's/\.\(md\|txt\)$//'
 )"
 printf 'probe note id: %s\n' "${ID:-<none>}"
-printf 'nb ls raw (no-color) first 3 lines:\n'
-bash "$NB_BIN" ls --no-color 2>/dev/null | tr -d '\r' | sed 's/\x1b\[[0-9;]*m//g' | head -3 | sed 's/^/  |/'
+printf 'notebook dir contents:\n'
+ls -1 "$ROOT_FOR_ID" 2>/dev/null | sed 's/^/  |/'
+printf 'nb ls --no-color raw first 3 lines:\n'
+bash "$NB_BIN" ls --no-color 2>/dev/null | tr -d '\r' | head -3 | sed 's/^/  |/'
 
 run_expect_ok 'nb ls --no-color' bash "$NB_BIN" ls --no-color
 run_expect_ok 'nb show <id> --type' bash "$NB_BIN" show "$ID" --type
