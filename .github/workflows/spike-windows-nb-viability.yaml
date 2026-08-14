@@ -59,14 +59,18 @@ jobs:
         run: |
           set -eu
           export PATH="$HOME/bin:$PATH"
+          echo "--- basics ---"
           command -v nb
           cmd.exe //c "where nb"
-          # Isolate the segfault: run bash directly on the script first,
-          # then through the .cmd launcher.
-          echo "--- direct bash on nb script ---"
+          echo "PATHEXT=$PATHEXT"
+          echo "--- A: direct bash on nb script (MSYS-style path) ---"
           bash "$HOME/bin/nb" --version
-          echo "--- via .cmd launcher ---"
-          cmd.exe //c "nb --version"
+          echo "--- B: bash on nb via Windows-style path ---"
+          "/c/Program Files/Git/bin/bash.exe" "C:\Users\runneradmin\bin\nb" --version || echo "B failed rc=$?"
+          echo "--- C: .cmd invoked by full path ---"
+          cmd.exe //c "C:\Users\runneradmin\bin\nb.cmd" --version || echo "C failed rc=$?"
+          echo "--- D: .cmd via PATH lookup ---"
+          cmd.exe //c "nb --version" || echo "D failed rc=$?"
 
       - name: Run nb-api spawn-surface probe
         shell: bash
