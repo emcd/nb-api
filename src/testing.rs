@@ -873,6 +873,104 @@ impl NbTestEnv {
             }
         })?;
 
+        // Ensure a clean committed baseline. nb's `_git checkpoint` runs
+        // the init commit in a background subshell (`( ... ) &`). When nb
+        // is spawned through a `.cmd` launcher (Windows), that orphaned
+        // commit is torn down when the wrapper exits, leaving `.index`
+        // untracked and every later `Transaction::commit` rejected with
+        // `DirtyBaseline`. Run the commit synchronously ourselves with
+        // the fixture's deterministic git env so the baseline is identical
+        // on Unix and Windows. See `nb-api:todos/api/9`.
+        //
+        // `git` resolves through the inherited process PATH (as in
+        // `crate::git::git_capture`); the fixture child PATH only carries
+        // nb's dir + system dirs and would not locate git on Windows.
+        // If git cannot spawn (poisoned process PATH, issues/api/7), the
+        // baseline is skipped — the poisoned test never runs a
+        // transaction, so a missing baseline is harmless there.
+        let notebook_root = self.nb_dir.join(&self.notebook);
+        let baseline_result: Result<(), NbTestError> = (|| {
+            let mut git = StdCommand::new("git");
+            scrub_git_env_std(&mut git);
+            git.env("HOME", &self.home_dir);
+            git.env("GIT_AUTHOR_NAME", GIT_AUTHOR_NAME);
+            git.env("GIT_AUTHOR_EMAIL", GIT_AUTHOR_EMAIL);
+            git.env("GIT_COMMITTER_NAME", GIT_AUTHOR_NAME);
+            git.env("GIT_COMMITTER_EMAIL", GIT_AUTHOR_EMAIL);
+            apply_git_config_env(&mut git);
+            git.current_dir(&notebook_root);
+            git.arg("add").arg("-A");
+            let add = git.output().map_err(|e| NbTestError::Io {
+                context: format!(
+                    "fixture baseline `git add -A` in {}",
+                    notebook_root.display()
+                ),
+                source: e,
+            })?;
+            if !add.status.success() {
+                let stdout = String::from_utf8_lossy(&add.stdout).into_owned();
+                let stderr = String::from_utf8_lossy(&add.stderr).into_owned();
+                return Err(NbTestError::Nb {
+                    context: format!(
+                        "fixture baseline `git add -A` in {}",
+                        notebook_root.display()
+                    ),
+                    failure: NbFailure {
+                        status: add.status,
+                        stdout,
+                        stderr,
+                    },
+                });
+            }
+            let mut git_commit = StdCommand::new("git");
+            scrub_git_env_std(&mut git_commit);
+            git_commit.env("HOME", &self.home_dir);
+            git_commit.env("GIT_AUTHOR_NAME", GIT_AUTHOR_NAME);
+            git_commit.env("GIT_AUTHOR_EMAIL", GIT_AUTHOR_EMAIL);
+            git_commit.env("GIT_COMMITTER_NAME", GIT_AUTHOR_NAME);
+            git_commit.env("GIT_COMMITTER_EMAIL", GIT_AUTHOR_EMAIL);
+            apply_git_config_env(&mut git_commit);
+            git_commit.current_dir(&notebook_root);
+            git_commit.args(["commit", "-m", "[nb] Initialize"]);
+            let commit = git_commit.output().map_err(|e| NbTestError::Io {
+                context: format!(
+                    "fixture baseline `git commit` in {}",
+                    notebook_root.display()
+                ),
+                source: e,
+            })?;
+            if !commit.status.success() {
+                // nb may already have committed the baseline synchronously
+                // (Unix); a `nothing to commit` exit is not an error.
+                // Git may write the message to stdout or stderr.
+                let stdout = String::from_utf8_lossy(&commit.stdout);
+                let stderr = String::from_utf8_lossy(&commit.stderr);
+                if !stdout.contains("nothing to commit") && !stderr.contains("nothing to commit") {
+                    return Err(NbTestError::Nb {
+                        context: format!(
+                            "fixture baseline `git commit` in {}",
+                            notebook_root.display()
+                        ),
+                        failure: NbFailure {
+                            status: commit.status,
+                            stdout: stdout.into_owned(),
+                            stderr: stderr.into_owned(),
+                        },
+                    });
+                }
+            }
+            Ok(())
+        })();
+        if let Err(NbTestError::Io { source, .. }) = &baseline_result
+            && source.kind() == std::io::ErrorKind::NotFound
+        {
+            // Poisoned process PATH (issues/api/7): git unresolvable,
+            // baseline intentionally skipped.
+            tracing::debug!("fixture baseline skipped: git not on process PATH");
+        } else {
+            baseline_result?;
+        }
+
         Ok(())
     }
 }
