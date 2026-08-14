@@ -94,10 +94,17 @@ ID="$(
     | sed 's/\.\(md\|txt\)$//'
 )"
 printf 'probe note id: %s\n' "${ID:-<none>}"
-printf 'notebook dir contents:\n'
-ls -1 "$ROOT_FOR_ID" 2>/dev/null | sed 's/^/  |/'
-printf 'nb ls --no-color raw first 3 lines:\n'
-bash "$NB_BIN" ls --no-color 2>/dev/null | tr -d '\r' | head -3 | sed 's/^/  |/'
+printf 'current marker: %s\n' "$(cat "$NB_DIR/.current" 2>/dev/null || echo '<none>')"
+printf 'scratch root ls -la:\n'
+ls -la "$ROOT_FOR_ID" 2>/dev/null | sed 's/^/  |/'
+printf 'NB_DIR ls -la:\n'
+ls -la "$NB_DIR" 2>/dev/null | sed 's/^/  |/'
+printf 'nb ls --no-color raw first 5 lines:\n'
+bash "$NB_BIN" ls --no-color 2>&1 | tr -d '\r' | head -5 | sed 's/^/  |/'
+printf 'nb show with .md extension:\n'
+bash "$NB_BIN" show "${ID}.md" --type 2>&1 | tr -d '\r' | head -3 | sed 's/^/  |/' || true
+printf 'nb show qualified scratch:\n'
+bash "$NB_BIN" show "scratch:${ID}" --type 2>&1 | tr -d '\r' | head -3 | sed 's/^/  |/' || true
 
 run_expect_ok 'nb ls --no-color' bash "$NB_BIN" ls --no-color
 run_expect_ok 'nb show <id> --type' bash "$NB_BIN" show "$ID" --type
