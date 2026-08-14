@@ -96,6 +96,27 @@ jobs:
         env:
           NB_API_TEST_NB: ${{ steps.setup-nb.outputs.nb-exec }}
 
+      - name: Diagnostic (forward-slash NB_DIR hypothesis) — remove before merge
+        if: matrix.platform == 'windows-latest'
+        shell: bash
+        env:
+          NB_API_TEST_NB: ${{ steps.setup-nb.outputs.nb-exec }}
+        run: |
+          set -x
+          # Forward-slash NB_DIR (mirrors the spike's MSYS path style).
+          export NB_DIR="$HOME/.nb-fs"
+          export HOME="$HOME/.nb-fs-home"
+          mkdir -p "$NB_DIR" "$NB_DIR/.init_stub" "$HOME"
+          printf '[user]\n\tname = probe\n\temail = probe@localhost\n' > "$HOME/.gitconfig"
+          export GIT_AUTHOR_NAME=probe GIT_AUTHOR_EMAIL=probe@localhost
+          export GIT_COMMITTER_NAME=probe GIT_COMMITTER_EMAIL=probe@localhost
+          NB_NOTEBOOK_PATH="$NB_DIR/.init_stub" "$NB_API_TEST_NB" notebooks add scratch
+          printf 'scratch' > "$NB_DIR/.current"
+          "$NB_API_TEST_NB" list "scratch:" --no-color
+          echo "list-rc=$?"
+          "$NB_API_TEST_NB" show "scratch:1" --path --no-color
+          echo "show-rc=$?"
+
       - name: Test
         run: cargo test --release --all-features
         env:
