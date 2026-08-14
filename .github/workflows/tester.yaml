@@ -114,7 +114,10 @@ jobs:
           export GIT_CONFIG_KEY_1=tag.gpgsign GIT_CONFIG_VALUE_1=false
           export GIT_CONFIG_KEY_2=core.autocrlf GIT_CONFIG_VALUE_2=false
           export GIT_CONFIG_KEY_3=core.eol GIT_CONFIG_VALUE_3=lf
-          "$NB_API_TEST_NB" notebooks add scratch
+          # Mirror NbTestEnv::initialize_notebook exactly: NB_NOTEBOOK_PATH
+          # points at the hidden stub so first-run _init is bypassed.
+          NB_NOTEBOOK_PATH="$NB_DIR/.init_stub" "$NB_API_TEST_NB" notebooks add scratch
+          printf 'scratch' > "$NB_DIR/.current"
           echo "=== nb dir ==="
           find "$NB_DIR" -maxdepth 2 | head -30
           echo "=== git status ==="
