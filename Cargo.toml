@@ -16,6 +16,7 @@ include = [
     "/README.md",
     "/LICENSE",
     "/src/**",
+    "/documentation/migration-0.3.0.md",
 ]
 
 [dev-dependencies]
