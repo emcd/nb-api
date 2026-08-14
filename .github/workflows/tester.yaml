@@ -115,21 +115,20 @@ jobs:
           # Disable set -e for the probe section so failing subcommands
           # report rc instead of aborting the step.
           set +e
-          echo "--- add a note ---"
-          "$NB_API_TEST_NB" add "hello" --content "body" 2>&1 | sed 's/^/  |/'
-          echo "add-rc=${PIPESTATUS[0]}"
-          echo "--- qualified list scratch: ---"
-          out=$("$NB_API_TEST_NB" list "scratch:" --no-color 2>&1)
-          echo "list-rc=$? out: $out"
-          echo "--- unqualified list ---"
-          out=$("$NB_API_TEST_NB" list --no-color 2>&1)
-          echo "list2-rc=$? out: $out"
-          echo "--- qualified show scratch:1 ---"
-          out=$("$NB_API_TEST_NB" show "scratch:1" --path --no-color 2>&1)
-          echo "show-rc=$? out: $out"
-          echo "--- current marker ---"
-          cat "$NB_DIR/.current"
-          echo "--- notebook dir ---"
+          NB_SCRIPT="$HOME/.local/bin/nb"
+          echo "--- add via .cmd launcher ---"
+          out=$("$NB_API_TEST_NB" add hello --content body 2>&1)
+          echo "cmd-add-rc=$? out: $out"
+          echo "--- add via direct bash script ---"
+          out=$(bash "$NB_SCRIPT" add hello2 --content body 2>&1)
+          echo "bash-add-rc=$? out: $out"
+          echo "--- list scratch: via .cmd launcher ---"
+          out=$("$NB_API_TEST_NB" list scratch: --no-color 2>&1)
+          echo "cmd-list-rc=$? out: $out"
+          echo "--- list scratch: via direct bash ---"
+          out=$(bash "$NB_SCRIPT" list scratch: --no-color 2>&1)
+          echo "bash-list-rc=$? out: $out"
+          echo "--- ls -la scratch dir ---"
           ls -la "$NB_DIR/scratch" 2>&1 | sed 's/^/  |/'
 
       - name: Test
