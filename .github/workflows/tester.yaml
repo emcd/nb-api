@@ -112,8 +112,13 @@ jobs:
           export GIT_COMMITTER_NAME=probe GIT_COMMITTER_EMAIL=probe@localhost
           NB_NOTEBOOK_PATH="$NB_DIR/.init_stub" "$NB_API_TEST_NB" notebooks add scratch
           printf 'scratch' > "$NB_DIR/.current"
+          echo "--- qualified list scratch: ---"
           "$NB_API_TEST_NB" list "scratch:" --no-color
           echo "list-rc=$?"
+          echo "--- unqualified list (current) ---"
+          "$NB_API_TEST_NB" list --no-color
+          echo "list2-rc=$?"
+          echo "--- qualified show scratch:1 ---"
           "$NB_API_TEST_NB" show "scratch:1" --path --no-color
           echo "show-rc=$?"
 
