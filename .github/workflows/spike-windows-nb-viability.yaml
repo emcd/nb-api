@@ -40,11 +40,14 @@ jobs:
           # own directory) so the path stays Windows-native; embedding a
           # Git-Bash-style $HOME path (C:\... -> /c/...) segfaults.
           cp "$HOME/nb-src/nb" "$HOME/bin/nb"
+          # Git-Bash bash.exe segfaults (exit 139) when the script path is
+          # a Windows-style C:\... arg (MSYS path-conversion trap). cd into
+          # the shim dir and pass a bare relative script name instead.
           printf '%s\r\n' '@echo off' \
             'setlocal' \
-            'set "SCRIPT=%~dp0nb"' \
+            'cd /d "%~dp0"' \
             'set "PATH=%PATH%;C:\Program Files\Git\bin;C:\Program Files\Git\usr\bin"' \
-            '"C:\Program Files\Git\bin\bash.exe" "%SCRIPT%" %*' \
+            '"C:\Program Files\Git\bin\bash.exe" nb %*' \
             'exit /b %ERRORLEVEL%' > "$HOME/bin/nb.cmd"
           echo "installed:"
           ls -la "$HOME/bin"
@@ -65,9 +68,9 @@ jobs:
           echo "PATHEXT=$PATHEXT"
           echo "--- A: direct bash on nb script (MSYS-style path) ---"
           bash "$HOME/bin/nb" --version
-          echo "--- B: bash on nb via Windows-style path ---"
+          echo "--- B: bash on nb via Windows-style C:\ path (expect 139 trap) ---"
           "/c/Program Files/Git/bin/bash.exe" "C:\Users\runneradmin\bin\nb" --version || echo "B failed rc=$?"
-          echo "--- C: .cmd invoked by full path ---"
+          echo "--- C: .cmd (cd-relative) invoked by full path ---"
           cmd.exe //c "C:\Users\runneradmin\bin\nb.cmd" --version || echo "C failed rc=$?"
           echo "--- D: .cmd via PATH lookup ---"
           cmd.exe //c "nb --version" || echo "D failed rc=$?"

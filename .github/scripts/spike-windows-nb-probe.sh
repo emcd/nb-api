@@ -94,6 +94,8 @@ ID="$(
     | tr -d '[]'
 )"
 printf 'probe note id: %s\n' "${ID:-<none>}"
+printf 'nb ls raw (no-color) first 3 lines:\n'
+bash "$NB_BIN" ls --no-color 2>/dev/null | tr -d '\r' | sed 's/\x1b\[[0-9;]*m//g' | head -3 | sed 's/^/  |/'
 
 run_expect_ok 'nb ls --no-color' bash "$NB_BIN" ls --no-color
 run_expect_ok 'nb show <id> --type' bash "$NB_BIN" show "$ID" --type
@@ -112,9 +114,11 @@ if [ -n "$NOTEBOOK_ROOT" ] && [ -d "$NOTEBOOK_ROOT" ]; then
   printf 'dirty marker\n' > "$NOTEBOOK_ROOT/dirty-probe.txt"
   run_expect_exit 'git status --porcelain (dirty -> non-empty ok)' 0 \
     git -C "$NOTEBOOK_ROOT" status --porcelain -uall --ignored=no
-  run_expect_exit 'git diff-index --quiet HEAD -- (dirty -> exit 1)' 1 \
-    git -C "$NOTEBOOK_ROOT" diff-index --quiet HEAD --
   run_expect_ok 'git add -A' git -C "$NOTEBOOK_ROOT" add -A
+  # diff-index compares index against HEAD; the file is now staged, so a
+  # difference exists -> exit 1 (this is what notebook_is_dirty relies on).
+  run_expect_exit 'git diff-index --quiet HEAD -- (staged -> exit 1)' 1 \
+    git -C "$NOTEBOOK_ROOT" diff-index --quiet HEAD --
   run_expect_exit 'git diff --cached --quiet (staged -> exit 1)' 1 \
     git -C "$NOTEBOOK_ROOT" diff --cached --quiet
   run_expect_ok 'git commit -m probe' \
