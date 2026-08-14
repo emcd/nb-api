@@ -60,6 +60,7 @@ use std::process::{Command as StdCommand, ExitStatus};
 use std::sync::OnceLock;
 
 use crate::git_env::scrub_git_env_std;
+use crate::nb_program::nb_candidate_names;
 
 #[cfg(feature = "testing-tokio")]
 use tokio::process::Command as TokioCommand;
@@ -126,13 +127,22 @@ fn discover_nb_binary() -> PathBuf {
         });
     }
 
-    let mut candidates: Vec<PathBuf> = SAFE_PATH_DIRS
-        .iter()
-        .map(|d| PathBuf::from(d).join("nb"))
-        .collect();
+    // Candidate file names per directory. On Windows this is the PATHEXT
+    // set (`nb.cmd`, `nb.exe`, …) because CreateProcess cannot spawn an
+    // extensionless bash script; on Unix it is the bare `nb`.
+    let names = nb_candidate_names();
+
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    for d in SAFE_PATH_DIRS {
+        for name in &names {
+            candidates.push(PathBuf::from(d).join(name));
+        }
+    }
 
     if let Some(home) = login_home_dir() {
-        candidates.push(home.join(".local/bin/nb"));
+        for name in &names {
+            candidates.push(home.join(".local/bin").join(name));
+        }
     }
 
     if let Some(path_var) = std::env::var_os("PATH") {
@@ -140,7 +150,9 @@ fn discover_nb_binary() -> PathBuf {
             if path_dir_looks_poisoned(&dir) || !dir.is_absolute() {
                 continue;
             }
-            candidates.push(dir.join("nb"));
+            for name in &names {
+                candidates.push(dir.join(name));
+            }
         }
     }
 
@@ -210,10 +222,27 @@ fn is_executable_file(path: &Path) -> bool {
         use std::os::unix::fs::PermissionsExt;
         meta.permissions().mode() & 0o111 != 0
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        // CreateProcess cannot spawn an extensionless bash script; only
+        // accept files with a PATHEXT-style executable extension
+        // (nb.cmd, nb.exe, nb.bat, nb.com). See `nb-api:todos/api/9`.
+        has_spawnable_windows_extension(path)
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         true
     }
+}
+
+/// True when `path`'s file name carries a CreateProcess-spawnable
+/// extension from the PATHEXT set (case-insensitive).
+#[cfg(windows)]
+fn has_spawnable_windows_extension(path: &Path) -> bool {
+    path.extension().is_some_and(|ext| {
+        let ext = ext.to_string_lossy().to_ascii_lowercase();
+        matches!(ext.as_str(), "com" | "exe" | "bat" | "cmd")
+    })
 }
 
 /// Login home for the current user (ignores env `HOME`, which tests
@@ -313,6 +342,7 @@ fn home_from_etc_passwd_uid() -> Option<PathBuf> {
 /// Traditional (7 fields): `name:pw:uid:gid:gecos:home:shell` → home @ 5.
 /// macOS `id -P` (10 fields):
 /// `name:pw:uid:gid:class:change:expire:gecos:home:shell` → home @ 8.
+#[cfg_attr(not(unix), allow(dead_code))]
 fn home_from_passwd_style_line(line: &str) -> Option<PathBuf> {
     let fields: Vec<&str> = line.trim().split(':').collect();
     let home = if fields.len() >= 10 {
@@ -330,6 +360,7 @@ fn home_from_passwd_style_line(line: &str) -> Option<PathBuf> {
 }
 
 /// Parse `dscl … NFSHomeDirectory` stdout.
+#[cfg_attr(not(unix), allow(dead_code))]
 fn parse_dscl_home(stdout: &str) -> Option<PathBuf> {
     for line in stdout.lines() {
         let line = line.trim();

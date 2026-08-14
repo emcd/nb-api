@@ -1,0 +1,79 @@
+name: 'Setup nb CLI'
+
+description: >-
+  Installs a pinned `nb` CLI for hermetic integration tests (NbTestEnv)
+  and exposes a CreateProcess-spawnable launcher on Windows.
+
+inputs:
+  version:
+    description: 'nb release tag to install (default 7.24.0).'
+    default: '7.24.0'
+  bin-dir:
+    description: >-
+      Directory in which the `nb` launcher is placed and prepended to
+      PATH. Defaults to a fresh dir under $RUNNER_TEMP.
+    default: ''
+
+outputs:
+  bin-dir:
+    description: 'Absolute path of the bin dir containing the `nb` launcher (on PATH).'
+    value: ${{ steps.install.outputs.bin-dir }}
+
+runs:
+  using: composite
+  steps:
+
+    - name: Install nb
+      id: install
+      shell: bash
+      run: |
+        set -eu -o pipefail
+        version="${{ inputs.version }}"
+        if [[ -n "${{ inputs.bin-dir }}" ]]; then
+          bin_dir="${{ inputs.bin-dir }}"
+        else
+          bin_dir="${RUNNER_TEMP}/nb-bin"
+        fi
+        mkdir -p "$bin_dir"
+
+        # core.autocrlf=false is REQUIRED: Git-for-Windows would check out
+        # the 27k-line nb bash script with CRLF line endings, which breaks
+        # bash. See nb-api:todos/api/9 (spike finding).
+        src_dir="${RUNNER_TEMP}/nb-src-${version}"
+        git -c core.autocrlf=false clone --depth 1 --branch "${version}" \
+          https://github.com/xwmx/nb.git "${src_dir}"
+
+        if [[ "$RUNNER_OS" == "Windows" ]]; then
+          # npm's auto-generated nb.cmd segfaults (node-on-bash). Ship a
+          # Git Bash launcher instead: CRLF batch file that cd's into its
+          # own dir and invokes the real extensionless bash script via a
+          # BARE RELATIVE name. Passing a Windows-style C:\... script path
+          # to Git Bash's bash.exe segfaults (MSYS path-conversion trap).
+          cp "${src_dir}/nb" "${bin_dir}/nb"
+          printf '%s\r\n' '@echo off' \
+            'setlocal' \
+            'cd /d "%~dp0"' \
+            'set "PATH=%PATH%;C:\Program Files\Git\bin;C:\Program Files\Git\usr\bin"' \
+            '"C:\Program Files\Git\bin\bash.exe" nb %*' \
+            'exit /b %ERRORLEVEL%' > "${bin_dir}/nb.cmd"
+        else
+          ln -sf "${src_dir}/nb" "${bin_dir}/nb"
+        fi
+
+        echo "${bin_dir}" >> "${GITHUB_PATH}"
+        echo "bin-dir=${bin_dir}" >> "${GITHUB_OUTPUT}"
+        echo "installed nb launcher(s):"
+        ls -la "${bin_dir}"
+
+    - name: Verify nb spawnable
+      shell: bash
+      run: |
+        set -eu -o pipefail
+        export PATH="${{ steps.install.outputs.bin-dir }}:$PATH"
+        command -v nb
+        nb --version
+        if command -v cmd.exe >/dev/null 2>&1; then
+          # Match CreateProcess / PATHEXT discovery used by Rust on Windows.
+          cmd.exe //c "where nb"
+          cmd.exe //c "nb --version"
+        fi

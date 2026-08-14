@@ -23,6 +23,7 @@ use crate::git_signing::apply_git_signing_env;
 use crate::lines::{
     note_line_from_body_line, require_contiguous_body, search_lines, split_body_lines,
 };
+use crate::nb_program::nb_program;
 use crate::output::strip_empty_result_hint;
 use crate::parser::{ParseContext, parse};
 use crate::transaction::{self, Transaction};
@@ -350,7 +351,10 @@ impl NbClient {
     /// Executes an nb command and returns stdout.
     async fn exec(&self, args: &[&str]) -> Result<String, NbError> {
         tracing::debug!(?args, "executing nb command");
-        let mut command = Command::new("nb");
+        // `nb_program` resolves `nb` to a spawnable absolute path on
+        // Windows (PATHEXT-aware: Rust std only finds `.exe` there and
+        // would miss a `nb.cmd` launcher). Unix keeps PATH resolution.
+        let mut command = Command::new(nb_program());
         // Strip inherited `GIT_*` routing vars before chaining `.args` /
         // `.env`. Without this, any caller invoking us from inside a
         // git hook (pre-commit, pre-push, post-checkout) or CI runner
