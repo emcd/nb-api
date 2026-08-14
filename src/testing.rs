@@ -70,6 +70,57 @@ const DEFAULT_NOTEBOOK: &str = "scratch";
 const GIT_AUTHOR_NAME: &str = "nb-api tests";
 const GIT_AUTHOR_EMAIL: &str = "nb-api@localhost";
 
+/// Deterministic git configuration applied to every fixture-spawned git
+/// command, on top of the signing overrides. Forces `core.autocrlf=false`
+/// so notebook repos are byte-identical across platforms: Git-for-Windows
+/// defaults `autocrlf=true`, which renormalizes committed files to CRLF on
+/// checkout and makes a fresh nb init commit appear dirty to the
+/// transaction's baseline check (`nb-api:todos/api/9`, Windows CI finding).
+///
+/// Uses the `GIT_CONFIG_COUNT` mechanism so no global/`HOME` config file
+/// is needed (the fixture HOME is a tempdir anyway).
+fn apply_git_config_env(cmd: &mut impl GitEnvSetter) {
+    cmd.env("GIT_CONFIG_COUNT", "4");
+    cmd.env("GIT_CONFIG_KEY_0", "commit.gpgsign");
+    cmd.env("GIT_CONFIG_VALUE_0", "false");
+    cmd.env("GIT_CONFIG_KEY_1", "tag.gpgsign");
+    cmd.env("GIT_CONFIG_VALUE_1", "false");
+    cmd.env("GIT_CONFIG_KEY_2", "core.autocrlf");
+    cmd.env("GIT_CONFIG_VALUE_2", "false");
+    cmd.env("GIT_CONFIG_KEY_3", "core.eol");
+    cmd.env("GIT_CONFIG_VALUE_3", "lf");
+}
+
+/// Minimal surface shared by [`StdCommand`] and [`TokioCommand`] so the
+/// fixture's deterministic git-config env can be applied to both.
+trait GitEnvSetter {
+    fn env<K, V>(&mut self, key: K, value: V)
+    where
+        K: AsRef<std::ffi::OsStr>,
+        V: AsRef<std::ffi::OsStr>;
+}
+
+impl GitEnvSetter for StdCommand {
+    fn env<K, V>(&mut self, key: K, value: V)
+    where
+        K: AsRef<std::ffi::OsStr>,
+        V: AsRef<std::ffi::OsStr>,
+    {
+        StdCommand::env(self, key, value);
+    }
+}
+
+#[cfg(feature = "testing-tokio")]
+impl GitEnvSetter for TokioCommand {
+    fn env<K, V>(&mut self, key: K, value: V)
+    where
+        K: AsRef<std::ffi::OsStr>,
+        V: AsRef<std::ffi::OsStr>,
+    {
+        TokioCommand::env(self, key, value);
+    }
+}
+
 /// System / platform directories always injected into fixture child
 /// `PATH` so shebang interpreters (`env bash`) and common `nb`
 /// install locations resolve under PATH poison tests.
@@ -697,11 +748,7 @@ impl NbTestEnv {
         cmd.env("GIT_AUTHOR_EMAIL", GIT_AUTHOR_EMAIL);
         cmd.env("GIT_COMMITTER_NAME", GIT_AUTHOR_NAME);
         cmd.env("GIT_COMMITTER_EMAIL", GIT_AUTHOR_EMAIL);
-        cmd.env("GIT_CONFIG_COUNT", "2");
-        cmd.env("GIT_CONFIG_KEY_0", "commit.gpgsign");
-        cmd.env("GIT_CONFIG_VALUE_0", "false");
-        cmd.env("GIT_CONFIG_KEY_1", "tag.gpgsign");
-        cmd.env("GIT_CONFIG_VALUE_1", "false");
+        apply_git_config_env(cmd);
         cmd.current_dir(&self.working_dir);
     }
 
@@ -717,11 +764,7 @@ impl NbTestEnv {
         cmd.env("GIT_AUTHOR_EMAIL", GIT_AUTHOR_EMAIL);
         cmd.env("GIT_COMMITTER_NAME", GIT_AUTHOR_NAME);
         cmd.env("GIT_COMMITTER_EMAIL", GIT_AUTHOR_EMAIL);
-        cmd.env("GIT_CONFIG_COUNT", "2");
-        cmd.env("GIT_CONFIG_KEY_0", "commit.gpgsign");
-        cmd.env("GIT_CONFIG_VALUE_0", "false");
-        cmd.env("GIT_CONFIG_KEY_1", "tag.gpgsign");
-        cmd.env("GIT_CONFIG_VALUE_1", "false");
+        apply_git_config_env(cmd);
         cmd.current_dir(&self.working_dir);
     }
 
@@ -795,11 +838,7 @@ impl NbTestEnv {
         cmd.env("GIT_AUTHOR_EMAIL", GIT_AUTHOR_EMAIL);
         cmd.env("GIT_COMMITTER_NAME", GIT_AUTHOR_NAME);
         cmd.env("GIT_COMMITTER_EMAIL", GIT_AUTHOR_EMAIL);
-        cmd.env("GIT_CONFIG_COUNT", "2");
-        cmd.env("GIT_CONFIG_KEY_0", "commit.gpgsign");
-        cmd.env("GIT_CONFIG_VALUE_0", "false");
-        cmd.env("GIT_CONFIG_KEY_1", "tag.gpgsign");
-        cmd.env("GIT_CONFIG_VALUE_1", "false");
+        apply_git_config_env(&mut cmd);
         cmd.current_dir(&self.working_dir);
         cmd.arg("notebooks").arg("add").arg(&self.notebook);
         let output = cmd.output().map_err(|e| NbTestError::Io {
