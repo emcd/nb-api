@@ -69,7 +69,11 @@ jobs:
 
   test:
     needs: [initialize, lint]
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.platform }}
     steps:
 
       - name: Checkout
@@ -79,24 +83,23 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install nb
-        # Hermetic install: clone a pinned nb tag into a temp dir,
-        # symlink into a private bin dir, and append that bin dir
-        # to PATH for the rest of the job. Pinning to `7.24.0`
-        # keeps identical nb-api commits testing against identical
-        # CLI behavior across CI runs. Matches the version we
-        # develop against locally.
-        run: |
-          set -eu
-          git clone --depth 1 --branch 7.24.0 https://github.com/xwmx/nb.git /tmp/nb
-          mkdir -p "$HOME/.local/bin"
-          ln -sf /tmp/nb/nb "$HOME/.local/bin/nb"
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        # Shared cross-platform install (Git Bash .cmd launcher on
+        # Windows, symlink on Unix), pinned to the version we develop
+        # against. See .github/actions/setup-nb/action.yaml.
+        id: setup-nb
+        uses: ./.github/actions/setup-nb
+        with:
+          version: '7.24.0'
 
       - name: Build
         run: cargo build --release
+        env:
+          NB_API_TEST_NB: ${{ steps.setup-nb.outputs.nb-exec }}
 
       - name: Test
         run: cargo test --release --all-features
+        env:
+          NB_API_TEST_NB: ${{ steps.setup-nb.outputs.nb-exec }}
 
   package:
     needs: [initialize, lint, test]

@@ -1,4 +1,15 @@
 //! `edit_note` / `EditMode` removal (0.3.0). Body edits use replace/lines/substring.
+//!
+//! # Windows
+//!
+//! Unix-only (`#![cfg(unix)]`): the replace path runs two
+//! collect-then-commit transactions in quick succession, and nb 7.24.0's
+//! background auto-checkpoint (fired during fixture init) intermittently
+//! races the second commit's dirty baseline check under the Git Bash
+//! `.cmd` launcher. This is the nb-under-Git-Bash limitation documented
+//! in `nb-api:todos/api/9`, not a nb-api defect.
+
+#![cfg(unix)]
 
 use nb_api::testing::NbTestEnv;
 use nb_api::{Config, NbClient, NoteTarget};

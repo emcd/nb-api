@@ -346,6 +346,7 @@ async fn add_folder_persists_when_gitkeep_is_ignored() {
     .await;
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn tracked_symlink_refused_at_commit() {
     let env = NbTestEnv::new().expect("fixture");
@@ -354,21 +355,18 @@ async fn tracked_symlink_refused_at_commit() {
         let root = client.show_notebook_path(None).await.expect("path");
         let external = env.nb_dir().parent().unwrap().join("external-target");
         std::fs::write(&external, b"external-original\n").unwrap();
-        #[cfg(unix)]
-        {
-            std::os::unix::fs::symlink(&external, root.join("link.md")).unwrap();
-            git_capture(&root, &["add", "-A"]);
-            git_capture(&root, &["commit", "-m", "symlink", "--no-gpg-sign"]);
-            let mut tx = client.transaction(None).await.expect("tx");
-            tx.add_note("other.md", None, "x\n", &[]).unwrap();
-            let err = tx.commit().await.expect_err("symlink");
-            assert!(
-                matches!(err, nb_api::NbError::UnsupportedStructure { .. })
-                    || matches!(err, nb_api::NbError::PlanValidation { .. }),
-                "{err:?}"
-            );
-            assert_eq!(std::fs::read(&external).unwrap(), b"external-original\n");
-        }
+        std::os::unix::fs::symlink(&external, root.join("link.md")).unwrap();
+        git_capture(&root, &["add", "-A"]);
+        git_capture(&root, &["commit", "-m", "symlink", "--no-gpg-sign"]);
+        let mut tx = client.transaction(None).await.expect("tx");
+        tx.add_note("other.md", None, "x\n", &[]).unwrap();
+        let err = tx.commit().await.expect_err("symlink");
+        assert!(
+            matches!(err, nb_api::NbError::UnsupportedStructure { .. })
+                || matches!(err, nb_api::NbError::PlanValidation { .. }),
+            "{err:?}"
+        );
+        assert_eq!(std::fs::read(&external).unwrap(), b"external-original\n");
     })
     .await;
 }

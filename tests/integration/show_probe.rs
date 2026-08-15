@@ -31,6 +31,11 @@ fn show_text(note: &nb_api::ShowNote) -> String {
 /// The public `NbClient::add_note` API does not expose a `--type` flag,
 /// but `nb add` accepts one. Tests that need an arbitrary extension
 /// use the fixture's `nb_command()` to invoke `nb add` directly.
+///
+/// Unix-only (like its callers): `nb add <notebook>:` is a
+/// qualified-selector operation nb 7.24.0 cannot run under Git Bash on
+/// Windows (see todos/api/9).
+#[cfg(unix)]
 fn add_note_with_type(
     env: &NbTestEnv,
     notebook: &str,
@@ -57,6 +62,11 @@ fn add_note_with_type(
     );
 }
 
+// Unix-only (these 10 probe tests): `nb show <notebook>:<selector>` and
+// `nb add --type <ext>` are qualified-selector operations. nb 7.24.0
+// interpolates the Windows notebook path into a bash `[[ =~ ]]` regex,
+// which fails under Git Bash with "trailing backslash" (see todos/api/9).
+#[cfg(unix)]
 #[tokio::test]
 async fn show_accepts_md_extension() {
     let env = NbTestEnv::new().expect("fixture initialization");
@@ -83,6 +93,7 @@ async fn show_accepts_md_extension() {
     .await;
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn show_accepts_txt_extension() {
     let env = NbTestEnv::new().expect("fixture initialization");
@@ -106,6 +117,7 @@ async fn show_accepts_txt_extension() {
     .await;
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn show_accepts_org_extension() {
     let env = NbTestEnv::new().expect("fixture initialization");
@@ -129,6 +141,7 @@ async fn show_accepts_org_extension() {
     .await;
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn show_accepts_text_extension() {
     let env = NbTestEnv::new().expect("fixture initialization");
@@ -152,6 +165,7 @@ async fn show_accepts_text_extension() {
     .await;
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn show_accepts_todo_via_md_extension() {
     // `*.todo.md` todo files are textual regardless of whether
@@ -185,6 +199,7 @@ async fn show_accepts_todo_via_md_extension() {
     .await;
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn show_accepts_source_data_markup_extensions() {
     // Source, data, and markup extensions (`json`, `py`, `rs`,
@@ -229,6 +244,7 @@ async fn show_accepts_source_data_markup_extensions() {
     .await;
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn show_accepts_uppercase_extension_via_native_classification() {
     // `nb` preserves the original case of the file extension. An
@@ -293,6 +309,7 @@ async fn show_accepts_extensionless_file() {
     .await;
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn show_rejects_audio_extension() {
     // Audio files are non-textual per `nb`'s classification.
@@ -328,6 +345,7 @@ async fn show_rejects_audio_extension() {
     .await;
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn show_rejects_zip_extension() {
     let env = NbTestEnv::new().expect("fixture initialization");
@@ -436,6 +454,7 @@ async fn show_probe_failure_falls_through_to_command_failed() {
 /// above cover each whitelist member in isolation; this one
 /// confirms the probe is cheap enough that adding many items does
 /// not regress.
+#[cfg(unix)]
 #[tokio::test]
 async fn show_probe_sweep_over_mixed_items() {
     let env = NbTestEnv::new().expect("fixture initialization");

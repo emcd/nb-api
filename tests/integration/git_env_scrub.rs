@@ -16,15 +16,22 @@
 
 use std::process::Command as StdCommand;
 
+#[cfg(unix)]
+use crate::common::with_isolated_env;
+use crate::common::{GIT_ROUTING_VARS, with_leaked_git_env};
 use nb_api::testing::NbTestEnv;
+#[cfg(unix)]
 use nb_api::{Config, NbClient};
-
-use crate::common::{GIT_ROUTING_VARS, with_isolated_env, with_leaked_git_env};
 
 /// Every `NbClient` public method funnels through `NbClient::exec`.
 /// A successful `nb status` (which internally invokes `git status` on
 /// the notebook's git repo) under a leaked `GIT_DIR=/poison` proves
 /// the spawn site stripped the poison before exec.
+///
+/// Unix-only: `show_notebook_status` spawns the qualified-selector
+/// `nb scratch: status`, which nb 7.24.0 cannot run under Git Bash on
+/// Windows (path-in-regex bug, see todos/api/9).
+#[cfg(unix)]
 #[tokio::test]
 async fn nb_client_exec_does_not_inherit_leaked_git_dir() {
     let env = NbTestEnv::new().expect("fixture initialization");

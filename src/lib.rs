@@ -22,6 +22,7 @@ mod git;
 mod git_env;
 mod git_signing;
 mod lines;
+mod nb_program;
 mod output;
 pub mod parser;
 pub(crate) mod tokenizer;

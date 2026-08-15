@@ -13,6 +13,16 @@
 //! (output-behavior specification) and
 //! `nb-api:proposals/add-0-2-0-foundation/designs/2` design
 //! note D2.
+//!
+//! # Windows
+//!
+//! Unix-only (`#![cfg(unix)]`). The list/folders tests spawn nb with
+//! qualified selectors (`nb list <nb>:` / `nb folders <nb>:`), which
+//! nb 7.24.0 cannot run under Git Bash on Windows (path-in-regex bug),
+//! and the `add_note`-based tests hit nb's background auto-checkpoint
+//! race. See `nb-api:todos/api/9`.
+
+#![cfg(unix)]
 
 use nb_api::testing::NbTestEnv;
 use nb_api::{Config, NbClient};
@@ -35,6 +45,10 @@ fn config_for(env: &NbTestEnv) -> Config {
     }
 }
 
+// Unix-only: list/folders spawn `nb list <notebook>:` and
+// `nb folders <notebook>:` qualified selectors; nb 7.24.0 breaks on the
+// Windows notebook path inside a bash `[[ =~ ]]` regex under Git Bash
+// (see todos/api/9). On Windows these commands exit 1 with empty output.
 #[tokio::test]
 async fn list_strips_hint_block_for_empty_notebook() {
     // Empty notebook (no notes). `nb ls` returns
@@ -186,6 +200,10 @@ async fn list_after_deleting_all_items_returns_clean_signal() {
     .await;
 }
 
+// Unix-only: this test drives `add_note`'s collect-then-commit
+// transaction; nb 7.24.0's background auto-checkpoint intermittently
+// races the transaction's dirty baseline check under Git Bash on
+// Windows (see todos/api/9).
 #[tokio::test]
 async fn show_does_not_apply_hint_block_sanitization() {
     // The sanitization helper is scoped to list-style methods.
@@ -237,7 +255,6 @@ async fn show_does_not_apply_hint_block_sanitization() {
 // separator. On non-Unix platforms the shim helper panics
 // at fixture setup, so these tests are gated accordingly.
 
-#[cfg(unix)]
 #[tokio::test]
 async fn list_preserves_lf_terminator_via_shim() {
     let env = NbTestEnv::new().expect("fixture initialization");
@@ -256,7 +273,6 @@ async fn list_preserves_lf_terminator_via_shim() {
     .await;
 }
 
-#[cfg(unix)]
 #[tokio::test]
 async fn list_preserves_crlf_terminator_via_shim() {
     let env = NbTestEnv::new().expect("fixture initialization");
@@ -276,7 +292,6 @@ async fn list_preserves_crlf_terminator_via_shim() {
     .await;
 }
 
-#[cfg(unix)]
 #[tokio::test]
 async fn list_preserves_signal_only_no_terminator_no_hint_via_shim() {
     // True no-terminator case: SHIM_OUTPUT is the bare signal
@@ -302,7 +317,6 @@ async fn list_preserves_signal_only_no_terminator_no_hint_via_shim() {
     .await;
 }
 
-#[cfg(unix)]
 #[tokio::test]
 async fn list_preserves_trailing_hint_without_final_newline_via_shim() {
     // Partial no-terminator case: signal IS terminated, but
@@ -325,7 +339,6 @@ async fn list_preserves_trailing_hint_without_final_newline_via_shim() {
     .await;
 }
 
-#[cfg(unix)]
 #[tokio::test]
 async fn list_no_recognized_marker_returns_input_unchanged_via_shim() {
     // Signal + blank separator, but NO recognized hint marker.
@@ -348,7 +361,6 @@ async fn list_no_recognized_marker_returns_input_unchanged_via_shim() {
     .await;
 }
 
-#[cfg(unix)]
 #[tokio::test]
 async fn list_no_blank_separator_returns_input_unchanged_via_shim() {
     // Signal with NO blank separator before content. The
@@ -369,7 +381,6 @@ async fn list_no_blank_separator_returns_input_unchanged_via_shim() {
     .await;
 }
 
-#[cfg(unix)]
 #[tokio::test]
 async fn folders_crlf_terminator_via_shim() {
     let env = NbTestEnv::new().expect("fixture initialization");

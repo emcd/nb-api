@@ -56,10 +56,11 @@
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::process::{Command as StdCommand, ExitStatus};
+use std::process::{Command as StdCommand, ExitStatus, Stdio};
 use std::sync::OnceLock;
 
 use crate::git_env::scrub_git_env_std;
+use crate::nb_program::nb_candidate_names;
 
 #[cfg(feature = "testing-tokio")]
 use tokio::process::Command as TokioCommand;
@@ -68,6 +69,57 @@ const DEFAULT_NOTEBOOK: &str = "scratch";
 
 const GIT_AUTHOR_NAME: &str = "nb-api tests";
 const GIT_AUTHOR_EMAIL: &str = "nb-api@localhost";
+
+/// Deterministic git configuration applied to every fixture-spawned git
+/// command, on top of the signing overrides. Forces `core.autocrlf=false`
+/// so notebook repos are byte-identical across platforms: Git-for-Windows
+/// defaults `autocrlf=true`, which renormalizes committed files to CRLF on
+/// checkout and makes a fresh nb init commit appear dirty to the
+/// transaction's baseline check (`nb-api:todos/api/9`, Windows CI finding).
+///
+/// Uses the `GIT_CONFIG_COUNT` mechanism so no global/`HOME` config file
+/// is needed (the fixture HOME is a tempdir anyway).
+fn apply_git_config_env(cmd: &mut impl GitEnvSetter) {
+    cmd.env("GIT_CONFIG_COUNT", "4");
+    cmd.env("GIT_CONFIG_KEY_0", "commit.gpgsign");
+    cmd.env("GIT_CONFIG_VALUE_0", "false");
+    cmd.env("GIT_CONFIG_KEY_1", "tag.gpgsign");
+    cmd.env("GIT_CONFIG_VALUE_1", "false");
+    cmd.env("GIT_CONFIG_KEY_2", "core.autocrlf");
+    cmd.env("GIT_CONFIG_VALUE_2", "false");
+    cmd.env("GIT_CONFIG_KEY_3", "core.eol");
+    cmd.env("GIT_CONFIG_VALUE_3", "lf");
+}
+
+/// Minimal surface shared by [`StdCommand`] and [`TokioCommand`] so the
+/// fixture's deterministic git-config env can be applied to both.
+trait GitEnvSetter {
+    fn env<K, V>(&mut self, key: K, value: V)
+    where
+        K: AsRef<std::ffi::OsStr>,
+        V: AsRef<std::ffi::OsStr>;
+}
+
+impl GitEnvSetter for StdCommand {
+    fn env<K, V>(&mut self, key: K, value: V)
+    where
+        K: AsRef<std::ffi::OsStr>,
+        V: AsRef<std::ffi::OsStr>,
+    {
+        StdCommand::env(self, key, value);
+    }
+}
+
+#[cfg(feature = "testing-tokio")]
+impl GitEnvSetter for TokioCommand {
+    fn env<K, V>(&mut self, key: K, value: V)
+    where
+        K: AsRef<std::ffi::OsStr>,
+        V: AsRef<std::ffi::OsStr>,
+    {
+        TokioCommand::env(self, key, value);
+    }
+}
 
 /// System / platform directories always injected into fixture child
 /// `PATH` so shebang interpreters (`env bash`) and common `nb`
@@ -126,13 +178,22 @@ fn discover_nb_binary() -> PathBuf {
         });
     }
 
-    let mut candidates: Vec<PathBuf> = SAFE_PATH_DIRS
-        .iter()
-        .map(|d| PathBuf::from(d).join("nb"))
-        .collect();
+    // Candidate file names per directory. On Windows this is the PATHEXT
+    // set (`nb.cmd`, `nb.exe`, …) because CreateProcess cannot spawn an
+    // extensionless bash script; on Unix it is the bare `nb`.
+    let names = nb_candidate_names();
+
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    for d in SAFE_PATH_DIRS {
+        for name in &names {
+            candidates.push(PathBuf::from(d).join(name));
+        }
+    }
 
     if let Some(home) = login_home_dir() {
-        candidates.push(home.join(".local/bin/nb"));
+        for name in &names {
+            candidates.push(home.join(".local/bin").join(name));
+        }
     }
 
     if let Some(path_var) = std::env::var_os("PATH") {
@@ -140,7 +201,9 @@ fn discover_nb_binary() -> PathBuf {
             if path_dir_looks_poisoned(&dir) || !dir.is_absolute() {
                 continue;
             }
-            candidates.push(dir.join("nb"));
+            for name in &names {
+                candidates.push(dir.join(name));
+            }
         }
     }
 
@@ -210,10 +273,27 @@ fn is_executable_file(path: &Path) -> bool {
         use std::os::unix::fs::PermissionsExt;
         meta.permissions().mode() & 0o111 != 0
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        // CreateProcess cannot spawn an extensionless bash script; only
+        // accept files with a PATHEXT-style executable extension
+        // (nb.cmd, nb.exe, nb.bat, nb.com). See `nb-api:todos/api/9`.
+        has_spawnable_windows_extension(path)
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         true
     }
+}
+
+/// True when `path`'s file name carries a CreateProcess-spawnable
+/// extension from the PATHEXT set (case-insensitive).
+#[cfg(windows)]
+fn has_spawnable_windows_extension(path: &Path) -> bool {
+    path.extension().is_some_and(|ext| {
+        let ext = ext.to_string_lossy().to_ascii_lowercase();
+        matches!(ext.as_str(), "com" | "exe" | "bat" | "cmd")
+    })
 }
 
 /// Login home for the current user (ignores env `HOME`, which tests
@@ -313,6 +393,7 @@ fn home_from_etc_passwd_uid() -> Option<PathBuf> {
 /// Traditional (7 fields): `name:pw:uid:gid:gecos:home:shell` → home @ 5.
 /// macOS `id -P` (10 fields):
 /// `name:pw:uid:gid:class:change:expire:gecos:home:shell` → home @ 8.
+#[cfg_attr(not(unix), allow(dead_code))]
 fn home_from_passwd_style_line(line: &str) -> Option<PathBuf> {
     let fields: Vec<&str> = line.trim().split(':').collect();
     let home = if fields.len() >= 10 {
@@ -330,6 +411,7 @@ fn home_from_passwd_style_line(line: &str) -> Option<PathBuf> {
 }
 
 /// Parse `dscl … NFSHomeDirectory` stdout.
+#[cfg_attr(not(unix), allow(dead_code))]
 fn parse_dscl_home(stdout: &str) -> Option<PathBuf> {
     for line in stdout.lines() {
         let line = line.trim();
@@ -666,11 +748,7 @@ impl NbTestEnv {
         cmd.env("GIT_AUTHOR_EMAIL", GIT_AUTHOR_EMAIL);
         cmd.env("GIT_COMMITTER_NAME", GIT_AUTHOR_NAME);
         cmd.env("GIT_COMMITTER_EMAIL", GIT_AUTHOR_EMAIL);
-        cmd.env("GIT_CONFIG_COUNT", "2");
-        cmd.env("GIT_CONFIG_KEY_0", "commit.gpgsign");
-        cmd.env("GIT_CONFIG_VALUE_0", "false");
-        cmd.env("GIT_CONFIG_KEY_1", "tag.gpgsign");
-        cmd.env("GIT_CONFIG_VALUE_1", "false");
+        apply_git_config_env(cmd);
         cmd.current_dir(&self.working_dir);
     }
 
@@ -686,21 +764,20 @@ impl NbTestEnv {
         cmd.env("GIT_AUTHOR_EMAIL", GIT_AUTHOR_EMAIL);
         cmd.env("GIT_COMMITTER_NAME", GIT_AUTHOR_NAME);
         cmd.env("GIT_COMMITTER_EMAIL", GIT_AUTHOR_EMAIL);
-        cmd.env("GIT_CONFIG_COUNT", "2");
-        cmd.env("GIT_CONFIG_KEY_0", "commit.gpgsign");
-        cmd.env("GIT_CONFIG_VALUE_0", "false");
-        cmd.env("GIT_CONFIG_KEY_1", "tag.gpgsign");
-        cmd.env("GIT_CONFIG_VALUE_1", "false");
+        apply_git_config_env(cmd);
         cmd.current_dir(&self.working_dir);
     }
 
     /// Convenience accessor: a fresh `std::process::Command` for `nb`
     /// with the fixture's environment applied. Uses the absolute
     /// [`nb_binary`] path so parent-process `PATH` poison cannot
-    /// prevent executable lookup (`issues/api/7`).
+    /// prevent executable lookup (`issues/api/7`). Stdin is nulled to
+    /// mirror the production [`NbClient::exec`](crate::NbClient) spawn
+    /// (prevents TTY hangs / interactive prompts).
     pub fn nb_command(&self) -> StdCommand {
         let mut cmd = StdCommand::new(nb_binary());
         self.configure_std(&mut cmd);
+        cmd.stdin(Stdio::null());
         cmd
     }
 
@@ -710,6 +787,7 @@ impl NbTestEnv {
     pub fn nb_command_async(&self) -> TokioCommand {
         let mut cmd = TokioCommand::new(nb_binary());
         self.configure_tokio(&mut cmd);
+        cmd.stdin(Stdio::null());
         cmd
     }
 
@@ -764,11 +842,8 @@ impl NbTestEnv {
         cmd.env("GIT_AUTHOR_EMAIL", GIT_AUTHOR_EMAIL);
         cmd.env("GIT_COMMITTER_NAME", GIT_AUTHOR_NAME);
         cmd.env("GIT_COMMITTER_EMAIL", GIT_AUTHOR_EMAIL);
-        cmd.env("GIT_CONFIG_COUNT", "2");
-        cmd.env("GIT_CONFIG_KEY_0", "commit.gpgsign");
-        cmd.env("GIT_CONFIG_VALUE_0", "false");
-        cmd.env("GIT_CONFIG_KEY_1", "tag.gpgsign");
-        cmd.env("GIT_CONFIG_VALUE_1", "false");
+        apply_git_config_env(&mut cmd);
+        cmd.stdin(Stdio::null()); // Prevent TTY hangs (mirrors NbClient::exec)
         cmd.current_dir(&self.working_dir);
         cmd.arg("notebooks").arg("add").arg(&self.notebook);
         let output = cmd.output().map_err(|e| NbTestError::Io {
@@ -802,6 +877,204 @@ impl NbTestEnv {
                 source: e,
             }
         })?;
+
+        // Ensure a clean committed baseline. nb's `_git checkpoint` runs
+        // the init commit in a background subshell (`( ... ) &`). When nb
+        // is spawned through a `.cmd` launcher (Windows), that orphaned
+        // commit is torn down when the wrapper exits, leaving `.index`
+        // untracked and every later `Transaction::commit` rejected with
+        // `DirtyBaseline`. Run the commit synchronously ourselves with
+        // the fixture's deterministic git env so the baseline is identical
+        // on Unix and Windows. See `nb-api:todos/api/9`.
+        //
+        // `git` resolves through the inherited process PATH (as in
+        // `crate::git::git_capture`); the fixture child PATH only carries
+        // nb's dir + system dirs and would not locate git on Windows.
+        // If git cannot spawn (poisoned process PATH, issues/api/7), the
+        // baseline is skipped — the poisoned test never runs a
+        // transaction, so a missing baseline is harmless there.
+        let notebook_root = self.nb_dir.join(&self.notebook);
+        let baseline_result: Result<(), NbTestError> = (|| {
+            // Write the notebook repo's LOCAL config so every subsequent
+            // git invocation (including production `git::git_capture`,
+            // which scrubs GIT_CONFIG_* env) sees byte-identical LF
+            // handling. The GIT_CONFIG_COUNT env override only reaches
+            // fixture-spawned commands; repo-local config persists.
+            // See `nb-api:todos/api/9`.
+            let mut git_config = StdCommand::new("git");
+            scrub_git_env_std(&mut git_config);
+            git_config.env("HOME", &self.home_dir);
+            apply_git_config_env(&mut git_config);
+            git_config.current_dir(&notebook_root);
+            git_config.args(["config", "core.autocrlf", "false"]);
+            let cfg = git_config.output().map_err(|e| NbTestError::Io {
+                context: format!(
+                    "fixture baseline `git config core.autocrlf false` in {}",
+                    notebook_root.display()
+                ),
+                source: e,
+            })?;
+            if !cfg.status.success() {
+                let stdout = String::from_utf8_lossy(&cfg.stdout).into_owned();
+                let stderr = String::from_utf8_lossy(&cfg.stderr).into_owned();
+                return Err(NbTestError::Nb {
+                    context: format!(
+                        "fixture baseline `git config core.autocrlf false` in {}",
+                        notebook_root.display()
+                    ),
+                    failure: NbFailure {
+                        status: cfg.status,
+                        stdout,
+                        stderr,
+                    },
+                });
+            }
+            // nb 7.24.0 fires the notebook's init commit in a background
+            // subshell (`( _git_checkpoint_commit ... ) &`). Under the
+            // Git Bash `.cmd` launcher on Windows that orphaned git can
+            // keep staging `.index` after our synchronous baseline commit,
+            // racing the first `Transaction::commit`'s dirty check
+            // (intermittent `DirtyBaseline` — see todos/api/9). Settle by
+            // re-committing until the worktree/index is verifiably clean.
+            // The window is generous (up to ~2.5s) because on Windows the
+            // orphaned background git can be delayed by job teardown.
+            let mut consecutive_clean = 0u32;
+            for _ in 0..50 {
+                let mut status = StdCommand::new("git");
+                scrub_git_env_std(&mut status);
+                status.env("HOME", &self.home_dir);
+                apply_git_config_env(&mut status);
+                status.current_dir(&notebook_root);
+                status.args(["status", "--porcelain", "-uall", "--ignored=no"]);
+                let status_out = status.output().map_err(|e| NbTestError::Io {
+                    context: format!(
+                        "fixture baseline `git status --porcelain` in {}",
+                        notebook_root.display()
+                    ),
+                    source: e,
+                })?;
+                if !status_out.status.success() {
+                    let stdout = String::from_utf8_lossy(&status_out.stdout).into_owned();
+                    let stderr = String::from_utf8_lossy(&status_out.stderr).into_owned();
+                    return Err(NbTestError::Nb {
+                        context: format!(
+                            "fixture baseline `git status --porcelain` in {}",
+                            notebook_root.display()
+                        ),
+                        failure: NbFailure {
+                            status: status_out.status,
+                            stdout,
+                            stderr,
+                        },
+                    });
+                }
+                let dirty = !String::from_utf8_lossy(&status_out.stdout)
+                    .trim()
+                    .is_empty();
+                if !dirty {
+                    // Require two consecutive clean checks so an orphaned
+                    // nb background git that has NOT yet staged `.index`
+                    // cannot slip in after a single clean observation
+                    // (Windows CI DirtyBaseline flake, see todos/api/9).
+                    consecutive_clean += 1;
+                    if consecutive_clean >= 2 {
+                        return Ok(());
+                    }
+                } else {
+                    consecutive_clean = 0;
+                }
+
+                let mut git = StdCommand::new("git");
+                scrub_git_env_std(&mut git);
+                git.env("HOME", &self.home_dir);
+                git.env("GIT_AUTHOR_NAME", GIT_AUTHOR_NAME);
+                git.env("GIT_AUTHOR_EMAIL", GIT_AUTHOR_EMAIL);
+                git.env("GIT_COMMITTER_NAME", GIT_AUTHOR_NAME);
+                git.env("GIT_COMMITTER_EMAIL", GIT_AUTHOR_EMAIL);
+                apply_git_config_env(&mut git);
+                git.current_dir(&notebook_root);
+                git.arg("add").arg("-A");
+                let add = git.output().map_err(|e| NbTestError::Io {
+                    context: format!(
+                        "fixture baseline `git add -A` in {}",
+                        notebook_root.display()
+                    ),
+                    source: e,
+                })?;
+                if !add.status.success() {
+                    let stdout = String::from_utf8_lossy(&add.stdout).into_owned();
+                    let stderr = String::from_utf8_lossy(&add.stderr).into_owned();
+                    return Err(NbTestError::Nb {
+                        context: format!(
+                            "fixture baseline `git add -A` in {}",
+                            notebook_root.display()
+                        ),
+                        failure: NbFailure {
+                            status: add.status,
+                            stdout,
+                            stderr,
+                        },
+                    });
+                }
+                let mut git_commit = StdCommand::new("git");
+                scrub_git_env_std(&mut git_commit);
+                git_commit.env("HOME", &self.home_dir);
+                git_commit.env("GIT_AUTHOR_NAME", GIT_AUTHOR_NAME);
+                git_commit.env("GIT_AUTHOR_EMAIL", GIT_AUTHOR_EMAIL);
+                git_commit.env("GIT_COMMITTER_NAME", GIT_AUTHOR_NAME);
+                git_commit.env("GIT_COMMITTER_EMAIL", GIT_AUTHOR_EMAIL);
+                apply_git_config_env(&mut git_commit);
+                git_commit.current_dir(&notebook_root);
+                git_commit.args(["commit", "-m", "[nb] Initialize"]);
+                let commit = git_commit.output().map_err(|e| NbTestError::Io {
+                    context: format!(
+                        "fixture baseline `git commit` in {}",
+                        notebook_root.display()
+                    ),
+                    source: e,
+                })?;
+                if !commit.status.success() {
+                    // A `nothing to commit` exit is not an error; the
+                    // settle loop re-checks status next iteration. Git
+                    // may write the message to stdout or stderr.
+                    let stdout = String::from_utf8_lossy(&commit.stdout);
+                    let stderr = String::from_utf8_lossy(&commit.stderr);
+                    if !stdout.contains("nothing to commit")
+                        && !stderr.contains("nothing to commit")
+                    {
+                        return Err(NbTestError::Nb {
+                            context: format!(
+                                "fixture baseline `git commit` in {}",
+                                notebook_root.display()
+                            ),
+                            failure: NbFailure {
+                                status: commit.status,
+                                stdout: stdout.into_owned(),
+                                stderr: stderr.into_owned(),
+                            },
+                        });
+                    }
+                }
+                // Let nb's background checkpoint finish before re-checking.
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(NbTestError::Io {
+                context: format!(
+                    "fixture baseline did not settle clean in {}",
+                    notebook_root.display()
+                ),
+                source: std::io::Error::other("notebook repo never reached a clean baseline"),
+            })
+        })();
+        if let Err(NbTestError::Io { source, .. }) = &baseline_result
+            && source.kind() == std::io::ErrorKind::NotFound
+        {
+            // Poisoned process PATH (issues/api/7): git unresolvable,
+            // baseline intentionally skipped.
+            tracing::debug!("fixture baseline skipped: git not on process PATH");
+        } else {
+            baseline_result?;
+        }
 
         Ok(())
     }
