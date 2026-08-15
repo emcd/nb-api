@@ -931,17 +931,9 @@ impl NbTestEnv {
             // racing the first `Transaction::commit`'s dirty check
             // (intermittent `DirtyBaseline` — see todos/api/9). Settle by
             // re-committing until the worktree/index is verifiably clean.
-            let mut settle = StdCommand::new("git");
-            scrub_git_env_std(&mut settle);
-            settle.env("HOME", &self.home_dir);
-            settle.env("GIT_AUTHOR_NAME", GIT_AUTHOR_NAME);
-            settle.env("GIT_AUTHOR_EMAIL", GIT_AUTHOR_EMAIL);
-            settle.env("GIT_COMMITTER_NAME", GIT_AUTHOR_NAME);
-            settle.env("GIT_COMMITTER_EMAIL", GIT_AUTHOR_EMAIL);
-            apply_git_config_env(&mut settle);
-            settle.current_dir(&notebook_root);
-
-            for _ in 0..10 {
+            // The window is generous (up to ~2.5s) because on Windows the
+            // orphaned background git can be delayed by job teardown.
+            for _ in 0..50 {
                 let mut status = StdCommand::new("git");
                 scrub_git_env_std(&mut status);
                 status.env("HOME", &self.home_dir);
