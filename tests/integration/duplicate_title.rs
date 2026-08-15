@@ -17,6 +17,19 @@
 //! duplicate title H1 in note body" and "Validation runs before
 //! any state-mutating call") and
 //! `nb-api:proposals/add-0-2-0-foundation/designs/2` design note D5.
+//!
+//! # Windows
+//!
+//! Module is Unix-only (`#![cfg(unix)]`). Every test exercises the
+//! `add_note` collect-then-commit transaction path, which resolves the
+//! notebook through `nb` (and whose commits race nb 7.24.0's background
+//! auto-checkpoint under the Git Bash `.cmd` launcher, intermittently
+//! leaving the notebook dirty for the baseline check). This is the
+//! nb-under-Git-Bash path bug documented in `nb-api:todos/api/9`, not a
+//! nb-api defect. The stable Windows live-nb surface (fixture init,
+//! `notebooks show --path`, direct git ops) is covered elsewhere.
+
+#![cfg(unix)]
 
 use nb_api::testing::NbTestEnv;
 use nb_api::{Config, NbClient, NbError};
@@ -396,11 +409,6 @@ async fn add_rejects_h1_with_tab_delimiter() {
     .await;
 }
 
-// Unix-only: `add_note` runs `nb notebooks show --path` during the
-// transaction baseline; nb 7.24.0 interpolates the Windows notebook
-// path into a bash `[[ =~ ]]` regex, which fails under Git Bash with
-// "trailing backslash", leaving the notebook dirty. See todos/api/9.
-#[cfg(unix)]
 #[tokio::test]
 async fn add_allows_4_space_indented_line() {
     // Per CommonMark, 4+ leading spaces is an indented code
@@ -449,11 +457,6 @@ async fn add_rejects_literal_trailing_hash() {
     .await;
 }
 
-// Unix-only: `add_note`'s transaction resolves the notebook by spawning
-// `nb notebooks show <nb> --path`; nb's background auto-checkpoint races
-// the .cmd launcher teardown on Windows, intermittently leaving the
-// notebook dirty for the baseline check (see todos/api/9).
-#[cfg(unix)]
 #[tokio::test]
 async fn add_allows_blank_h1_with_closing_hash() {
     // Per CommonMark, a closing-hash sequence can consume the
@@ -479,7 +482,6 @@ async fn add_allows_blank_h1_with_closing_hash() {
     .await;
 }
 
-#[cfg(unix)]
 #[tokio::test]
 async fn add_allows_blank_h1_with_multi_closing_hashes() {
     // Same as above but with a multi-hash closing sequence.
