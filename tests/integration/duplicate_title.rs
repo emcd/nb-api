@@ -449,6 +449,11 @@ async fn add_rejects_literal_trailing_hash() {
     .await;
 }
 
+// Unix-only: `add_note`'s transaction resolves the notebook by spawning
+// `nb notebooks show <nb> --path`; nb's background auto-checkpoint races
+// the .cmd launcher teardown on Windows, intermittently leaving the
+// notebook dirty for the baseline check (see todos/api/9).
+#[cfg(unix)]
 #[tokio::test]
 async fn add_allows_blank_h1_with_closing_hash() {
     // Per CommonMark, a closing-hash sequence can consume the
@@ -474,6 +479,7 @@ async fn add_allows_blank_h1_with_closing_hash() {
     .await;
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn add_allows_blank_h1_with_multi_closing_hashes() {
     // Same as above but with a multi-hash closing sequence.
