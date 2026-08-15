@@ -396,6 +396,11 @@ async fn add_rejects_h1_with_tab_delimiter() {
     .await;
 }
 
+// Unix-only: `add_note` runs `nb notebooks show --path` during the
+// transaction baseline; nb 7.24.0 interpolates the Windows notebook
+// path into a bash `[[ =~ ]]` regex, which fails under Git Bash with
+// "trailing backslash", leaving the notebook dirty. See todos/api/9.
+#[cfg(unix)]
 #[tokio::test]
 async fn add_allows_4_space_indented_line() {
     // Per CommonMark, 4+ leading spaces is an indented code

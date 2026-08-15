@@ -35,6 +35,11 @@ fn config_for(env: &NbTestEnv) -> Config {
     }
 }
 
+// Unix-only: list/folders spawn `nb list <notebook>:` and
+// `nb folders <notebook>:` qualified selectors; nb 7.24.0 breaks on the
+// Windows notebook path inside a bash `[[ =~ ]]` regex under Git Bash
+// (see todos/api/9). On Windows these commands exit 1 with empty output.
+#[cfg(unix)]
 #[tokio::test]
 async fn list_strips_hint_block_for_empty_notebook() {
     // Empty notebook (no notes). `nb ls` returns
@@ -56,6 +61,7 @@ async fn list_strips_hint_block_for_empty_notebook() {
     .await;
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn list_returns_full_output_for_non_empty_notebook() {
     let env = NbTestEnv::new().expect("fixture initialization");
@@ -87,6 +93,7 @@ async fn list_returns_full_output_for_non_empty_notebook() {
     .await;
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn folders_strips_hint_block_for_empty_folders() {
     let env = NbTestEnv::new().expect("fixture initialization");
@@ -102,6 +109,7 @@ async fn folders_strips_hint_block_for_empty_folders() {
     .await;
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn folders_returns_full_output_for_non_empty_folders() {
     let env = NbTestEnv::new().expect("fixture initialization");
@@ -124,6 +132,7 @@ async fn folders_returns_full_output_for_non_empty_folders() {
     .await;
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn list_and_folders_sweep_sanity() {
     // Sanity check that the sanitization is consistent across
@@ -163,6 +172,7 @@ async fn list_and_folders_sweep_sanity() {
     .await;
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn list_after_deleting_all_items_returns_clean_signal() {
     // Sanity: delete all items then re-list; should be clean.
