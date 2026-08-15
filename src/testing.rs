@@ -56,7 +56,7 @@
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::process::{Command as StdCommand, ExitStatus};
+use std::process::{Command as StdCommand, ExitStatus, Stdio};
 use std::sync::OnceLock;
 
 use crate::git_env::scrub_git_env_std;
@@ -771,10 +771,13 @@ impl NbTestEnv {
     /// Convenience accessor: a fresh `std::process::Command` for `nb`
     /// with the fixture's environment applied. Uses the absolute
     /// [`nb_binary`] path so parent-process `PATH` poison cannot
-    /// prevent executable lookup (`issues/api/7`).
+    /// prevent executable lookup (`issues/api/7`). Stdin is nulled to
+    /// mirror the production [`NbClient::exec`](crate::NbClient) spawn
+    /// (prevents TTY hangs / interactive prompts).
     pub fn nb_command(&self) -> StdCommand {
         let mut cmd = StdCommand::new(nb_binary());
         self.configure_std(&mut cmd);
+        cmd.stdin(Stdio::null());
         cmd
     }
 
@@ -784,6 +787,7 @@ impl NbTestEnv {
     pub fn nb_command_async(&self) -> TokioCommand {
         let mut cmd = TokioCommand::new(nb_binary());
         self.configure_tokio(&mut cmd);
+        cmd.stdin(Stdio::null());
         cmd
     }
 
@@ -839,6 +843,7 @@ impl NbTestEnv {
         cmd.env("GIT_COMMITTER_NAME", GIT_AUTHOR_NAME);
         cmd.env("GIT_COMMITTER_EMAIL", GIT_AUTHOR_EMAIL);
         apply_git_config_env(&mut cmd);
+        cmd.stdin(Stdio::null()); // Prevent TTY hangs (mirrors NbClient::exec)
         cmd.current_dir(&self.working_dir);
         cmd.arg("notebooks").arg("add").arg(&self.notebook);
         let output = cmd.output().map_err(|e| NbTestError::Io {
