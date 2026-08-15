@@ -938,6 +938,7 @@ impl NbTestEnv {
             // re-committing until the worktree/index is verifiably clean.
             // The window is generous (up to ~2.5s) because on Windows the
             // orphaned background git can be delayed by job teardown.
+            let mut consecutive_clean = 0u32;
             for _ in 0..50 {
                 let mut status = StdCommand::new("git");
                 scrub_git_env_std(&mut status);
@@ -971,7 +972,16 @@ impl NbTestEnv {
                     .trim()
                     .is_empty();
                 if !dirty {
-                    return Ok(());
+                    // Require two consecutive clean checks so an orphaned
+                    // nb background git that has NOT yet staged `.index`
+                    // cannot slip in after a single clean observation
+                    // (Windows CI DirtyBaseline flake, see todos/api/9).
+                    consecutive_clean += 1;
+                    if consecutive_clean >= 2 {
+                        return Ok(());
+                    }
+                } else {
+                    consecutive_clean = 0;
                 }
 
                 let mut git = StdCommand::new("git");
