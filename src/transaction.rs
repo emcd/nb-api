@@ -13,7 +13,7 @@ use crate::lines::{
     apply_line_edits, apply_substring, require_contiguous_body, splice_body, splice_title,
 };
 use crate::parser::{DocumentKind, NoteDocument, ParseContext, parse};
-use crate::types::{ByteString, CommitOutcome, LineEdit, NoteTarget, Occurrence, OpOutcome};
+use crate::types::{CommitOutcome, LineEdit, NoteTarget, Occurrence, OpOutcome};
 
 /// In-memory plan bound to one notebook. Drop discards; no begin/rollback.
 pub struct Transaction {
@@ -65,13 +65,13 @@ enum PlanOp {
     },
     ReplaceNoteBody {
         target: NoteTarget,
-        new_body: Vec<u8>,
+        new_body: String,
         fingerprint: Fingerprint,
     },
     EditNoteSubstring {
         target: NoteTarget,
-        pattern: Vec<u8>,
-        replacement: Vec<u8>,
+        pattern: String,
+        replacement: String,
         occurrence: Occurrence,
         expected_count: u32,
         fingerprint: Option<Fingerprint>,
@@ -82,7 +82,7 @@ enum PlanOp {
     },
     RetitleNote {
         target: NoteTarget,
-        title: Vec<u8>,
+        title: String,
     },
     EditNoteTags {
         target: NoteTarget,
@@ -327,13 +327,13 @@ impl Transaction {
     pub fn replace_note_body(
         &mut self,
         target: NoteTarget,
-        new_body: impl AsRef<[u8]>,
+        new_body: &str,
         fingerprint: Fingerprint,
     ) -> Result<(), NbError> {
         validate_target(&target)?;
         self.plan.push(PlanOp::ReplaceNoteBody {
             target,
-            new_body: new_body.as_ref().to_vec(),
+            new_body: new_body.to_string(),
             fingerprint,
         });
         Ok(())
@@ -342,20 +342,20 @@ impl Transaction {
     pub fn edit_note_substring(
         &mut self,
         target: NoteTarget,
-        pattern: impl AsRef<[u8]>,
-        replacement: impl AsRef<[u8]>,
+        pattern: &str,
+        replacement: &str,
         occurrence: Occurrence,
         expected_count: u32,
         fingerprint: Option<Fingerprint>,
     ) -> Result<(), NbError> {
         validate_target(&target)?;
-        if pattern.as_ref().is_empty() {
+        if pattern.is_empty() {
             return Err(NbError::EmptySubstringPattern);
         }
         self.plan.push(PlanOp::EditNoteSubstring {
             target,
-            pattern: pattern.as_ref().to_vec(),
-            replacement: replacement.as_ref().to_vec(),
+            pattern: pattern.to_string(),
+            replacement: replacement.to_string(),
             occurrence,
             expected_count,
             fingerprint,
@@ -379,15 +379,11 @@ impl Transaction {
         Ok(())
     }
 
-    pub fn retitle_note(
-        &mut self,
-        target: NoteTarget,
-        title: impl AsRef<[u8]>,
-    ) -> Result<(), NbError> {
+    pub fn retitle_note(&mut self, target: NoteTarget, title: &str) -> Result<(), NbError> {
         validate_target(&target)?;
         self.plan.push(PlanOp::RetitleNote {
             target,
-            title: title.as_ref().to_vec(),
+            title: title.to_string(),
         });
         Ok(())
     }
@@ -527,6 +523,7 @@ impl Transaction {
                         index: i as u32,
                         path: meta.path,
                         selector: meta.selector,
+                        numeric_id: None,
                         noop: meta.noop,
                         fingerprint: meta.fingerprint,
                     })
@@ -1073,7 +1070,7 @@ fn validate_and_apply_virtual(
                     guidance: "body fingerprint does not match; re-read and retry".into(),
                 });
             }
-            let new_bytes = splice_body(&doc, new_body)?;
+            let new_bytes = splice_body(&doc, new_body.as_bytes())?;
             let fp = fingerprint_bytes(&new_bytes, &path)?;
             let noop = new_bytes == bytes;
             tree.insert_file(path.clone(), new_bytes);
@@ -1110,8 +1107,13 @@ fn validate_and_apply_virtual(
                     });
                 }
             }
-            let new_body =
-                apply_substring(&body, pattern, replacement, occurrence, *expected_count)?;
+            let new_body = apply_substring(
+                &body,
+                pattern.as_bytes(),
+                replacement.as_bytes(),
+                occurrence,
+                *expected_count,
+            )?;
             let new_bytes = splice_body(&doc, &new_body)?;
             let fp = fingerprint_bytes(&new_bytes, &path)?;
             let noop = new_bytes == bytes;
@@ -1155,12 +1157,10 @@ fn validate_and_apply_virtual(
                 .to_vec();
             let doc = parse_doc(&bytes, &path)?;
             let mut title_line = title.clone();
-            if !title_line.starts_with(b"#") {
-                let mut prefixed = b"# ".to_vec();
-                prefixed.extend_from_slice(&title_line);
-                title_line = prefixed;
+            if !title_line.starts_with('#') {
+                title_line = format!("# {title_line}");
             }
-            let new_bytes = splice_title(&doc, &title_line)?;
+            let new_bytes = splice_title(&doc, title_line.as_bytes())?;
             let fp = fingerprint_bytes(&new_bytes, &path)?;
             let noop = new_bytes == bytes;
             tree.insert_file(path.clone(), new_bytes);
@@ -1765,10 +1765,4 @@ pub(crate) fn join_folder_file(folder: Option<&str>, filename: &str) -> String {
         }
         _ => filename.to_string(),
     }
-}
-
-// Silence unused import warning if ByteString only used in tests later.
-#[allow(dead_code)]
-fn _bytestring_touch(b: ByteString) -> ByteString {
-    b
 }

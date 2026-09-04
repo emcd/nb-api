@@ -1,5 +1,5 @@
 use nb_api::{
-    BoundaryAt, ByteString, LineEdit, LinePosition, LineRef, NoteTarget, Occurrence, SearchMode,
+    BoundaryAt, LineEdit, LineEol, LinePosition, LineRef, NoteTarget, Occurrence, SearchMode,
     TaskStatus,
 };
 
@@ -17,11 +17,15 @@ fn note_target_path_and_selector_wire() {
 }
 
 #[test]
-fn byte_string_preserves_non_utf8() {
-    let b = ByteString::from_bytes([0xff, 0x0a]);
-    let json = serde_json::to_string(&b).unwrap();
-    let back: ByteString = serde_json::from_str(&json).unwrap();
-    assert_eq!(back.as_bytes().unwrap(), vec![0xff, 0x0a]);
+fn show_note_is_text_first_no_bytestring() {
+    // 0.4.0: body/source are JSON strings, not `{base64}` objects.
+    let json = r##"{"selector":"nb:a.md","path":"a.md","kind":"note","todo_state":null,"title":"# T\n","title_text":"T","tags":[],"body_fragments":[{"index":0,"bytes":"hi\n","start_byte":4,"end_byte":7}],"body_contiguous":true,"body":"hi\n","fingerprint":"b3:0000000000000000000000000000000000000000000000000000000000000000","source":"# T\nhi\n"}"##;
+    let note: nb_api::ShowNote = serde_json::from_str(json).unwrap();
+    assert_eq!(note.body, "hi\n");
+    assert_eq!(note.body_fragments[0].start_byte, 4);
+    // Old base64 object form is rejected.
+    let old = r##"{"selector":"nb:a.md","path":"a.md","kind":"note","todo_state":null,"title":null,"title_text":null,"tags":[],"body_fragments":[],"body_contiguous":true,"body":{"base64":"aGk="},"fingerprint":"b3:0000000000000000000000000000000000000000000000000000000000000000","source":{"base64":"aGk="}}"##;
+    assert!(serde_json::from_str::<nb_api::ShowNote>(old).is_err());
 }
 
 #[test]
@@ -30,9 +34,10 @@ fn occurrence_and_line_edit_round_trip() {
         at: LinePosition::Boundary {
             at: BoundaryAt::Dollar,
         },
-        content: ByteString::from_bytes(b"x\n"),
+        content: "x".to_string(),
     };
     let json = serde_json::to_string(&edit).unwrap();
+    assert!(json.contains(r#""content":"x""#));
     let back: LineEdit = serde_json::from_str(&json).unwrap();
     assert_eq!(edit, back);
 
@@ -53,6 +58,23 @@ fn line_ref_preserves_anchor_string() {
     let json = serde_json::to_string(&r).unwrap();
     let back: LineRef = serde_json::from_str(&json).unwrap();
     assert_eq!(back.anchor.as_str(), anchor.as_str());
+}
+
+#[test]
+fn note_line_has_no_terminator_and_ignores_unknown_fields() {
+    let anchor = "b3l1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let json =
+        format!(r#"{{"number":1,"anchor":"{anchor}","text":"hi","terminator":"lf","extra":1}}"#);
+    let line: nb_api::NoteLine = serde_json::from_str(&json).unwrap();
+    assert_eq!(line.text, "hi");
+    let ser = serde_json::to_string(&line).unwrap();
+    assert!(!ser.contains("terminator"));
+}
+
+#[test]
+fn line_eol_serde_lowercase() {
+    assert_eq!(serde_json::to_string(&LineEol::Lf).unwrap(), "\"lf\"");
+    assert_eq!(serde_json::to_string(&LineEol::CrLf).unwrap(), "\"crlf\"");
 }
 
 #[test]

@@ -21,15 +21,15 @@ use crate::git::derive_git_notebook_name;
 use crate::git_env::scrub_git_env;
 use crate::git_signing::apply_git_signing_env;
 use crate::lines::{
-    note_line_from_body_line, require_contiguous_body, search_lines, split_body_lines,
+    document_lines, note_line_from_body_line, require_contiguous_body, search_lines,
 };
 use crate::nb_program::nb_program;
 use crate::output::strip_empty_result_hint;
 use crate::parser::{ParseContext, parse};
 use crate::transaction::{self, Transaction};
 use crate::types::{
-    BodyFragment, ByteString, CommitOutcome, LineEdit, NoteTarget, Occurrence, SearchNoteLines,
-    ShowNote, ShowNoteLines,
+    BodyFragment, CommitOutcome, LineEdit, NoteTarget, Occurrence, SearchNoteLines, ShowNote,
+    ShowNoteLines,
 };
 use crate::validate::{
     detect_duplicate_title_heading, parse_qualified_selector, validate_destination,
@@ -509,16 +509,35 @@ impl NbClient {
             }
             Err(err) => return Err(err),
         };
-        let fragments: Vec<BodyFragment> = doc
-            .body()
-            .enumerate()
-            .map(|(i, bytes)| BodyFragment {
+        let kind_str = format!("{:?}", doc.kind()).to_lowercase();
+        let non_utf8 = |path: String| NbError::NonUtf8 {
+            selector: selector.to_string(),
+            path,
+            kind: kind_str.clone(),
+            mime_hint: None,
+        };
+        let source_str = std::str::from_utf8(&source)
+            .map_err(|_| non_utf8(rel.clone()))?
+            .to_string();
+        // Fragment offsets into `source`: body_ranges are source-absolute.
+        let ranges = doc.body_ranges();
+        let mut fragments: Vec<BodyFragment> = Vec::with_capacity(ranges.len());
+        for (i, span) in ranges.iter().enumerate() {
+            let bytes = std::str::from_utf8(&source[span.clone()])
+                .map_err(|_| non_utf8(rel.clone()))?
+                .to_string();
+            fragments.push(BodyFragment {
                 index: i as u32,
-                bytes: ByteString::from_bytes(bytes),
-            })
-            .collect();
+                bytes,
+                start_byte: span.start as u32,
+                end_byte: span.end as u32,
+            });
+        }
         let body_contiguous = fragments.len() <= 1;
         let body_bytes = doc.body_bytes();
+        let body = std::str::from_utf8(&body_bytes)
+            .map_err(|_| non_utf8(rel.clone()))?
+            .to_string();
         // Lossy convenience strings; raw title bytes remain authoritative.
         let tags: Vec<String> = doc
             .tags()
@@ -528,7 +547,11 @@ impl NbClient {
                     .to_string()
             })
             .collect();
-        let title = doc.title().map(ByteString::from_bytes);
+        let title = doc
+            .title()
+            .map(|bytes| std::str::from_utf8(bytes).map(str::to_string))
+            .transpose()
+            .map_err(|_| non_utf8(rel.clone()))?;
         let title_text = doc.title().map(|bytes| {
             let s = String::from_utf8_lossy(bytes);
             s.trim_end_matches('\n')
@@ -546,10 +569,31 @@ impl NbClient {
             tags,
             body_fragments: fragments,
             body_contiguous,
-            body: ByteString::from_bytes(body_bytes),
+            body,
             fingerprint: fingerprint::fingerprint(&doc),
-            source: ByteString::from_bytes(source),
+            source: source_str,
+            numeric_id: None,
         })
+    }
+
+    /// Raw-bytes escape hatch: full file bytes without UTF-8 validation.
+    ///
+    /// This is the only public read that returns `Vec<u8>`; every other
+    /// structured read is text-only and returns `NonUtf8` on invalid UTF-8.
+    pub async fn read_note_source_bytes(
+        &self,
+        target: NoteTarget,
+        notebook: Option<&str>,
+    ) -> Result<Vec<u8>, NbError> {
+        let (notebook, selector) = self.resolve_note_target(&target, notebook).await?;
+        self.with_notebook_gate(&notebook, async {
+            let path = self.resolve_item_path(&selector).await?;
+            std::fs::read(&path).map_err(|e| NbError::Io {
+                path: path.clone(),
+                source: e.into(),
+            })
+        })
+        .await
     }
 
     /// Enumerate body lines for a contiguous-body note.
@@ -563,10 +607,10 @@ impl NbClient {
         let (notebook, selector) = self.resolve_note_target(&target, notebook).await?;
         self.with_notebook_gate(&notebook, async {
             let shown = self.show_note_inner(&notebook, &selector).await?;
-            let source = shown.source.as_bytes()?;
+            let source = shown.source.as_bytes().to_vec();
             let doc = parse(&source, ParseContext::FromPath(PathBuf::from(&shown.path)))?;
             let body = require_contiguous_body(&doc)?;
-            let lines = split_body_lines(&body);
+            let (eol, has_final_eol, lines) = document_lines(&body);
             let total_lines = lines.len() as u32;
             let offset = offset.unwrap_or(1);
             let limit = limit.unwrap_or(100);
@@ -597,6 +641,9 @@ impl NbClient {
                     title: shown.title,
                     tags: shown.tags,
                     body_fingerprint: shown.fingerprint,
+                    eol: None,
+                    has_final_eol: false,
+                    numeric_id: shown.numeric_id,
                 });
             }
             if offset > total_lines + 1 {
@@ -629,25 +676,28 @@ impl NbClient {
                 title: shown.title,
                 tags: shown.tags,
                 body_fingerprint: shown.fingerprint,
+                eol,
+                has_final_eol,
+                numeric_id: shown.numeric_id,
             })
         })
         .await
     }
 
-    /// Search body line texts for a byte pattern (contiguous body only).
+    /// Search body line texts for a pattern (contiguous body only).
     pub async fn search_note_lines(
         &self,
         target: NoteTarget,
-        pattern: &[u8],
+        pattern: &str,
         notebook: Option<&str>,
     ) -> Result<SearchNoteLines, NbError> {
         let (notebook, selector) = self.resolve_note_target(&target, notebook).await?;
         self.with_notebook_gate(&notebook, async {
             let shown = self.show_note_inner(&notebook, &selector).await?;
-            let source = shown.source.as_bytes()?;
+            let source = shown.source.as_bytes().to_vec();
             let doc = parse(&source, ParseContext::FromPath(PathBuf::from(&shown.path)))?;
             let body = require_contiguous_body(&doc)?;
-            let hits = search_lines(&body, pattern)?;
+            let hits = search_lines(&body, pattern.as_bytes())?;
             Ok(SearchNoteLines {
                 selector: shown.selector,
                 path: shown.path,
@@ -922,11 +972,11 @@ impl NbClient {
         tx.commit().await
     }
 
-    /// Replace contiguous body bytes (one-shot).
+    /// Replace contiguous body text (one-shot).
     pub async fn replace_note_body(
         &self,
         target: NoteTarget,
-        new_body: impl AsRef<[u8]>,
+        new_body: &str,
         fingerprint: Fingerprint,
         notebook: Option<&str>,
     ) -> Result<CommitOutcome, NbError> {
@@ -940,8 +990,8 @@ impl NbClient {
     pub async fn edit_note_substring(
         &self,
         target: NoteTarget,
-        pattern: impl AsRef<[u8]>,
-        replacement: impl AsRef<[u8]>,
+        pattern: &str,
+        replacement: &str,
         occurrence: Occurrence,
         expected_count: u32,
         fingerprint: Option<Fingerprint>,
@@ -975,7 +1025,7 @@ impl NbClient {
     pub async fn retitle_note(
         &self,
         target: NoteTarget,
-        title: impl AsRef<[u8]>,
+        title: &str,
         notebook: Option<&str>,
     ) -> Result<CommitOutcome, NbError> {
         let mut tx = self.transaction(notebook).await?;

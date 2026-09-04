@@ -40,7 +40,7 @@ async fn replace_note_body_destroys_existing_body() {
         client
             .replace_note_body(
                 NoteTarget::path("t.md"),
-                b"fresh body\n",
+                "fresh body\n",
                 shown.fingerprint,
                 None,
             )
@@ -48,8 +48,7 @@ async fn replace_note_body_destroys_existing_body() {
             .expect("replace");
 
         let shown = client.show_note("t.md", None).await.expect("show2");
-        let body_bytes = shown.body.as_bytes().unwrap();
-        let body = String::from_utf8_lossy(&body_bytes);
+        let body = shown.body.clone();
         assert!(!body.contains("original content"), "{body}");
         assert!(body.contains("fresh body"), "{body}");
     })

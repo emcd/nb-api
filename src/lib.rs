@@ -46,9 +46,9 @@ pub use parser::{
 };
 pub use transaction::Transaction;
 pub use types::{
-    BodyFragment, BoundaryAt, ByteString, CommitOutcome, LineAnchor, LineEdit, LinePosition,
-    LineRef, LineTerminator, NoteLine, NoteLineHit, NoteTarget, Occurrence, OpOutcome,
-    SearchNoteLines, ShowNote, ShowNoteLines,
+    BodyFragment, BoundaryAt, CommitOutcome, LineAnchor, LineEdit, LineEol, LinePosition, LineRef,
+    NoteLine, NoteLineHit, NoteTarget, Occurrence, OpOutcome, SearchNoteLines, ShowNote,
+    ShowNoteLines,
 };
 
 use serde::Deserialize;

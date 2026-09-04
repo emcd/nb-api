@@ -23,7 +23,7 @@ use nb_api::{Config, NbClient, NbError};
 use crate::common::with_isolated_env;
 
 fn show_text(note: &nb_api::ShowNote) -> String {
-    String::from_utf8_lossy(&note.source.as_bytes().expect("source bytes")).into_owned()
+    note.source.clone()
 }
 
 /// Add a note with an explicit extension to the fixture's notebook.

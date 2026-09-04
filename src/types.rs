@@ -1,36 +1,16 @@
 //! Public wire types for body-aware reads, edits, and commit outcomes.
+//!
+//! 0.4.0 is text-first: every structured textual field is a JSON `String`.
+//! The crate is base64-free; callers needing JSON transport base64 do it at
+//! the wire layer. Non-UTF-8-but-text files surface as typed
+//! [`crate::error::NbError::NonUtf8`]; the single raw-bytes escape hatch is
+//! `NbClient::read_note_source_bytes`.
 
 use serde::{Deserialize, Serialize};
 
 use crate::error::NbError;
 use crate::fingerprint::Fingerprint;
 use crate::parser::{DocumentKind, TodoState};
-
-/// Arbitrary file bytes on the wire as standard base64.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-pub struct ByteString {
-    pub base64: String,
-}
-
-impl ByteString {
-    pub fn from_bytes(bytes: impl AsRef<[u8]>) -> Self {
-        use base64::Engine;
-        Self {
-            base64: base64::engine::general_purpose::STANDARD.encode(bytes.as_ref()),
-        }
-    }
-
-    pub fn as_bytes(&self) -> Result<Vec<u8>, NbError> {
-        use base64::Engine;
-        base64::engine::general_purpose::STANDARD
-            .decode(self.base64.as_bytes())
-            .map_err(|e| NbError::ValidationError {
-                reason: format!("invalid ByteString base64: {e}"),
-                location: None,
-            })
-    }
-}
 
 /// Address an existing note by selector or notebook-relative path.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -62,11 +42,17 @@ impl NoteTarget {
 }
 
 /// One body fragment exposed by structured show.
+///
+/// `bytes` is the fragment text (UTF-8); `start_byte`/`end_byte` are offsets
+/// into `ShowNote.source`, so `body == concat(fragment.bytes)` and each
+/// `source[start_byte..end_byte] == fragment.bytes`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct BodyFragment {
     pub index: u32,
-    pub bytes: ByteString,
+    pub bytes: String,
+    pub start_byte: u32,
+    pub end_byte: u32,
 }
 
 /// Structured `show_note` result.
@@ -77,14 +63,21 @@ pub struct ShowNote {
     pub path: String,
     pub kind: DocumentKind,
     pub todo_state: Option<TodoState>,
-    pub title: Option<ByteString>,
+    /// Full raw title line including trailing newline, as UTF-8.
+    pub title: Option<String>,
     pub title_text: Option<String>,
     pub tags: Vec<String>,
     pub body_fragments: Vec<BodyFragment>,
+    /// Derivable (`body_fragments.len() <= 1`); kept for wire convenience.
     pub body_contiguous: bool,
-    pub body: ByteString,
+    /// Concatenated body-fragment bytes (excludes title H1 + tags).
+    pub body: String,
     pub fingerprint: Fingerprint,
-    pub source: ByteString,
+    /// Full file bytes verbatim, as UTF-8.
+    pub source: String,
+    /// Numeric `.index` id when resolvable via `.index` scan.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub numeric_id: Option<u32>,
 }
 
 /// Versioned body-line authenticity token: `b3l1:<32 lowercase hex>`.
@@ -134,28 +127,41 @@ impl std::fmt::Display for LineAnchor {
     }
 }
 
-/// Line terminator as stored in the body.
+/// Document-level end-of-line marker.
+///
+/// `Lf` for `\n`, `CrLf` for `\r\n`. Bare `\r` is not a supported EOL and is
+/// preserved verbatim in line text; documents without a supported EOL report
+/// `eol: None` on [`ShowNoteLines`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
-pub enum LineTerminator {
+pub enum LineEol {
     Lf,
-    Crlf,
-    Cr,
-    None,
+    CrLf,
 }
 
-/// One enumerated body line.
+impl LineEol {
+    pub fn as_bytes(self) -> &'static [u8] {
+        match self {
+            Self::Lf => b"\n",
+            Self::CrLf => b"\r\n",
+        }
+    }
+}
+
+/// One enumerated body line (line text without terminator).
+///
+/// Unknown JSON fields (including the removed 0.3.x `terminator`) are ignored
+/// on deserialization for forward compatibility.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct NoteLine {
     pub number: u32,
     pub anchor: LineAnchor,
-    pub text: ByteString,
-    pub terminator: LineTerminator,
+    pub text: String,
 }
 
-/// Windowed body-line listing.
+/// Windowed body-line listing with a document-level EOL declaration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ShowNoteLines {
@@ -167,9 +173,17 @@ pub struct ShowNoteLines {
     pub limit: u32,
     pub next_offset: Option<u32>,
     pub lines: Vec<NoteLine>,
-    pub title: Option<ByteString>,
+    pub title: Option<String>,
     pub tags: Vec<String>,
     pub body_fingerprint: Fingerprint,
+    /// First-supported-EOL declaration; `None` for empty / single-line-no-EOL
+    /// / CR-only bodies.
+    pub eol: Option<LineEol>,
+    /// Whether the body ends with `eol` bytes.
+    pub has_final_eol: bool,
+    /// Numeric `.index` id when resolvable via `.index` scan.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub numeric_id: Option<u32>,
 }
 
 /// Number + anchor reference to a body line.
@@ -200,13 +214,16 @@ pub enum BoundaryAt {
 }
 
 /// One line-oriented edit in an `edit_note_lines` batch.
+///
+/// `content` is bare text (no terminator included; embedded `\r` preserved).
+/// The library appends document `eol` bytes when materializing edits.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum LineEdit {
     Insert {
         at: LinePosition,
-        content: ByteString,
+        content: String,
     },
     Delete {
         start: LineRef,
@@ -215,7 +232,7 @@ pub enum LineEdit {
     Replace {
         start: LineRef,
         end: LineRef,
-        content: ByteString,
+        content: String,
     },
 }
 
@@ -238,7 +255,7 @@ pub struct NoteLineHit {
     pub start_byte: u32,
     pub end_byte: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub text: Option<ByteString>,
+    pub text: Option<String>,
 }
 
 /// Result of `search_note_lines`.
@@ -259,6 +276,9 @@ pub struct OpOutcome {
     pub index: u32,
     pub path: Option<String>,
     pub selector: Option<String>,
+    /// Numeric `.index` id when known (pinned `Option<u32>` type).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub numeric_id: Option<u32>,
     pub noop: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fingerprint: Option<Fingerprint>,

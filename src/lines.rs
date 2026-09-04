@@ -1,12 +1,17 @@
 //! Body-line enumeration, anchors, and contiguous-body edits.
+//!
+//! 0.4.0 document-level EOL model: the body declares one `eol`
+//! (`Some(Lf|CrLf)` or `None`) determined by the first *supported* EOL
+//! occurrence scanning left-to-right. Bare `\r` is stray content — never a
+//! terminator, never normalized, preserved verbatim in line text.
 
 use std::ops::Range;
 
 use crate::error::NbError;
 use crate::parser::NoteDocument;
 use crate::types::{
-    BoundaryAt, ByteString, LineAnchor, LineEdit, LinePosition, LineRef, LineTerminator, NoteLine,
-    NoteLineHit, Occurrence,
+    BoundaryAt, LineAnchor, LineEdit, LineEol, LinePosition, LineRef, NoteLine, NoteLineHit,
+    Occurrence,
 };
 
 /// A single body line with absolute offsets into the contiguous body bytes.
@@ -15,90 +20,86 @@ pub struct BodyLine {
     pub number: u32,
     pub text_range: Range<usize>,
     pub full_range: Range<usize>,
-    pub terminator: LineTerminator,
     pub anchor: LineAnchor,
 }
 
-/// Split contiguous body bytes into lines (terminator-preserving).
-///
-/// Empty body yields zero lines. A final segment without a terminator is one
-/// line with [`LineTerminator::None`].
-pub fn split_body_lines(body: &[u8]) -> Vec<BodyLine> {
-    if body.is_empty() {
-        return Vec::new();
+/// Detect the document EOL: first supported occurrence (`\r\n` or `\n`)
+/// scanning left-to-right. Bare `\r` is ignored.
+pub fn detect_eol(body: &[u8]) -> Option<LineEol> {
+    let mut i = 0usize;
+    while i < body.len() {
+        if body[i] == b'\r' {
+            if i + 1 < body.len() && body[i + 1] == b'\n' {
+                return Some(LineEol::CrLf);
+            }
+            i += 1;
+            continue;
+        }
+        if body[i] == b'\n' {
+            return Some(LineEol::Lf);
+        }
+        i += 1;
     }
+    None
+}
+
+/// Full document-line view: `(eol, has_final_eol, lines)`.
+///
+/// `has_final_eol` is true when the body ends with the declared `eol` bytes.
+/// For `eol: None` it is always false (even for trailing bare `\r`).
+pub fn document_lines(body: &[u8]) -> (Option<LineEol>, bool, Vec<BodyLine>) {
+    if body.is_empty() {
+        return (None, false, Vec::new());
+    }
+    let eol = detect_eol(body);
+    let Some(eol) = eol else {
+        // No supported EOL: single line, anchor over text + 0x00.
+        let mut text = body.to_vec();
+        text.push(0x00);
+        return (
+            None,
+            false,
+            vec![BodyLine {
+                number: 1,
+                text_range: 0..body.len(),
+                full_range: 0..body.len(),
+                anchor: LineAnchor::from_line_bytes(&text),
+            }],
+        );
+    };
+    let sep: &[u8] = eol.as_bytes();
     let mut lines = Vec::new();
     let mut start = 0usize;
     let mut number = 1u32;
     let mut i = 0usize;
     while i < body.len() {
-        if body[i] == b'\r' {
-            let (term_end, terminator) = if i + 1 < body.len() && body[i + 1] == b'\n' {
-                (i + 2, LineTerminator::Crlf)
-            } else {
-                (i + 1, LineTerminator::Cr)
-            };
-            lines.push(make_line(
+        if body[i..].starts_with(sep) {
+            let end = i + sep.len();
+            lines.push(BodyLine {
                 number,
-                body,
-                start..i,
-                start..term_end,
-                terminator,
-            ));
+                text_range: start..i,
+                full_range: start..end,
+                anchor: LineAnchor::from_line_bytes(&body[start..end]),
+            });
             number += 1;
-            start = term_end;
-            i = term_end;
-            continue;
-        }
-        if body[i] == b'\n' {
-            lines.push(make_line(
-                number,
-                body,
-                start..i,
-                start..i + 1,
-                LineTerminator::Lf,
-            ));
-            number += 1;
-            start = i + 1;
-            i += 1;
+            start = end;
+            i = end;
             continue;
         }
         i += 1;
     }
+    let has_final_eol = start == body.len();
     if start < body.len() {
-        lines.push(make_line(
+        let mut tail = body[start..].to_vec();
+        tail.push(0x00);
+        lines.push(BodyLine {
             number,
-            body,
-            start..body.len(),
-            start..body.len(),
-            LineTerminator::None,
-        ));
+            text_range: start..body.len(),
+            full_range: start..body.len(),
+            anchor: LineAnchor::from_line_bytes(&tail),
+        });
     }
-    lines
-}
-
-fn make_line(
-    number: u32,
-    body: &[u8],
-    text_range: Range<usize>,
-    full_range: Range<usize>,
-    terminator: LineTerminator,
-) -> BodyLine {
-    let hash_input = match terminator {
-        LineTerminator::None => {
-            let mut v = body[text_range.clone()].to_vec();
-            v.push(0x00);
-            v
-        }
-        _ => body[full_range.clone()].to_vec(),
-    };
-    BodyLine {
-        number,
-        text_range,
-        full_range,
-        terminator,
-        anchor: LineAnchor::from_line_bytes(&hash_input),
-    }
+    (Some(eol), has_final_eol, lines)
 }
 
 pub fn require_contiguous_body(doc: &NoteDocument) -> Result<Vec<u8>, NbError> {
@@ -116,8 +117,7 @@ pub fn note_line_from_body_line(line: &BodyLine, body: &[u8]) -> NoteLine {
     NoteLine {
         number: line.number,
         anchor: line.anchor.clone(),
-        text: ByteString::from_bytes(&body[line.text_range.clone()]),
-        terminator: line.terminator,
+        text: String::from_utf8_lossy(&body[line.text_range.clone()]).into_owned(),
     }
 }
 
@@ -147,8 +147,31 @@ pub fn verify_line_ref(lines: &[BodyLine], reference: &LineRef) -> Result<usize,
 }
 
 /// Apply a batch of line edits to contiguous body bytes. Returns new body bytes.
+///
+/// `content` is bare text; the document `eol` (or adopted `Lf` when the
+/// document had none) is appended when materializing inserts/replaces. Edits
+/// that materialize a new boundary on an `eol: None` document adopt `Lf`.
+/// Inserting at a position equal to end-of-body when the final line lacks a
+/// terminator first terminates the previous final line.
 pub fn apply_line_edits(body: &[u8], edits: &[LineEdit]) -> Result<Vec<u8>, NbError> {
-    let lines = split_body_lines(body);
+    let (eol_opt, has_final_eol, lines) = document_lines(body);
+    // Effective EOL for materialized boundaries: declared, else Lf when any
+    // edit introduces a boundary. Pure-delete batches on eol-None stay boundary-free.
+    let introduces_boundary = edits.iter().any(|e| match e {
+        LineEdit::Insert { .. } => true,
+        LineEdit::Replace { .. } => true,
+        LineEdit::Delete { .. } => false,
+    });
+    let eff_eol = match eol_opt {
+        Some(e) => Some(e),
+        None if introduces_boundary => Some(LineEol::Lf),
+        None => None,
+    };
+    let eol_bytes: &[u8] = match eff_eol {
+        Some(e) => e.as_bytes(),
+        None => b"",
+    };
+
     #[derive(Clone)]
     struct Resolved {
         delete: Range<usize>,
@@ -159,8 +182,18 @@ pub fn apply_line_edits(body: &[u8], edits: &[LineEdit]) -> Result<Vec<u8>, NbEr
     for (edit_index, edit) in edits.iter().enumerate() {
         match edit {
             LineEdit::Insert { at, content } => {
-                let bytes = content.as_bytes()?;
-                let pos = insert_offset(body, &lines, at)?;
+                let mut bytes = Vec::new();
+                let pos = insert_offset(body, &lines, at, has_final_eol)?;
+                // Terminate a final line that lacks EOL when appending at end.
+                if !body.is_empty() && !has_final_eol && pos == body.len() {
+                    bytes.extend_from_slice(eol_bytes);
+                }
+                // Empty body + Dollar is rejected in insert_offset; Caret works.
+                bytes.extend_from_slice(content.as_bytes());
+                // Only append EOL when we have an effective EOL. Pure
+                // boundary-free path (delete-only on None) never reaches here
+                // because this arm is an insert (boundary ⇒ eff Some).
+                bytes.extend_from_slice(eol_bytes);
                 resolved.push(Resolved {
                     delete: pos..pos,
                     insert: bytes,
@@ -181,9 +214,13 @@ pub fn apply_line_edits(body: &[u8], edits: &[LineEdit]) -> Result<Vec<u8>, NbEr
                 content,
             } => {
                 let span = inclusive_span(&lines, start, end)?;
+                let mut bytes = content.as_bytes().to_vec();
+                // Normalize to trailing EOL: replaced span always ends with eol
+                // when effective EOL exists (adopt Lf for None docs).
+                bytes.extend_from_slice(eol_bytes);
                 resolved.push(Resolved {
                     delete: span,
-                    insert: content.as_bytes()?,
+                    insert: bytes,
                     edit_index,
                 });
             }
@@ -236,14 +273,28 @@ fn inclusive_span(
     Ok(lines[s].full_range.start..lines[e].full_range.end)
 }
 
-fn insert_offset(body: &[u8], lines: &[BodyLine], at: &LinePosition) -> Result<usize, NbError> {
+fn insert_offset(
+    body: &[u8],
+    lines: &[BodyLine],
+    at: &LinePosition,
+    has_final_eol: bool,
+) -> Result<usize, NbError> {
     match at {
         LinePosition::Boundary {
             at: BoundaryAt::Caret,
         } => Ok(0),
         LinePosition::Boundary {
             at: BoundaryAt::Dollar,
-        } => Ok(body.len()),
+        } => {
+            if body.is_empty() {
+                return Err(NbError::ValidationError {
+                    reason: "empty body: Caret is the only valid boundary; Dollar requires at least one line".to_string(),
+                    location: None,
+                });
+            }
+            let _ = has_final_eol;
+            Ok(body.len())
+        }
         LinePosition::Before { line } => {
             let idx = verify_line_ref(lines, line)?;
             Ok(lines[idx].full_range.start)
@@ -318,7 +369,7 @@ pub fn search_lines(body: &[u8], pattern: &[u8]) -> Result<Vec<NoteLineHit>, NbE
     if pattern.is_empty() {
         return Err(NbError::EmptySubstringPattern);
     }
-    let lines = split_body_lines(body);
+    let (_, _, lines) = document_lines(body);
     let mut hits = Vec::new();
     for line in &lines {
         let text = &body[line.text_range.clone()];
@@ -331,7 +382,7 @@ pub fn search_lines(body: &[u8], pattern: &[u8]) -> Result<Vec<NoteLineHit>, NbE
                     anchor: line.anchor.clone(),
                     start_byte: start as u32,
                     end_byte: end as u32,
-                    text: Some(ByteString::from_bytes(text)),
+                    text: Some(String::from_utf8_lossy(text).into_owned()),
                 });
                 start = end;
             } else {

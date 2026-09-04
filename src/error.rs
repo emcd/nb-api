@@ -251,6 +251,22 @@ pub enum NbError {
         guidance: String,
     },
 
+    /// Structured text surface hit non-UTF-8 bytes in a text-classified file.
+    ///
+    /// Non-textual notes keep using `UnsupportedShowTarget`; this variant
+    /// covers the narrow non-UTF-8-but-text case. Use
+    /// `NbClient::read_note_source_bytes` for raw access.
+    NonUtf8 {
+        selector: String,
+        path: String,
+        kind: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mime_hint: Option<String>,
+    },
+
+    /// `.nb-api-index.lock` wait exceeded before any mutation.
+    IndexLockTimeout { path: String, timeout_ms: u64 },
+
     /// Document structure is not supported for the requested op.
     UnsupportedStructure { reason: String },
 }
@@ -382,6 +398,18 @@ impl std::fmt::Display for NbError {
                 f,
                 "fragmented body ({fragment_count} fragments): {guidance}"
             ),
+            Self::NonUtf8 {
+                selector,
+                path,
+                kind,
+                mime_hint,
+            } => write!(
+                f,
+                "non-UTF-8 text at {selector:?} ({path:?}, kind={kind}, mime={mime_hint:?}); use read_note_source_bytes for raw access"
+            ),
+            Self::IndexLockTimeout { path, timeout_ms } => {
+                write!(f, "index lock timeout on {path} after {timeout_ms}ms")
+            }
             Self::UnsupportedStructure { reason } => {
                 write!(f, "unsupported structure: {reason}")
             }

@@ -1,8 +1,4 @@
-use nb_api::{BoundaryAt, ByteString, LineEdit, LinePosition, LineRef, LineTerminator, Occurrence};
-
-// Re-export internal helpers via integration-style pure logic tests using public types only
-// by exercising through public APIs would need a notebook. These unit tests live beside
-// the lines module by including the same algorithms — prefer public surface.
+use nb_api::{BoundaryAt, LineEdit, LineEol, LinePosition, LineRef, Occurrence};
 
 // Direct unit coverage of line split/anchor via show path is in integration tests.
 // Here we only lock wire type serde for line edits.
@@ -43,17 +39,21 @@ fn occurrence_wire() {
 }
 
 #[test]
-fn byte_string_round_trip() {
-    let b = ByteString::from_bytes([0xff, 0x0a]);
-    let json = serde_json::to_string(&b).unwrap();
-    let back: ByteString = serde_json::from_str(&json).unwrap();
-    assert_eq!(back.as_bytes().unwrap(), vec![0xff, 0x0a]);
+fn line_edit_content_is_bare_string() {
+    let edit = LineEdit::Insert {
+        at: LinePosition::Boundary {
+            at: BoundaryAt::Caret,
+        },
+        content: "x".to_string(),
+    };
+    let json = serde_json::to_string(&edit).unwrap();
+    assert!(json.contains(r#""content":"x""#));
+    let back: LineEdit = serde_json::from_str(&json).unwrap();
+    assert_eq!(edit, back);
 }
 
 #[test]
-fn line_terminator_serde() {
-    assert_eq!(
-        serde_json::to_string(&LineTerminator::Crlf).unwrap(),
-        "\"crlf\""
-    );
+fn line_eol_serde() {
+    assert_eq!(serde_json::to_string(&LineEol::CrLf).unwrap(), "\"crlf\"");
+    assert_eq!(serde_json::to_string(&LineEol::Lf).unwrap(), "\"lf\"");
 }

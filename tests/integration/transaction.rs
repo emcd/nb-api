@@ -1,9 +1,7 @@
 //! Transaction collect-then-commit and body-aware surface.
 
 use nb_api::testing::NbTestEnv;
-use nb_api::{
-    BoundaryAt, ByteString, Config, LineEdit, LinePosition, NbClient, NoteTarget, Occurrence,
-};
+use nb_api::{BoundaryAt, Config, LineEdit, LinePosition, NbClient, NoteTarget, Occurrence};
 
 use crate::common::with_isolated_env;
 
@@ -60,7 +58,7 @@ async fn multi_op_single_checkpoint() {
             .expect("show");
         assert_eq!(shown.path, "proposals/demo/proposal.md");
         assert!(shown.body_contiguous);
-        let body = shown.body.as_bytes().unwrap();
+        let body = shown.body.as_bytes();
         assert!(body.windows(8).any(|w| w == b"body one"));
     })
     .await;
@@ -119,11 +117,11 @@ async fn replace_body_and_lines() {
         let shown = client.show_note("n.md", None).await.expect("show");
         let fp = shown.fingerprint.clone();
         client
-            .replace_note_body(NoteTarget::path("n.md"), b"only\n", fp, None)
+            .replace_note_body(NoteTarget::path("n.md"), "only\n", fp, None)
             .await
             .expect("replace");
         let shown = client.show_note("n.md", None).await.expect("show2");
-        assert_eq!(shown.body.as_bytes().unwrap(), b"only\n");
+        assert_eq!(shown.body, "only\n");
 
         let lines = client
             .show_note_lines(NoteTarget::path("n.md"), Some(1), Some(10), None)
@@ -143,20 +141,20 @@ async fn replace_body_and_lines() {
                         number: line.number,
                         anchor: line.anchor.clone(),
                     },
-                    content: ByteString::from_bytes(b"X\n"),
+                    content: "X".to_string(),
                 }],
                 None,
             )
             .await
             .expect("line edit");
         let shown = client.show_note("n.md", None).await.expect("show3");
-        assert_eq!(shown.body.as_bytes().unwrap(), b"X\n");
+        assert_eq!(shown.body, "X\n");
 
         client
             .edit_note_substring(
                 NoteTarget::path("n.md"),
-                b"X",
-                b"Y",
+                "X",
+                "Y",
                 Occurrence::First,
                 1,
                 Some(shown.fingerprint),
@@ -165,11 +163,11 @@ async fn replace_body_and_lines() {
             .await
             .expect("substr");
         let shown = client.show_note("n.md", None).await.expect("show4");
-        assert_eq!(shown.body.as_bytes().unwrap(), b"Y\n");
+        assert_eq!(shown.body, "Y\n");
 
         let fp = shown.fingerprint.clone();
         client
-            .replace_note_body(NoteTarget::path("n.md"), b"", fp, None)
+            .replace_note_body(NoteTarget::path("n.md"), "", fp, None)
             .await
             .expect("empty");
         client
@@ -179,14 +177,14 @@ async fn replace_body_and_lines() {
                     at: LinePosition::Boundary {
                         at: BoundaryAt::Caret,
                     },
-                    content: ByteString::from_bytes(b"fresh\n"),
+                    content: "fresh".to_string(),
                 }],
                 None,
             )
             .await
             .expect("insert empty");
         let shown = client.show_note("n.md", None).await.expect("show5");
-        assert_eq!(shown.body.as_bytes().unwrap(), b"fresh\n");
+        assert_eq!(shown.body, "fresh\n");
     })
     .await;
 }
@@ -304,7 +302,7 @@ async fn ignored_existing_edit_and_delete_refused() {
         assert_eq!(head(&root), pre);
 
         let mut tx = client.transaction(None).await.expect("tx2");
-        tx.retitle_note(NoteTarget::path("ghost.md"), b"# X\n")
+        tx.retitle_note(NoteTarget::path("ghost.md"), "# X\n")
             .unwrap();
         let err = tx.commit().await.expect_err("retitle ignored");
         assert!(
@@ -465,7 +463,7 @@ async fn qualified_selector_outcome_not_double_prefixed() {
         tx.commit().await.expect("add");
         let mut tx = client.transaction(None).await.expect("tx2");
         let nb = env.notebook();
-        tx.retitle_note(NoteTarget::selector(format!("{nb}:q.md")), b"# New Title\n")
+        tx.retitle_note(NoteTarget::selector(format!("{nb}:q.md")), "# New Title\n")
             .unwrap();
         let outcome = tx.commit().await.expect("retitle");
         let sel = outcome.ops[0].selector.as_deref().expect("selector");
@@ -666,17 +664,12 @@ async fn gate_timeout_is_threaded_from_config() {
 }
 
 #[tokio::test]
-async fn show_note_lossy_title_and_tags_for_invalid_utf8() {
+async fn show_note_non_utf8_returns_typed_error_with_bytes_hatch() {
     let env = NbTestEnv::new().expect("fixture");
     with_isolated_env(&env, false, || async {
         let client = NbClient::new(&config_for(&env)).expect("client");
         let root = client.show_notebook_path(None).await.expect("path");
-        // Title contains invalid UTF-8; raw bytes stay authoritative and
-        // title_text must still be present via lossy conversion.
-        let mut bytes = b"# ".to_vec();
-        bytes.extend_from_slice(&[0xff, 0xfe]);
-        bytes.extend_from_slice(b" Title\n\n#alpha\n\nbody\n");
-        // Tag token with embedded invalid UTF-8.
+        // Title contains invalid UTF-8.
         let mut bytes = b"# ".to_vec();
         bytes.extend_from_slice(&[0xff, 0xfe]);
         bytes.extend_from_slice(b"\n\n#al");
@@ -685,14 +678,20 @@ async fn show_note_lossy_title_and_tags_for_invalid_utf8() {
         std::fs::write(root.join("bad.md"), &bytes).unwrap();
         git_capture(&root, &["add", "-A"]);
         git_capture(&root, &["commit", "-m", "bad", "--no-gpg-sign"]);
-        let shown = client.show_note("bad.md", None).await.expect("show");
-        assert!(shown.title.is_some(), "raw title bytes required");
-        let title_text = shown.title_text.expect("lossy title_text required");
+        let err = client
+            .show_note("bad.md", None)
+            .await
+            .expect_err("non-utf8");
         assert!(
-            title_text.contains('\u{FFFD}') || !title_text.is_empty(),
-            "title_text should be lossy-decoded; got {title_text:?}"
+            matches!(err, nb_api::NbError::NonUtf8 { .. }),
+            "expected NonUtf8, got {err:?}"
         );
-        // Tags use the same lossy path as title_text (`tags()` + from_utf8_lossy).
+        // Escape hatch returns exact bytes.
+        let raw = client
+            .read_note_source_bytes(NoteTarget::path("bad.md"), None)
+            .await
+            .expect("hatch");
+        assert_eq!(raw, bytes);
     })
     .await;
 }
