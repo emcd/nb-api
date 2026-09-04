@@ -31,14 +31,14 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-nb-api = "0.3"
+nb-api = "0.4"
 ```
 
 With optional JSON Schema support:
 
 ```toml
 [dependencies]
-nb-api = { version = "0.3", features = ["schemars"] }
+nb-api = { version = "0.4", features = ["schemars"] }
 ```
 
 ### Example
@@ -83,12 +83,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## API Surface
 
-`0.3.0` centers on a collect-then-commit [`Transaction`] and structured
+`0.4.0` centers on a collect-then-commit [`Transaction`] and structured
 reads. Inventory mutators are plan ops on `Transaction` with one-shot
 `NbClient` wrappers that return [`CommitOutcome`]. List/search-style
 reads still return ANSI-stripped CLI text. `edit_note` / `EditMode` are
 **removed** — use `replace_note_body`, `edit_note_substring`, or
 `edit_note_lines`.
+
+Structured text is `String` throughout (no base64 in the library;
+non-UTF-8 files surface as `NonUtf8`, raw bytes via
+`read_note_source_bytes`). Body lines are declared once per document
+(`eol` + `has_final_eol`). One-shot creates use nb-faithful filenames
+(title-mangled, local-time titleless) and outcomes/read results expose
+stable numeric `<folder>/<id>` selectors via maintained `.index` files.
 
 Concurrency: notebook-scoped reads and `Transaction::commit` serialize on a
 **process-shared, in-process** gate keyed by the notebook Git common-dir
@@ -99,7 +106,7 @@ realpath. Cross-process `index.lock` wait is deferred.
 | Method | Description |
 |--------|-------------|
 | `transaction` | Build a collect-then-commit plan (no I/O until `commit`) |
-| `add_note` | Create a note (one-shot transaction; optional auto-name) |
+| `add_note` | Create a note (one-shot transaction; nb-mangled filename, numeric outcome) |
 | `show_note` | Structured [`ShowNote`] (path, kind, body fragments, fingerprint, source) |
 | `show_note_lines` | Windowed body lines with `b3l1:` anchors (contiguous body only) |
 | `search_note_lines` | Byte search over body line text (contiguous body only) |
@@ -142,8 +149,8 @@ realpath. Cross-process `index.lock` wait is deferred.
 | `Transaction` | Collect-then-commit plan; drop discards; `commit` validates-all / apply-all / ≤1 Git checkpoint |
 | `CommitOutcome` / `OpOutcome` | Structured commit results |
 | `ShowNote` / `ShowNoteLines` / `SearchNoteLines` | Structured read results |
-| `NoteTarget` / `ByteString` / `LineEdit` / `Occurrence` / … | Wire types for MCP lockstep (see body-aware-editing spec) |
-| `NbError` | Structured errors including `DirtyBaseline`, `IndeterminateCommit`, `RecoveryRequired`, `FragmentedBody`, fingerprint/anchor/occurrence mismatches. Serde is internally tagged (`"type": "…"`). |
+| `NoteTarget` / `LineEdit` / `LineEol` / `Occurrence` / … | Text-first wire types for MCP lockstep (see body-aware-editing spec) |
+| `NbError` | Structured errors including `DirtyBaseline`, `IndeterminateCommit`, `RecoveryRequired`, `FragmentedBody`, `NonUtf8`, `IndexLockTimeout`, fingerprint/anchor/occurrence mismatches. Serde is internally tagged (`"type": "…"`). |
 | `Config` | Configuration for constructing `NbClient` |
 | `SearchMode` | Query matching mode (any, all) |
 | `TaskStatus` | Todo status filter (open, closed) |
@@ -194,9 +201,9 @@ constructing `Config`.
 | `testing` | disabled | Exposes the `nb_api::testing` module with `NbTestEnv` and friends; pulls in `tempfile` as a dependency. Use for integration tests of consumers. |
 | `testing-tokio` | disabled | Within `nb_api::testing`, reveals the async helpers `NbTestEnv::configure_tokio` and `NbTestEnv::nb_command_async`. The crate's own tokio usage (in `NbClient`) is unconditional and does not depend on this flag. Pair with `testing` to reach the async helpers. |
 
-## Migrating from 0.2.x
+## Migrating from 0.3.x
 
-See [`documentation/migration-0.3.0.md`](documentation/migration-0.3.0.md) for breaking removals (`edit_note` / `EditMode`), return-type changes (`ShowNote`, `CommitOutcome`), the collect-then-commit `Transaction` model, contiguous-body rules, and consumer lockstep notes.
+See [`documentation/migration-0.4.0.md`](documentation/migration-0.4.0.md) for breaking removals (`ByteString`, per-line terminators, opaque auto-names), the text-first `String` surface with `NonUtf8`, the document-level EOL model, and nb-faithful identity (mangled filenames, `.index` numeric ids).
 
 ## License
 
