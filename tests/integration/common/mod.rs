@@ -88,6 +88,10 @@ const ENV_VARS_OF_INTEREST: &[&str] = &[
     "NB_API_FAIL_AFTER_STAGE",
     "NB_API_FAIL_RESTORE_HEAD",
     "NB_API_FAIL_RESTORE_DIRTY",
+    // Deterministic external-writer simulation (testing feature only).
+    "NB_API_SIMULATE_EXTERNAL_WRITER",
+    "NB_API_SIMULATE_EXTERNAL_SAME_PATH",
+    "NB_API_INDEX_SPLICE_PAUSE_MS",
 ];
 
 /// All `GIT_*` routing vars used in the blast-by-prefix scrub. Exposed

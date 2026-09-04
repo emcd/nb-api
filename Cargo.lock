@@ -214,6 +214,7 @@ version = "0.3.1"
 dependencies = [
  "anyhow",
  "blake3",
+ "libc",
  "proptest",
  "regex",
  "schemars",

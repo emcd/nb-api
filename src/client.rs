@@ -448,7 +448,7 @@ impl NbClient {
         .await
     }
 
-    /// Creates a new note (one-shot transaction; optional auto-name).
+    /// Creates a new note (one-shot transaction; nb-mangled filename).
     pub async fn add_note(
         &self,
         title: Option<&str>,
@@ -467,11 +467,44 @@ impl NbClient {
         }
         self.require_folder_for_new_note(folder)?;
         validate_folder_option(folder)?;
-        let filename = transaction::auto_filename("md");
-        let path = transaction::join_folder_file(folder, &filename);
-        let mut tx = self.transaction(notebook).await?;
-        tx.add_note(&path, title, content, tags)?;
-        tx.commit().await
+        let filename = transaction::filename_for_title(title, "md");
+        self.create_with_retry(notebook, folder, filename, |tx, path| {
+            tx.add_note(&path, title, content, tags)
+        })
+        .await
+    }
+
+    /// One-shot create with `-N` collision retry on the auto filename.
+    ///
+    /// Explicit-path `Transaction` plans keep hard `PathCollision` errors;
+    /// the mangled/titleless one-shot names instead gain `-1`, `-2`, …
+    /// until free (basenames stay unique per folder, which keeps post-write
+    /// `.index` lookup unambiguous).
+    async fn create_with_retry(
+        &self,
+        notebook: Option<&str>,
+        folder: Option<&str>,
+        filename: String,
+        plan: impl Fn(&mut Transaction, String) -> Result<(), NbError>,
+    ) -> Result<CommitOutcome, NbError> {
+        let mut name = filename.clone();
+        for attempt in 0..100u32 {
+            if attempt > 0 {
+                name = transaction::suffixed_filename(&filename, attempt);
+            }
+            let path = transaction::join_folder_file(folder, &name);
+            let mut tx = self.transaction(notebook).await?;
+            plan(&mut tx, path)?;
+            match tx.commit().await {
+                Ok(outcome) => return Ok(outcome),
+                Err(NbError::PathCollision { .. }) => continue,
+                Err(other) => return Err(other),
+            }
+        }
+        Err(NbError::PathCollision {
+            path: transaction::join_folder_file(folder, &filename),
+            plan_index: None,
+        })
     }
 
     /// Shows a note as a structured [`ShowNote`] (gate-held).
@@ -560,8 +593,8 @@ impl NbClient {
                 .to_string()
         });
         Ok(ShowNote {
-            selector: selector.to_string(),
-            path: rel,
+            selector: numeric_selector_for_path(notebook, &root, &rel, selector),
+            path: rel.clone(),
             kind: doc.kind(),
             todo_state: doc.todo_state(),
             title,
@@ -572,7 +605,7 @@ impl NbClient {
             body,
             fingerprint: fingerprint::fingerprint(&doc),
             source: source_str,
-            numeric_id: None,
+            numeric_id: numeric_id_for_path(&root, &rel),
         })
     }
 
@@ -925,7 +958,7 @@ impl NbClient {
         Ok(NoteTarget::path(rel))
     }
 
-    /// Creates a todo item (one-shot transaction; optional auto-name).
+    /// Creates a todo item (one-shot transaction; nb-mangled filename).
     pub async fn add_todo(
         &self,
         title: &str,
@@ -937,11 +970,11 @@ impl NbClient {
     ) -> Result<CommitOutcome, NbError> {
         self.require_folder_for_new_note(folder)?;
         validate_folder_option(folder)?;
-        let filename = transaction::auto_filename("todo.md");
-        let path = transaction::join_folder_file(folder, &filename);
-        let mut tx = self.transaction(notebook).await?;
-        tx.add_todo(&path, title, description, tasks, tags)?;
-        tx.commit().await
+        let filename = transaction::filename_for_title(Some(title), "todo.md");
+        self.create_with_retry(notebook, folder, filename, |tx, path| {
+            tx.add_todo(&path, title, description, tasks, tags)
+        })
+        .await
     }
 
     /// Marks a todo as done (one-shot transaction).
@@ -1135,7 +1168,7 @@ impl NbClient {
         Ok(scopes)
     }
 
-    /// Creates a bookmark (one-shot transaction; optional auto-name).
+    /// Creates a bookmark (one-shot transaction; nb-mangled filename).
     pub async fn add_bookmark(
         &self,
         url: &str,
@@ -1147,11 +1180,11 @@ impl NbClient {
     ) -> Result<CommitOutcome, NbError> {
         self.require_folder_for_new_note(folder)?;
         validate_folder_option(folder)?;
-        let filename = transaction::auto_filename("bookmark.md");
-        let path = transaction::join_folder_file(folder, &filename);
-        let mut tx = self.transaction(notebook).await?;
-        tx.add_bookmark(&path, url, title, tags, comment)?;
-        tx.commit().await
+        let filename = transaction::filename_for_title(title, "bookmark.md");
+        self.create_with_retry(notebook, folder, filename, |tx, path| {
+            tx.add_bookmark(&path, url, title, tags, comment)
+        })
+        .await
     }
 
     /// Lists folders in a notebook.
@@ -1236,6 +1269,33 @@ impl NbClient {
                 .map(|output| self.append_notebook_warning(output, &notebook))
         })
         .await
+    }
+}
+
+/// Numeric `.index` id for a notebook-relative path, if the basename is
+/// listed in its folder `.index` (blank/deleted lines never match).
+fn numeric_id_for_path(notebook_root: &Path, rel: &str) -> Option<u32> {
+    let (folder, basename) = match rel.rfind('/') {
+        Some(i) => (rel[..i].to_string(), rel[i + 1..].to_string()),
+        None => (String::new(), rel.to_string()),
+    };
+    transaction::index_id_in_folder(notebook_root, &folder, &basename)
+}
+
+/// `ShowNote`/`ShowNoteLines` selector: numeric `<folder>/<id>` form when the
+/// path resolves via `.index`, else the qualified selector that was read.
+fn numeric_selector_for_path(
+    notebook: &str,
+    notebook_root: &Path,
+    rel: &str,
+    fallback: &str,
+) -> String {
+    match numeric_id_for_path(notebook_root, rel) {
+        Some(id) => match rel.rfind('/') {
+            Some(i) => format!("{notebook}:{}/{}", &rel[..i], id),
+            None => format!("{notebook}:{id}"),
+        },
+        None => fallback.to_string(),
     }
 }
 
