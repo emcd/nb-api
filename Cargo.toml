@@ -116,6 +116,30 @@ name = "probe_dump"
 path = "tests/integration/probe_dump.rs"
 required-features = ["testing"]
 
+# Scratch probe: nb 7.24.0 identity model (filenames, .index, numeric ids).
+# Invoke intentionally (with --ignored to bypass the ignore):
+#   cargo test --test probe_identity --features testing -- --ignored --nocapture
+[[test]]
+name = "probe_identity"
+path = "tests/integration/probe_identity.rs"
+required-features = ["testing"]
+
+# Probe: .index delete/move + mangling + titleless timezone (nb 7.24.0 compat).
+# Invoke intentionally (with --ignored to bypass the ignore):
+#   cargo test --test probe_nb_index --features testing -- --ignored --nocapture
+[[test]]
+name = "probe_nb_index"
+path = "tests/integration/probe_nb_index.rs"
+required-features = ["testing"]
+
+# Move semantics probe for advisor follow-up.
+# Invoke intentionally (with --ignored to bypass the ignore):
+#   cargo test --test probe_move --features testing -- --ignored --nocapture
+[[test]]
+name = "probe_move"
+path = "tests/integration/probe_move.rs"
+required-features = ["testing"]
+
 [dependencies]
 # Async runtime
 tokio = { version = "1.0", features = ["full"] }
