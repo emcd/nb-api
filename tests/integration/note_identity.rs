@@ -117,6 +117,11 @@ async fn titleless_create_uses_local_timestamp() {
     .await;
 }
 
+/// Unix-only: numeric-id reads (`show 3` / `show 2`) go through
+/// notebook-qualified selectors (`nb show <nb>:<id> --path`), which nb
+/// 7.24.0 cannot run under Git Bash on Windows (path-in-regex bug,
+/// `nb-api:todos/api/9`).
+#[cfg(unix)]
 #[tokio::test]
 async fn delete_blanks_index_line_and_ids_stay_stable() {
     let env = NbTestEnv::new().expect("fixture");

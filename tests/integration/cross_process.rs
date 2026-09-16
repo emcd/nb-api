@@ -36,6 +36,11 @@ fn index_lines(root: &std::path::Path, folder: &str) -> Vec<String> {
     lines
 }
 
+/// Unix-only: nb 7.24.0's background auto-checkpoint (fired during fixture
+/// init) intermittently races commit dirty-baseline checks under the Git
+/// Bash `.cmd` launcher on Windows (`nb-api:todos/api/9`); this commit-dense
+/// test loses that race disproportionately often.
+#[cfg(unix)]
 #[tokio::test]
 async fn external_note_and_index_line_survive_our_commit() {
     let env = NbTestEnv::new().expect("fixture");
