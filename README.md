@@ -99,7 +99,9 @@ stable numeric `<folder>/<id>` selectors via maintained `.index` files.
 
 Concurrency: notebook-scoped reads and `Transaction::commit` serialize on a
 **process-shared, in-process** gate keyed by the notebook Git common-dir
-realpath. Cross-process `index.lock` wait is deferred.
+realpath. `.index` updates additionally take a notebook-scoped
+`.nb-api-index.lock` (nb-api writers only) with `O_APPEND` appends and
+post-write selector derivation for cross-process safety.
 
 ### Notes
 
@@ -108,15 +110,15 @@ realpath. Cross-process `index.lock` wait is deferred.
 | `transaction` | Build a collect-then-commit plan (no I/O until `commit`) |
 | `add_note` | Create a note (one-shot transaction; nb-mangled filename, numeric outcome) |
 | `show_note` | Structured [`ShowNote`] (path, kind, body fragments, fingerprint, source) |
-| `show_note_lines` | Windowed body lines with `b3l1:` anchors (contiguous body only) |
-| `search_note_lines` | Byte search over body line text (contiguous body only) |
+| `show_note_lines` | Windowed body lines with `b3l1:` anchors and document `eol` (contiguous body only) |
+| `search_note_lines` | Text search over body line text (contiguous body only) |
 | `replace_note_body` | Replace contiguous body with fingerprint precondition |
 | `edit_note_substring` | Substring edit with occurrence + expected_count |
 | `edit_note_lines` | Batch insert/delete/replace lines by number+anchor |
 | `retitle_note` | Change title without moving path |
 | `edit_note_tags` | Add/remove tags |
 | `delete_note` | Delete a note |
-| `move_note` | Move or rename a note (path/basename only) |
+| `move_note` | Move or rename a note (folder destinations keep basename; numeric outcome) |
 | `list_notes` | List notes with optional filtering |
 | `search_notes` | Full-text search with OR/AND semantics |
 
@@ -179,7 +181,7 @@ realpath. Cross-process `index.lock` wait is deferred.
 | `create_notebook` | `bool` | `true` | Automatically create missing notebooks |
 | `allow_top_level_notes` | `bool` | `false` | Allow notes at notebook root without a folder |
 | `disable_git_signing` | `bool` | `false` | Disable Git commit/tag signing for nb subprocesses |
-| `gate_timeout` | `Duration` | `60s` | Max wait on the process-shared gate queue |
+| `gate_timeout` | `Duration` | `60s` | Max wait on the process-shared gate queue and the `.index` lock |
 
 ### Notebook Resolution
 
