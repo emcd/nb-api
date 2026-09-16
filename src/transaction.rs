@@ -2762,6 +2762,13 @@ fn collapse_stale_range(fd: &std::fs::File, offset: u64, len: u64) -> bool {
     r == 0
 }
 
+/// Non-collapse platforms always report unavailable; the caller falls back
+/// to truncate with a documented residual micro-window.
+#[cfg(not(target_os = "linux"))]
+fn collapse_stale_range(_fd: &std::fs::File, _offset: u64, _len: u64) -> bool {
+    false
+}
+
 /// Recover the folder owning `file_rel` for placement reporting.
 fn pending_basename_path(file_rel: &str, basename: &str) -> String {
     if file_rel == ".index" {
