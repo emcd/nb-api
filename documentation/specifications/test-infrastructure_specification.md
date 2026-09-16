@@ -148,4 +148,3 @@ When a future hygiene finding surfaces (similar to `nb-api:issues/2`, `/3`, `/ap
 
 - **WHEN** a hygiene finding is filed and the fix is scoped
 - **THEN** the implementation SHALL add at least one `tests/integration/<finding>.rs` test that fails without the fix and passes with it. Comment-only defense is acceptable only for findings where the integration test would require infrastructure beyond the harness's scope.
-

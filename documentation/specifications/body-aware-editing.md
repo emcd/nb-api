@@ -346,7 +346,7 @@ transaction. Apply via descending original-snapshot byte spans.
   "replacement": { "base64": "..." },
   "occurrence": { "type": "all" },
   "expected_count": 2,
-  "fingerprint": "b3:..." 
+  "fingerprint": "b3:..."
 }
 ```
 
