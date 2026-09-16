@@ -230,6 +230,10 @@ fn supports_collapse(dir: &std::path::Path) -> bool {
     false
 }
 
+/// Unix-only: nb 7.24.0's background auto-checkpoint (fired during fixture
+/// init) intermittently races commit dirty-baseline checks under the Git
+/// Bash `.cmd` launcher on Windows (`nb-api:todos/api/9`).
+#[cfg(unix)]
 #[tokio::test]
 async fn growing_in_folder_rename_is_refused() {
     let env = NbTestEnv::new().expect("fixture");
