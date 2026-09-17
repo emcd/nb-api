@@ -12,6 +12,7 @@ mod heading_rules;
 mod include_bytes_round_trip;
 mod partition_regressions;
 mod proptest;
+mod proptest_helpers;
 mod resolution_table;
 
 /// Pinned `nb 7.24.0` writer output for a titled tagged Note.
