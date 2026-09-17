@@ -7,6 +7,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-09-17
+
+### Fixed
+
+- `add_folder` now records the folder basename in the parent `.index`,
+  mirroring `nb` (nb records folders it creates the same way). Without
+  the folder line, `nb list <notebook>:<folder>/` fails at depth >= 2,
+  so `list_notes` on empty subfolders of indexed folders errored.
+- Numeric ids count every `.index` line including folders, matching
+  `nb show <id>` numbering. In trees containing folders, `numeric_id`
+  and numeric selectors may differ from 0.4.0 values.
+
 ## [0.4.0] - 2026-09-05
 
 Breaking pre-1.0 release. See `documentation/migration-0.4.0.md` for the

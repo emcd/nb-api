@@ -129,12 +129,16 @@ pub(super) fn validate_and_apply_virtual(
             }
             effects.written.push(keep.clone());
             effects.created.push(keep);
+            // Mirror `nb`: a created folder is recorded by basename in the
+            // parent `.index` (nb does this for folders it creates itself;
+            // its folder resolver requires the line at depth >= 2). The
+            // folder line occupies a numeric id like any other entry.
             Ok(OpMeta {
                 path: Some(path.clone()),
                 selector: None,
                 noop: false,
                 fingerprint: None,
-                index_edits: Vec::new(),
+                index_edits: vec![append_index_edit(path)],
             })
         }
         PlanOp::DeleteNote { target } => {

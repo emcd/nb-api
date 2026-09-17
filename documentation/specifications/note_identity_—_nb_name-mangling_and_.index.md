@@ -41,6 +41,8 @@ If the mangled filename (or timestamp name) already exists in the target folder 
 
 On each create, `Transaction::commit` SHALL append the created filename (basename only) as a new line to `.index` in the target notebook/folder (creating `.index` if absent). `.index` and the note file SHALL be committed in a single git checkpoint.
 
+- **Folder creates:** `add_folder` SHALL append the created folder's basename to the *parent* folder's `.index`, mirroring `nb` (which records folders it creates the same way). Folder lines occupy numeric ids like note lines. Without the folder line, `nb list <notebook>:<folder>/` fails at depth >= 2 (nb-api:issues/9).
+
 - **Delete:** the line for the deleted note SHALL be **replaced with an empty line** (blank), **never removed**. This keeps all subsequent ids stable (probe: create A:1,B:2,C:3 → delete 2 → `.index` = `note_a.md`,``, `note_c.md`; `show 3` still resolves to `note_c.md`, `show 2` → `NotFound`, new `add D` → id 4 not reuse 2).
 - **Move within folder (rename):** update the same `.index` line in-place to the new basename (probe `probe_move.rs`: `foo/foonote.md` → `renamed.md` at foo/1). Same-folder renames to a LONGER name are refused at plan validation (the in-place update cannot splice losslessly — delete + recreate instead).
 - **Move across folders:** replace source `.index` line with blank (as delete) and append to destination `.index` (as create, with its own monotonic id). Both `.index` files and the moved file are committed atomically (probe: `movea.md` 1 → `foo/` blanks root line 1, appends `movea.md` at foo/2; `foo/1` → `bar/1` blanks foo line 1, appends `renamed.md` at bar/1).

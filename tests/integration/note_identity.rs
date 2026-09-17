@@ -201,7 +201,12 @@ async fn move_across_folders_blanks_source_and_appends_dest() {
         let outcome = tx.commit().await.expect("move");
         assert_eq!(outcome.ops[0].numeric_id, Some(1));
         let root = client.show_notebook_path(None).await.expect("path");
-        assert_eq!(index_lines(&root, ""), vec![String::new()]);
+        // Folder lines occupy ids alongside notes (nb parity): the moved
+        // note is blanked in place, folders keep their lines.
+        assert_eq!(
+            index_lines(&root, ""),
+            vec!["foo".to_string(), "bar".to_string(), String::new()]
+        );
         assert_eq!(index_lines(&root, "foo"), vec!["movea.md"]);
     })
     .await;
@@ -236,6 +241,83 @@ async fn concurrent_commits_get_distinct_ids() {
         for (name, id) in [("con_a.md", id1), ("con_b.md", id2)] {
             assert_eq!(lines[(id - 1) as usize], name, "{lines:?}");
         }
+    })
+    .await;
+}
+
+/// `add_folder` records the folder basename in the parent `.index`,
+/// mirroring `nb` (which lists folders it creates in the parent index).
+/// Without the folder line, `nb list <nb>:<folder>/` fails at depth >= 2
+/// (nbspec FYI 1472bebb / nb-api:issues/9).
+#[tokio::test]
+async fn add_folder_records_folder_line_in_parent_index() {
+    let env = NbTestEnv::new().expect("fixture");
+    with_isolated_env(&env, false, || async {
+        let client = NbClient::new(&config_for(&env)).expect("client");
+        let mut tx = client.transaction(None).await.expect("tx");
+        tx.add_note("top.md", None, "x\n", &[]).unwrap();
+        tx.add_folder("foo").unwrap();
+        let outcome = tx.commit().await.expect("commit");
+        let root = client.show_notebook_path(None).await.expect("path");
+        assert_eq!(index_lines(&root, ""), vec!["top.md", "foo"]);
+        // The folder create reports its own post-write placement.
+        let op = &outcome.ops[1];
+        assert_eq!(op.path.as_deref(), Some("foo"));
+        assert_eq!(op.numeric_id, Some(2));
+        assert_eq!(
+            op.selector.as_deref(),
+            Some(format!("{}:2", env.notebook()).as_str())
+        );
+    })
+    .await;
+}
+
+/// Numeric ids count every `.index` line including folders, matching
+/// `nb show <id>` numbering.
+#[tokio::test]
+async fn numeric_ids_count_folder_lines() {
+    let env = NbTestEnv::new().expect("fixture");
+    with_isolated_env(&env, false, || async {
+        let client = NbClient::new(&config_for(&env)).expect("client");
+        let mut tx = client.transaction(None).await.expect("tx");
+        tx.add_folder("foo").unwrap();
+        tx.add_note("foo/a.md", None, "x\n", &[]).unwrap();
+        tx.add_note("top.md", None, "y\n", &[]).unwrap();
+        let outcome = tx.commit().await.expect("commit");
+        let root = client.show_notebook_path(None).await.expect("path");
+        assert_eq!(index_lines(&root, ""), vec!["foo", "top.md"]);
+        assert_eq!(index_lines(&root, "foo"), vec!["a.md"]);
+        assert_eq!(outcome.ops[0].numeric_id, Some(1));
+        assert_eq!(outcome.ops[2].numeric_id, Some(2));
+        // Reads echo the folder-aware ids too.
+        let shown = client.show_note("top.md", None).await.expect("show");
+        assert_eq!(shown.numeric_id, Some(2));
+    })
+    .await;
+}
+
+/// Empty subfolders list successfully once the parent `.index` carries
+/// the folder line (the nb-api:issues/9 repro shape).
+#[tokio::test]
+async fn list_empty_subfolder_with_parent_index_succeeds() {
+    let env = NbTestEnv::new().expect("fixture");
+    with_isolated_env(&env, false, || async {
+        let client = NbClient::new(&config_for(&env)).expect("client");
+        let mut tx = client.transaction(None).await.expect("tx");
+        tx.add_note("proposals/7/proposal.md", None, "p\n", &[])
+            .unwrap();
+        tx.add_folder("proposals/7/specifications").unwrap();
+        tx.commit().await.expect("seed");
+        let root = client.show_notebook_path(None).await.expect("path");
+        assert_eq!(
+            index_lines(&root, "proposals/7"),
+            vec!["proposal.md", "specifications"]
+        );
+        let out = client
+            .list_notes(Some("proposals/7/specifications"), &[], None, None)
+            .await
+            .expect("empty subfolder lists");
+        assert!(out.contains("0 items"), "{out:?}");
     })
     .await;
 }
