@@ -298,6 +298,11 @@ async fn numeric_ids_count_folder_lines() {
 
 /// Empty subfolders list successfully once the parent `.index` carries
 /// the folder line (the nb-api:issues/9 repro shape).
+///
+/// Unix-only: `nb list <nb>:<nested>/` crashes under the Windows Git Bash
+/// `.cmd` launcher (nb 7.24.0 lines 4839/5086 `[[` regex on backslash
+/// paths) whenever a parent `.index` is in play (`nb-api:todos/api/9`).
+#[cfg(unix)]
 #[tokio::test]
 async fn list_empty_subfolder_with_parent_index_succeeds() {
     let env = NbTestEnv::new().expect("fixture");
