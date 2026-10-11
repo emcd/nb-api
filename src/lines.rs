@@ -157,6 +157,12 @@ pub fn apply_line_edits(body: &[u8], edits: &[LineEdit]) -> Result<Vec<u8>, NbEr
     let (eol_opt, has_final_eol, lines) = document_lines(body);
     // Effective EOL for materialized boundaries: declared, else Lf when any
     // edit introduces a boundary. Pure-delete batches on eol-None stay boundary-free.
+    //
+    // Deliberately NOT sniffed from the host OS: agents on mixed platforms
+    // sharing a repo must converge on the same bytes for EOL-less bodies
+    // (see nb-api:todos/api/9 for the CRLF wars). Revisited 2026-09-19 at
+    // the product owner's request; LF default retained. Do not relitigate
+    // without reopening the cross-platform determinism question.
     let introduces_boundary = edits.iter().any(|e| match e {
         LineEdit::Insert { .. } => true,
         LineEdit::Replace { .. } => true,
