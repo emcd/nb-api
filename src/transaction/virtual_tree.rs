@@ -25,10 +25,11 @@ impl VirtualTree {
         for rel in paths {
             let key = normalize_rel(&rel);
             let abs = root.join(&rel);
-            let meta = std::fs::symlink_metadata(&abs).map_err(|e| NbError::Io {
-                path: abs.clone(),
-                source: e.into(),
-            })?;
+            let meta =
+                std::fs::symlink_metadata(&abs).map_err(|e| NbError::Io {
+                    path: abs.clone(),
+                    source: e.into(),
+                })?;
             if meta.file_type().is_symlink() {
                 return Err(NbError::UnsupportedStructure {
                     reason: format!(
@@ -54,7 +55,9 @@ impl VirtualTree {
                             acc.push('/');
                         }
                         acc.push_str(part);
-                        nodes.entry(acc.clone()).or_insert(VirtualNode::Folder);
+                        nodes
+                            .entry(acc.clone())
+                            .or_insert(VirtualNode::Folder);
                     }
                 }
                 nodes.insert(key, VirtualNode::File(bytes));
@@ -102,10 +105,15 @@ impl VirtualTree {
         self.nodes.remove(path);
     }
 
-    pub(super) fn rename(&mut self, from: &str, to: &str) -> Result<(), NbError> {
-        let node = self.nodes.remove(from).ok_or_else(|| NbError::NotFound {
-            selector: from.to_string(),
-        })?;
+    pub(super) fn rename(
+        &mut self,
+        from: &str,
+        to: &str,
+    ) -> Result<(), NbError> {
+        let node =
+            self.nodes.remove(from).ok_or_else(|| NbError::NotFound {
+                selector: from.to_string(),
+            })?;
         if let Some(parent) = parent_path(to) {
             self.ensure_folder_chain(&parent);
         }
@@ -119,7 +127,10 @@ impl VirtualTree {
 /// Uses no-follow metadata so ignored directory symlinks (absent from the
 /// virtual snapshot) cannot redirect `create_dir_all` / `write` outside the
 /// notebook root.
-pub(super) fn refuse_symlink_ancestors(root: &Path, rel: &str) -> Result<(), NbError> {
+pub(super) fn refuse_symlink_ancestors(
+    root: &Path,
+    rel: &str,
+) -> Result<(), NbError> {
     let mut acc = PathBuf::new();
     for part in rel.split('/').filter(|p| !p.is_empty()) {
         acc.push(part);
@@ -132,21 +143,25 @@ pub(super) fn refuse_symlink_ancestors(root: &Path, rel: &str) -> Result<(), NbE
                         "refusing path through symlink `{key}`; transactions do not follow symlinks"
                     ),
                 });
-            }
-            Ok(_) => {}
+            },
+            Ok(_) => {},
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => break,
             Err(e) => {
                 return Err(NbError::Io {
                     path: abs,
                     source: e.into(),
                 });
-            }
+            },
         }
     }
     Ok(())
 }
 
-pub(super) fn outcome_selector(notebook: &str, target: &NoteTarget, resolved_path: &str) -> String {
+pub(super) fn outcome_selector(
+    notebook: &str,
+    target: &NoteTarget,
+    resolved_path: &str,
+) -> String {
     match target {
         NoteTarget::Selector { value } => {
             if value.contains(':') {
@@ -154,7 +169,7 @@ pub(super) fn outcome_selector(notebook: &str, target: &NoteTarget, resolved_pat
             } else {
                 format!("{notebook}:{value}")
             }
-        }
+        },
         NoteTarget::Path { .. } => format!("{notebook}:{resolved_path}"),
     }
 }
@@ -230,7 +245,7 @@ pub(super) fn resolve_target_path(
             Err(NbError::NotFound {
                 selector: value.clone(),
             })
-        }
+        },
         NoteTarget::Selector { value } => {
             // Prefer exact path match when value looks like a path.
             let stripped = value
@@ -255,12 +270,14 @@ pub(super) fn resolve_target_path(
                     VirtualNode::File(_)
                         if p == &candidate
                             || p.ends_with(&format!("/{candidate}"))
-                            || Path::new(p).file_stem().and_then(|s| s.to_str())
+                            || Path::new(p)
+                                .file_stem()
+                                .and_then(|s| s.to_str())
                                 == Some(stripped)
                             || p.ends_with(stripped) =>
                     {
                         Some(p.clone())
-                    }
+                    },
                     _ => None,
                 })
                 .collect();
@@ -276,7 +293,9 @@ pub(super) fn resolve_target_path(
                         });
                     }
                     for ig in ignored_existing {
-                        if ig.ends_with(&format!("/{candidate}")) || ig.ends_with(stripped) {
+                        if ig.ends_with(&format!("/{candidate}"))
+                            || ig.ends_with(stripped)
+                        {
                             return Err(NbError::PathIgnored {
                                 path: ig.clone(),
                                 guidance: "cannot edit, delete, or move an existing Git-ignored path inside a transaction".into(),
@@ -287,13 +306,15 @@ pub(super) fn resolve_target_path(
                     Err(NbError::NotFound {
                         selector: value.clone(),
                     })
-                }
+                },
                 _ => Err(NbError::ValidationError {
-                    reason: format!("selector `{value}` is ambiguous across multiple paths"),
+                    reason: format!(
+                        "selector `{value}` is ambiguous across multiple paths"
+                    ),
                     location: None,
                 }),
             }
-        }
+        },
     }
 }
 
@@ -303,9 +324,14 @@ pub(super) fn resolve_target_path(
 /// line exists but is blank (deleted id) or out of range, and `None` when
 /// the value is not numeric-id shaped (caller falls through to name
 /// matching).
-fn resolve_numeric_in_tree(tree: &VirtualTree, candidate: &str) -> Option<Result<String, NbError>> {
+fn resolve_numeric_in_tree(
+    tree: &VirtualTree,
+    candidate: &str,
+) -> Option<Result<String, NbError>> {
     let (folder, id_str) = match candidate.rfind('/') {
-        Some(i) => (candidate[..i].to_string(), candidate[i + 1..].to_string()),
+        Some(i) => {
+            (candidate[..i].to_string(), candidate[i + 1..].to_string())
+        },
         None => (String::new(), candidate.to_string()),
     };
     let id: usize = match id_str.parse() {
@@ -331,14 +357,17 @@ fn resolve_numeric_in_tree(tree: &VirtualTree, candidate: &str) -> Option<Result
                 format!("{folder}/{name}")
             };
             Some(Ok(path))
-        }
+        },
         _ => Some(Err(NbError::NotFound {
             selector: candidate.to_string(),
         })),
     }
 }
 
-pub(super) fn resolve_move_destination(from: &str, destination: &str) -> String {
+pub(super) fn resolve_move_destination(
+    from: &str,
+    destination: &str,
+) -> String {
     // A trailing slash means "into folder" (basename kept). Check the raw
     // form: `normalize_rel` trims slashes, so a post-normalize check would
     // be dead code.

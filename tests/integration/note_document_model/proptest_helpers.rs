@@ -44,7 +44,11 @@ pub(super) fn tag_tokens() -> impl Strategy<Value = Vec<String>> {
 // or only some blank counts will be caught by the proptest.
 
 /// Write `count` blank-line terminators as separators.
-pub(super) fn write_blank_lines(bytes: &mut Vec<u8>, count: usize, terminator: &[u8]) {
+pub(super) fn write_blank_lines(
+    bytes: &mut Vec<u8>,
+    count: usize,
+    terminator: &[u8],
+) {
     for _ in 0..count {
         bytes.extend_from_slice(terminator);
     }

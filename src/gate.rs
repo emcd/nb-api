@@ -18,7 +18,8 @@ use crate::error::NbError;
 /// [`NbError::GateTimeout`].
 pub const DEFAULT_GATE_TIMEOUT: Duration = Duration::from_secs(60);
 
-static GLOBAL_GATE: LazyLock<Arc<Mutex<()>>> = LazyLock::new(|| Arc::new(Mutex::new(())));
+static GLOBAL_GATE: LazyLock<Arc<Mutex<()>>> =
+    LazyLock::new(|| Arc::new(Mutex::new(())));
 
 static REGISTRY: LazyLock<StdMutex<HashMap<PathBuf, Arc<Mutex<()>>>>> =
     LazyLock::new(|| StdMutex::new(HashMap::new()));
@@ -30,7 +31,9 @@ pub struct GateHold {
 }
 
 /// Acquire only the process-shared global gate (e.g. `list_notebooks`).
-pub async fn acquire_global(timeout: Duration) -> Result<OwnedMutexGuard<()>, NbError> {
+pub async fn acquire_global(
+    timeout: Duration,
+) -> Result<OwnedMutexGuard<()>, NbError> {
     lock_with_timeout(Arc::clone(&GLOBAL_GATE), timeout, "global").await
 }
 
@@ -43,7 +46,8 @@ pub async fn acquire_notebook(
     timeout: Duration,
     hold_global: bool,
 ) -> Result<GateHold, NbError> {
-    let global_guard = lock_with_timeout(Arc::clone(&GLOBAL_GATE), timeout, "global").await?;
+    let global_guard =
+        lock_with_timeout(Arc::clone(&GLOBAL_GATE), timeout, "global").await?;
     let notebook_arc = {
         let mut map = REGISTRY.lock().unwrap_or_else(|p| p.into_inner());
         Arc::clone(
@@ -51,7 +55,8 @@ pub async fn acquire_notebook(
                 .or_insert_with(|| Arc::new(Mutex::new(()))),
         )
     };
-    let notebook_guard = lock_with_timeout(notebook_arc, timeout, "notebook").await?;
+    let notebook_guard =
+        lock_with_timeout(notebook_arc, timeout, "notebook").await?;
     Ok(GateHold {
         _notebook: notebook_guard,
         _global: if hold_global {
@@ -71,17 +76,18 @@ pub fn registry_len() -> usize {
 
 /// Resolve `git rev-parse --git-common-dir` under `notebook_root` and
 /// canonicalize to a realpath registry key.
-pub fn git_common_dir_realpath(notebook_root: &Path) -> Result<PathBuf, NbError> {
+pub fn git_common_dir_realpath(
+    notebook_root: &Path,
+) -> Result<PathBuf, NbError> {
     let raw =
-        crate::git::git_rev_parse_in(notebook_root, &["--git-common-dir"]).ok_or_else(|| {
-            NbError::ValidationError {
+        crate::git::git_rev_parse_in(notebook_root, &["--git-common-dir"])
+            .ok_or_else(|| NbError::ValidationError {
                 reason: format!(
                     "notebook path {} is not an initialized git repository",
                     notebook_root.display()
                 ),
                 location: None,
-            }
-        })?;
+            })?;
     let absolute = if raw.is_relative() {
         notebook_root.join(raw)
     } else {

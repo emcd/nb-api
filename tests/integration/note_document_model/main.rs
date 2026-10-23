@@ -27,14 +27,17 @@ mod resolution_table;
 /// formatting defect. The `.gitattributes` at the repository
 /// root disables the blank-at-eol whitespace check for the
 /// `tests/integration/fixtures/*.md` path.
-pub(crate) const NOTE_FIXTURE: &[u8] = include_bytes!("../fixtures/note-fixture.md");
+pub(crate) const NOTE_FIXTURE: &[u8] =
+    include_bytes!("../fixtures/note-fixture.md");
 
 /// Pinned `nb 7.24.0` writer output for a Todo with checkbox
 /// and terminal Tags. Same trailing-blank-line exception as
 /// `NOTE_FIXTURE` (see `.gitattributes`).
-pub(crate) const TODO_FIXTURE: &[u8] = include_bytes!("../fixtures/todo-fixture.md");
+pub(crate) const TODO_FIXTURE: &[u8] =
+    include_bytes!("../fixtures/todo-fixture.md");
 
 /// Pinned `nb 7.24.0` writer output for a tagged offline
 /// Bookmark. Same trailing-blank-line exception as
 /// `NOTE_FIXTURE` (see `.gitattributes`).
-pub(crate) const BOOKMARK_FIXTURE: &[u8] = include_bytes!("../fixtures/bookmark-fixture.md");
+pub(crate) const BOOKMARK_FIXTURE: &[u8] =
+    include_bytes!("../fixtures/bookmark-fixture.md");

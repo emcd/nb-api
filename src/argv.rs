@@ -22,7 +22,10 @@ pub(crate) fn tasks_scope(notebook: &str, folder: Option<&str>) -> String {
     }
 }
 
-pub(crate) fn tasks_command_args(scope: String, status: Option<TaskStatus>) -> Vec<String> {
+pub(crate) fn tasks_command_args(
+    scope: String,
+    status: Option<TaskStatus>,
+) -> Vec<String> {
     let mut args = vec!["tasks".to_string(), scope];
     if let Some(filter) = status {
         let status = match filter {
@@ -52,12 +55,12 @@ pub(crate) fn search_command_args(
                 args.push("--or".to_string());
                 args.push(query.to_string());
             }
-        }
+        },
         SearchMode::All => {
             for query in terms {
                 args.push(query.to_string());
             }
-        }
+        },
     }
     for tag in tags {
         args.push("--tag".to_string());
@@ -79,16 +82,20 @@ pub(crate) fn empty_tasks_message(status: Option<TaskStatus>) -> String {
     }
 }
 
-pub(crate) fn child_folder_names(path: &std::path::Path) -> Result<Vec<String>, NbError> {
+pub(crate) fn child_folder_names(
+    path: &std::path::Path,
+) -> Result<Vec<String>, NbError> {
     let read_dir = match std::fs::read_dir(path) {
         Ok(entries) => entries,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(Vec::new());
+        },
         Err(err) => {
             return Err(NbError::Io {
                 path: path.to_path_buf(),
                 source: err.into(),
             });
-        }
+        },
     };
 
     let mut names = Vec::new();
@@ -97,7 +104,9 @@ pub(crate) fn child_folder_names(path: &std::path::Path) -> Result<Vec<String>, 
             path: path.to_path_buf(),
             source: e.into(),
         })?;
-        let Some(name) = entry.file_name().to_str().map(|value| value.to_string()) else {
+        let Some(name) =
+            entry.file_name().to_str().map(|value| value.to_string())
+        else {
             continue;
         };
         if name.starts_with('.') {
@@ -111,7 +120,7 @@ pub(crate) fn child_folder_names(path: &std::path::Path) -> Result<Vec<String>, 
                     path: path.to_path_buf(),
                     source: err.into(),
                 });
-            }
+            },
         };
         if meta.is_dir() {
             names.push(name);

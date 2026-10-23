@@ -284,9 +284,13 @@ impl std::fmt::Display for NbError {
             ),
             Self::ExecutableNotFound { path } => {
                 write!(f, "`nb` executable not found at path {path:?}")
-            }
-            Self::NotFound { selector } => write!(f, "not found: {selector:?}"),
-            Self::Io { path, source } => write!(f, "I/O error at {path:?}: {source}"),
+            },
+            Self::NotFound { selector } => {
+                write!(f, "not found: {selector:?}")
+            },
+            Self::Io { path, source } => {
+                write!(f, "I/O error at {path:?}: {source}")
+            },
             Self::UnsupportedShowTarget {
                 selector,
                 actual_type,
@@ -302,19 +306,19 @@ impl std::fmt::Display for NbError {
             ),
             Self::ParseError { kind, location } => {
                 write!(f, "parse error: {kind:?} at {location:?}")
-            }
+            },
             Self::InvalidFingerprint { reason } => {
                 write!(f, "invalid fingerprint: {reason:?}")
-            }
+            },
             Self::JsonParseError { source } => {
                 write!(f, "JSON parse error: {source:?}")
-            }
+            },
             Self::ValidationError {
                 reason,
                 location: _,
             } => {
                 write!(f, "validation error: {reason:?}")
-            }
+            },
             Self::UnsupportedDocumentFormat {
                 extension,
                 supported,
@@ -323,16 +327,22 @@ impl std::fmt::Display for NbError {
                     f,
                     "unsupported document format: {extension:?} (supported: {supported:?})"
                 )
-            }
+            },
             Self::GateTimeout { gate, timeout_ms } => {
-                write!(f, "gate timeout waiting on {gate} after {timeout_ms}ms")
-            }
+                write!(
+                    f,
+                    "gate timeout waiting on {gate} after {timeout_ms}ms"
+                )
+            },
             Self::DirtyBaseline { guidance } => {
                 write!(f, "dirty baseline: {guidance}")
-            }
+            },
             Self::PathCollision { path, plan_index } => {
-                write!(f, "path collision at {path:?} (plan_index={plan_index:?})")
-            }
+                write!(
+                    f,
+                    "path collision at {path:?} (plan_index={plan_index:?})"
+                )
+            },
             Self::PathIgnored {
                 path,
                 guidance,
@@ -367,21 +377,24 @@ impl std::fmt::Display for NbError {
             ),
             Self::FingerprintMismatch { target, guidance } => {
                 write!(f, "fingerprint mismatch for {target:?}: {guidance}")
-            }
+            },
             Self::AnchorMismatch {
                 target,
                 number,
                 guidance,
-            } => write!(f, "anchor mismatch for {target} line {number}: {guidance}"),
+            } => write!(
+                f,
+                "anchor mismatch for {target} line {number}: {guidance}"
+            ),
             Self::OccurrenceMismatch { expected, actual } => {
                 write!(
                     f,
                     "occurrence mismatch: expected={expected} actual={actual}"
                 )
-            }
+            },
             Self::OverlappingEdits { indices } => {
                 write!(f, "overlapping edits at indices {indices:?}")
-            }
+            },
             Self::InvalidLineWindow {
                 offset,
                 limit,
@@ -390,7 +403,9 @@ impl std::fmt::Display for NbError {
                 f,
                 "invalid line window offset={offset} limit={limit} total_lines={total_lines}"
             ),
-            Self::EmptySubstringPattern => write!(f, "empty substring pattern"),
+            Self::EmptySubstringPattern => {
+                write!(f, "empty substring pattern")
+            },
             Self::FragmentedBody {
                 fragment_count,
                 guidance,
@@ -409,10 +424,10 @@ impl std::fmt::Display for NbError {
             ),
             Self::IndexLockTimeout { path, timeout_ms } => {
                 write!(f, "index lock timeout on {path} after {timeout_ms}ms")
-            }
+            },
             Self::UnsupportedStructure { reason } => {
                 write!(f, "unsupported structure: {reason}")
-            }
+            },
         }
     }
 }
@@ -461,7 +476,9 @@ pub enum ParseErrorKind {
 ///
 /// The reverse conversion [`From<IoError>`] for `std::io::Error`
 /// is **explicitly lossy** — see [`IoError`]'s `From` impl.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, thiserror::Error)]
+#[derive(
+    Debug, Clone, Serialize, Deserialize, PartialEq, Eq, thiserror::Error,
+)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[error("{kind:?}: {message}")]
 pub struct IoError {
@@ -585,7 +602,9 @@ fn snapshot_io_error(err: std::io::Error) -> IoError {
 /// This avoids the A→B→B duplication that would arise from both
 /// recursing into the source AND iterating/appending the same
 /// source.
-fn walk_source_chain(source: Option<&(dyn std::error::Error + 'static)>) -> Option<Box<IoError>> {
+fn walk_source_chain(
+    source: Option<&(dyn std::error::Error + 'static)>,
+) -> Option<Box<IoError>> {
     let head = source?;
     Some(Box::new(snapshot_link(head)))
 }
@@ -635,22 +654,36 @@ impl From<IoError> for std::io::Error {
         } else {
             let kind = match snapshot.kind {
                 IoErrorKind::NotFound => std::io::ErrorKind::NotFound,
-                IoErrorKind::PermissionDenied => std::io::ErrorKind::PermissionDenied,
-                IoErrorKind::ConnectionRefused => std::io::ErrorKind::ConnectionRefused,
-                IoErrorKind::ConnectionReset => std::io::ErrorKind::ConnectionReset,
-                IoErrorKind::ConnectionAborted => std::io::ErrorKind::ConnectionAborted,
+                IoErrorKind::PermissionDenied => {
+                    std::io::ErrorKind::PermissionDenied
+                },
+                IoErrorKind::ConnectionRefused => {
+                    std::io::ErrorKind::ConnectionRefused
+                },
+                IoErrorKind::ConnectionReset => {
+                    std::io::ErrorKind::ConnectionReset
+                },
+                IoErrorKind::ConnectionAborted => {
+                    std::io::ErrorKind::ConnectionAborted
+                },
                 IoErrorKind::NotConnected => std::io::ErrorKind::NotConnected,
                 IoErrorKind::AddrInUse => std::io::ErrorKind::AddrInUse,
-                IoErrorKind::AddrNotAvailable => std::io::ErrorKind::AddrNotAvailable,
+                IoErrorKind::AddrNotAvailable => {
+                    std::io::ErrorKind::AddrNotAvailable
+                },
                 IoErrorKind::BrokenPipe => std::io::ErrorKind::BrokenPipe,
-                IoErrorKind::AlreadyExists => std::io::ErrorKind::AlreadyExists,
+                IoErrorKind::AlreadyExists => {
+                    std::io::ErrorKind::AlreadyExists
+                },
                 IoErrorKind::WouldBlock => std::io::ErrorKind::WouldBlock,
                 IoErrorKind::InvalidInput => std::io::ErrorKind::InvalidInput,
                 IoErrorKind::InvalidData => std::io::ErrorKind::InvalidData,
                 IoErrorKind::TimedOut => std::io::ErrorKind::TimedOut,
                 IoErrorKind::WriteZero => std::io::ErrorKind::WriteZero,
                 IoErrorKind::Interrupted => std::io::ErrorKind::Interrupted,
-                IoErrorKind::UnexpectedEof => std::io::ErrorKind::UnexpectedEof,
+                IoErrorKind::UnexpectedEof => {
+                    std::io::ErrorKind::UnexpectedEof
+                },
                 IoErrorKind::OutOfMemory => std::io::ErrorKind::OutOfMemory,
                 IoErrorKind::Other => std::io::ErrorKind::Other,
             };

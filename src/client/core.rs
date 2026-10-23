@@ -24,8 +24,9 @@ use super::read::notebook_dir_from_env;
 /// - Fe sequences: `ESC [@-Z\-_]` (single byte after ESC)
 /// - CSI sequences: `ESC [ ... m` (SGR colors, cursor control, etc.)
 /// - nF sequences: `ESC [ -/]* [0-~]` (character set designation like `ESC ( B`)
-static ANSI_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|[ -/]*[0-~])").unwrap());
+static ANSI_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|[ -/]*[0-~])").unwrap()
+});
 
 /// Strip ANSI escape sequences from text.
 fn strip_ansi(text: &str) -> String {
@@ -77,7 +78,10 @@ impl NbClient {
     /// Begin a collect-then-commit [`Transaction`] for `notebook`.
     ///
     /// Construction performs no durable I/O and does not acquire the gate.
-    pub async fn transaction(&self, notebook: Option<&str>) -> Result<Transaction, NbError> {
+    pub async fn transaction(
+        &self,
+        notebook: Option<&str>,
+    ) -> Result<Transaction, NbError> {
         let notebook = self.resolve_notebook_name(notebook)?;
         // Prefer filesystem existence under NB_DIR so plan construction does
         // not invoke `nb` (which can auto-checkpoint a dirty worktree).
@@ -126,18 +130,28 @@ impl NbClient {
         Ok(PathBuf::from(path))
     }
 
-    pub(super) async fn with_notebook_gate<F, T>(&self, notebook: &str, f: F) -> Result<T, NbError>
+    pub(super) async fn with_notebook_gate<F, T>(
+        &self,
+        notebook: &str,
+        f: F,
+    ) -> Result<T, NbError>
     where
         F: std::future::Future<Output = Result<T, NbError>>,
     {
         let root = self.show_notebook_path_unguarded(Some(notebook)).await?;
         let key = gate::git_common_dir_realpath(&root)?;
-        let _hold = gate::acquire_notebook(key, self.gate_timeout, false).await?;
+        let _hold =
+            gate::acquire_notebook(key, self.gate_timeout, false).await?;
         f.await
     }
 
-    pub(super) fn require_folder_for_new_note(&self, folder: Option<&str>) -> Result<(), NbError> {
-        if self.allow_top_level_notes || folder.is_some_and(|value| !value.trim().is_empty()) {
+    pub(super) fn require_folder_for_new_note(
+        &self,
+        folder: Option<&str>,
+    ) -> Result<(), NbError> {
+        if self.allow_top_level_notes
+            || folder.is_some_and(|value| !value.trim().is_empty())
+        {
             return Ok(());
         }
         Err(NbError::ValidationError {
@@ -151,7 +165,8 @@ impl NbClient {
         id: &str,
         notebook: Option<&str>,
     ) -> Result<(String, String), NbError> {
-        if let Some((embedded_notebook, path)) = parse_qualified_selector(id)? {
+        if let Some((embedded_notebook, path)) = parse_qualified_selector(id)?
+        {
             let notebook = match notebook {
                 Some(value) => {
                     validate_notebook_name(value)?;
@@ -164,7 +179,7 @@ impl NbClient {
                         });
                     }
                     embedded_notebook.to_string()
-                }
+                },
                 _ => embedded_notebook.to_string(),
             };
             self.ensure_existing_notebook(&notebook).await?;
@@ -174,7 +189,11 @@ impl NbClient {
         Ok((notebook.clone(), format!("{}:{}", notebook, id)))
     }
 
-    pub(super) fn append_notebook_warning(&self, output: String, notebook: &str) -> String {
+    pub(super) fn append_notebook_warning(
+        &self,
+        output: String,
+        notebook: &str,
+    ) -> String {
         let Some(default_notebook) = self.default_notebook.as_deref() else {
             return output;
         };
@@ -190,7 +209,10 @@ impl NbClient {
     }
 
     /// Resolves the notebook to use for a command.
-    pub(super) fn resolve_notebook_name(&self, notebook: Option<&str>) -> Result<String, NbError> {
+    pub(super) fn resolve_notebook_name(
+        &self,
+        notebook: Option<&str>,
+    ) -> Result<String, NbError> {
         if let Some(name) = notebook {
             validate_notebook_name(name)?;
             return Ok(name.to_string());
@@ -200,23 +222,34 @@ impl NbClient {
             return Ok(name.to_string());
         }
         Err(NbError::ValidationError {
-            reason: "notebook not configured; set --notebook or NB_MCP_NOTEBOOK".to_string(),
+            reason:
+                "notebook not configured; set --notebook or NB_MCP_NOTEBOOK"
+                    .to_string(),
             location: None,
         })
     }
 
-    pub(super) async fn resolve_notebook(&self, notebook: Option<&str>) -> Result<String, NbError> {
+    pub(super) async fn resolve_notebook(
+        &self,
+        notebook: Option<&str>,
+    ) -> Result<String, NbError> {
         let name = self.resolve_notebook_name(notebook)?;
         self.ensure_notebook(&name).await?;
         Ok(name)
     }
 
-    pub(super) async fn ensure_notebook(&self, notebook: &str) -> Result<(), NbError> {
+    pub(super) async fn ensure_notebook(
+        &self,
+        notebook: &str,
+    ) -> Result<(), NbError> {
         match self.check_notebook(notebook).await {
             Ok(()) => Ok(()),
             // Genuine infrastructure failure (no nb binary, IO
             // error) — surface verbatim; do not try to create.
-            Err(err @ (NbError::ExecutableNotFound { .. } | NbError::Io { .. })) => Err(err),
+            Err(
+                err
+                @ (NbError::ExecutableNotFound { .. } | NbError::Io { .. }),
+            ) => Err(err),
             // Typed NotFound from `check_notebook` means the
             // pinned diagnostic matched the genuine notebook-
             // absence shape (`Notebook not found: <name>`).
@@ -241,7 +274,7 @@ impl NbClient {
                 ])
                 .await?;
                 Ok(())
-            }
+            },
             // Any other error from `check_notebook` (permission
             // denied, transient crash, etc.) propagates verbatim;
             // we deliberately do not try `notebooks add`, because
@@ -251,11 +284,17 @@ impl NbClient {
         }
     }
 
-    pub(super) async fn ensure_existing_notebook(&self, notebook: &str) -> Result<(), NbError> {
+    pub(super) async fn ensure_existing_notebook(
+        &self,
+        notebook: &str,
+    ) -> Result<(), NbError> {
         match self.check_notebook(notebook).await {
             Ok(()) => Ok(()),
             // Infrastructure failure — surface verbatim.
-            Err(err @ (NbError::ExecutableNotFound { .. } | NbError::Io { .. })) => Err(err),
+            Err(
+                err
+                @ (NbError::ExecutableNotFound { .. } | NbError::Io { .. }),
+            ) => Err(err),
             // Genuine notebook absence: propagate the typed
             // `NbError::NotFound` produced by `check_notebook`
             // verbatim. The qualified-selector path
@@ -292,13 +331,16 @@ impl NbClient {
                     // no possibility of drift between the synthetic
                     // field and the real argv.
                     return Err(NbError::CommandFailed {
-                        command: format!("nb notebooks show {notebook} --path"),
-                        stderr: "nb notebooks path output was empty".to_string(),
+                        command: format!(
+                            "nb notebooks show {notebook} --path"
+                        ),
+                        stderr: "nb notebooks path output was empty"
+                            .to_string(),
                         exit_code: None,
                     });
                 }
                 Ok(())
-            }
+            },
             Err(err) => {
                 // Surface genuine infrastructure failures verbatim
                 // so callers can distinguish "nb is broken" from
@@ -315,17 +357,18 @@ impl NbClient {
                 // try to create the notebook on `NotFound` or
                 // surface the error verbatim otherwise.
                 match err {
-                    NbError::ExecutableNotFound { .. } | NbError::Io { .. } => Err(err),
+                    NbError::ExecutableNotFound { .. }
+                    | NbError::Io { .. } => Err(err),
                     NbError::CommandFailed { ref stderr, .. }
                         if is_notebook_not_found(stderr, notebook) =>
                     {
                         Err(NbError::NotFound {
                             selector: format!("{notebook}:"),
                         })
-                    }
+                    },
                     other => Err(other),
                 }
-            }
+            },
         }
     }
 
@@ -399,7 +442,10 @@ impl NbClient {
     }
 
     /// Executes an nb command with dynamic arguments.
-    pub(super) async fn exec_vec(&self, args: Vec<String>) -> Result<String, NbError> {
+    pub(super) async fn exec_vec(
+        &self,
+        args: Vec<String>,
+    ) -> Result<String, NbError> {
         let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
         self.exec(&args_ref).await
     }

@@ -82,7 +82,8 @@ const TEST_ENV_VARS: &[&str] = &[
 ];
 
 #[tokio::test]
-async fn spawned_nb_child_receives_contiguous_signing_overrides_at_indices_zero_and_one() {
+async fn spawned_nb_child_receives_contiguous_signing_overrides_at_indices_zero_and_one()
+ {
     // Acquire ENV_LOCK BEFORE constructing NbTestEnv. The
     // previous ordering (lock after new) was a process-global
     // race: a sibling test in this binary could spawn `nb
@@ -146,7 +147,8 @@ exit 0
 "#
     );
     fs::write(&shim_path, shim_script).expect("write shim script");
-    fs::set_permissions(&shim_path, fs::Permissions::from_mode(0o755)).expect("chmod shim script");
+    fs::set_permissions(&shim_path, fs::Permissions::from_mode(0o755))
+        .expect("chmod shim script");
 
     // Prepend the shim dir to PATH so the shim resolves first.
     let current_path = std::env::var_os("PATH").unwrap_or_default();
@@ -187,8 +189,9 @@ exit 0
 
     // Read the captured env (the spawn-time env as seen by
     // the `nb` child after `scrub_git_env` + `apply_git_signing_env`).
-    let captured = fs::read_to_string(&capture_path)
-        .unwrap_or_else(|e| panic!("read captured env {}: {e}", capture_path.display()));
+    let captured = fs::read_to_string(&capture_path).unwrap_or_else(|e| {
+        panic!("read captured env {}: {e}", capture_path.display())
+    });
 
     // `apply_git_signing_env` emits: GIT_CONFIG_COUNT=2,
     // KEY_0=commit.gpgsign, VALUE_0=false, KEY_1=tag.gpgsign,
@@ -283,7 +286,8 @@ exit 0
 /// regression where the patch accidentally reads *no* parent
 /// count and emits 0 entries.
 #[tokio::test]
-async fn spawned_nb_child_receives_signing_overrides_when_parent_has_no_git_config() {
+async fn spawned_nb_child_receives_signing_overrides_when_parent_has_no_git_config()
+ {
     // Acquire ENV_LOCK BEFORE constructing NbTestEnv (same
     // rationale as the primary test).
     let _guard = lock_env();
@@ -326,7 +330,8 @@ exit 0
 "#
     );
     fs::write(&shim_path, shim_script).expect("write shim script");
-    fs::set_permissions(&shim_path, fs::Permissions::from_mode(0o755)).expect("chmod shim script");
+    fs::set_permissions(&shim_path, fs::Permissions::from_mode(0o755))
+        .expect("chmod shim script");
 
     let current_path = std::env::var_os("PATH").unwrap_or_default();
     let new_path = format!(
@@ -349,8 +354,9 @@ exit 0
     let client = NbClient::new(&config).expect("client construction");
     let _ = client.list_notes(None, &[], None, None).await;
 
-    let captured = fs::read_to_string(&capture_path)
-        .unwrap_or_else(|e| panic!("read captured env {}: {e}", capture_path.display()));
+    let captured = fs::read_to_string(&capture_path).unwrap_or_else(|e| {
+        panic!("read captured env {}: {e}", capture_path.display())
+    });
 
     // Same invariants as the primary test, but with no parent
     // GIT_CONFIG set — proves the patch doesn't accidentally

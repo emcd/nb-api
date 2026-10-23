@@ -17,7 +17,8 @@ use nb_api::parser::{ParseContext, parse};
 #[test]
 fn fingerprint_format_is_b3_with_64_lowercase_hex() {
     let bytes: &[u8] = b"line1\nline2\n";
-    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md"))).unwrap();
+    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md")))
+        .unwrap();
     let fp = fingerprint(&doc);
     let s = fp.to_string();
     assert!(s.starts_with("b3:"));
@@ -33,7 +34,8 @@ fn fingerprint_format_is_b3_with_64_lowercase_hex() {
 
 #[test]
 fn fingerprint_of_empty_body_is_blake3_empty() {
-    let doc = parse(b"", ParseContext::FromPath(PathBuf::from("note.md"))).unwrap();
+    let doc =
+        parse(b"", ParseContext::FromPath(PathBuf::from("note.md"))).unwrap();
     let fp = fingerprint(&doc);
     assert_eq!(
         fp.to_string(),
@@ -70,7 +72,9 @@ fn fingerprint_hashes_fragments_in_source_order() {
 fn assert_invalid(err: NbError, reason: &str) {
     match err {
         NbError::InvalidFingerprint { reason: r } => assert_eq!(r, reason),
-        other => panic!("expected InvalidFingerprint({reason}), got {other:?}"),
+        other => {
+            panic!("expected InvalidFingerprint({reason}), got {other:?}")
+        },
     }
 }
 
@@ -118,7 +122,9 @@ fn from_str_rejects_wrong_length() {
 fn from_str_rejects_invalid_hex() {
     // Replace one hex char with 'g' (non-hex).
     let mut s = String::from("b3:");
-    s.push_str("gf1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262");
+    s.push_str(
+        "gf1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262",
+    );
     assert_invalid(Fingerprint::from_str(&s).unwrap_err(), "invalid_hex");
 }
 
@@ -126,13 +132,16 @@ fn from_str_rejects_invalid_hex() {
 fn from_str_rejects_uppercase_hex() {
     // One uppercase hex char.
     let mut s = String::from("b3:");
-    s.push_str("Af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262");
+    s.push_str(
+        "Af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262",
+    );
     assert_invalid(Fingerprint::from_str(&s).unwrap_err(), "uppercase_hex");
 }
 
 #[test]
 fn from_str_accepts_canonical_lowercase_hex() {
-    let s = "b3:af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262";
+    let s =
+        "b3:af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262";
     let fp = Fingerprint::from_str(s).unwrap();
     assert_eq!(fp.to_string(), s);
 }
@@ -159,7 +168,8 @@ fn from_json_returns_invalid_fingerprint_on_format_error() {
 
 #[test]
 fn from_json_accepts_canonical_form() {
-    let canonical = "b3:af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262";
+    let canonical =
+        "b3:af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262";
     let result = Fingerprint::from_json(&format!("\"{canonical}\"")).unwrap();
     assert_eq!(result.to_string(), canonical);
 }
@@ -175,8 +185,12 @@ fn fingerprint_depends_only_on_body_ranges() {
     // different individual tokens.
     let bytes_a: &[u8] = b"# Title A\n\n#alpha #gamma\n\nShared body\n";
     let bytes_b: &[u8] = b"# Title B\n\n#beta #gamma\n\nShared body\n";
-    let doc_a = parse(bytes_a, ParseContext::FromPath(PathBuf::from("note.md"))).unwrap();
-    let doc_b = parse(bytes_b, ParseContext::FromPath(PathBuf::from("note.md"))).unwrap();
+    let doc_a =
+        parse(bytes_a, ParseContext::FromPath(PathBuf::from("note.md")))
+            .unwrap();
+    let doc_b =
+        parse(bytes_b, ParseContext::FromPath(PathBuf::from("note.md")))
+            .unwrap();
     let fp_a = fingerprint(&doc_a);
     let fp_b = fingerprint(&doc_b);
     assert_eq!(fp_a, fp_b);
@@ -186,7 +200,8 @@ fn fingerprint_depends_only_on_body_ranges() {
 
 #[test]
 fn fingerprint_eq_and_hash() {
-    let s = "b3:af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262";
+    let s =
+        "b3:af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262";
     let a = Fingerprint::from_str(s).unwrap();
     let b = Fingerprint::from_str(s).unwrap();
     assert_eq!(a, b);
@@ -203,7 +218,8 @@ fn fingerprint_eq_and_hash() {
 
 #[test]
 fn fingerprint_serializes_to_canonical_string() {
-    let s = "b3:af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262";
+    let s =
+        "b3:af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262";
     let fp = Fingerprint::from_str(s).unwrap();
     let json = serde_json::to_string(&fp).unwrap();
     assert_eq!(json, format!("\"{s}\""));
@@ -211,7 +227,8 @@ fn fingerprint_serializes_to_canonical_string() {
 
 #[test]
 fn fingerprint_deserializes_from_canonical_string() {
-    let s = "b3:af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262";
+    let s =
+        "b3:af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262";
     let json = format!("\"{s}\"");
     let fp: Fingerprint = serde_json::from_str(&json).unwrap();
     assert_eq!(fp.to_string(), s);
@@ -219,6 +236,7 @@ fn fingerprint_deserializes_from_canonical_string() {
 
 #[test]
 fn fingerprint_rejects_garbage_via_deserialize() {
-    let result: Result<Fingerprint, _> = serde_json::from_str("\"not a fingerprint\"");
+    let result: Result<Fingerprint, _> =
+        serde_json::from_str("\"not a fingerprint\"");
     assert!(result.is_err());
 }

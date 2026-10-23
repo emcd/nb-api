@@ -135,7 +135,9 @@ impl NoteDocument {
     pub fn verify_partition(&self) -> Result<(), &'static str> {
         let source_len = self.source.len();
         let mut covered: Vec<(usize, usize)> = Vec::new();
-        let mut check = |r: &std::ops::Range<usize>, name: &str| -> Result<(), &'static str> {
+        let mut check = |r: &std::ops::Range<usize>,
+                         name: &str|
+         -> Result<(), &'static str> {
             if r.start > r.end {
                 return Err("range not half-open (start > end)");
             }
@@ -161,7 +163,7 @@ impl NoteDocument {
                 for r in &note.body_ranges {
                     check(r, "body")?;
                 }
-            }
+            },
             Partition::Todo(todo) => {
                 check(&todo.prefix_range, "prefix")?;
                 if let Some(r) = &todo.title_range {
@@ -176,7 +178,7 @@ impl NoteDocument {
                 for r in &todo.body_ranges {
                     check(r, "body")?;
                 }
-            }
+            },
             Partition::Bookmark(bookmark) => {
                 check(&bookmark.prefix_range, "prefix")?;
                 if let Some(r) = &bookmark.title_range {
@@ -194,7 +196,7 @@ impl NoteDocument {
                 for r in &bookmark.body_ranges {
                     check(r, "body")?;
                 }
-            }
+            },
         }
         covered.sort_by_key(|&(s, _)| s);
         // Adjacency check: ranges must touch end-to-end
@@ -206,7 +208,9 @@ impl NoteDocument {
                 return Err("ranges overlap");
             }
             if window[0].1 < window[1].0 {
-                return Err("partition leaves a gap (internal unassigned bytes)");
+                return Err(
+                    "partition leaves a gap (internal unassigned bytes)",
+                );
             }
         }
         if covered.first().map(|r| r.0) != Some(0) {
@@ -236,7 +240,7 @@ impl NoteDocument {
                 let title = todo.title_range.as_ref()?;
                 let line = self.source.get(title.start..title.end)?;
                 parse_todo_state_from_title(line)
-            }
+            },
             _ => None,
         }
     }
@@ -301,15 +305,18 @@ impl NoteDocument {
     /// the source and SHALL NOT themselves own bytes.
     pub fn tag_token_spans(&self) -> Vec<Range<usize>> {
         match &self.partition {
-            Partition::Note(note) => {
-                tag_token_spans_in(&self.source, note.tags_prefix_range.as_ref())
-            }
-            Partition::Todo(todo) => {
-                tag_token_spans_in(&self.source, todo.tag_section_range.as_ref())
-            }
-            Partition::Bookmark(bookmark) => {
-                tag_token_spans_in(&self.source, bookmark.tag_section_range.as_ref())
-            }
+            Partition::Note(note) => tag_token_spans_in(
+                &self.source,
+                note.tags_prefix_range.as_ref(),
+            ),
+            Partition::Todo(todo) => tag_token_spans_in(
+                &self.source,
+                todo.tag_section_range.as_ref(),
+            ),
+            Partition::Bookmark(bookmark) => tag_token_spans_in(
+                &self.source,
+                bookmark.tag_section_range.as_ref(),
+            ),
         }
     }
 
@@ -349,7 +356,9 @@ impl NoteDocument {
         match &self.partition {
             Partition::Note(note) => note.tags_prefix_range.clone(),
             Partition::Todo(todo) => todo.tag_section_range.clone(),
-            Partition::Bookmark(bookmark) => bookmark.tag_section_range.clone(),
+            Partition::Bookmark(bookmark) => {
+                bookmark.tag_section_range.clone()
+            },
         }
     }
 
@@ -382,7 +391,9 @@ impl NoteDocument {
         match &self.partition {
             Partition::Note(_) => None,
             Partition::Todo(todo) => todo.tag_section_range.clone(),
-            Partition::Bookmark(bookmark) => bookmark.tag_section_range.clone(),
+            Partition::Bookmark(bookmark) => {
+                bookmark.tag_section_range.clone()
+            },
         }
     }
 }

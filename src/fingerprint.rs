@@ -54,9 +54,10 @@ impl Fingerprint {
     /// JSON parse errors map to [`NbError::JsonParseError`];
     /// format errors map to [`NbError::InvalidFingerprint`].
     pub fn from_json(s: &str) -> Result<Self, NbError> {
-        let inner: String = serde_json::from_str(s).map_err(|e| NbError::JsonParseError {
-            source: e.to_string(),
-        })?;
+        let inner: String =
+            serde_json::from_str(s).map_err(|e| NbError::JsonParseError {
+                source: e.to_string(),
+            })?;
         inner.parse()
     }
 
@@ -138,13 +139,18 @@ fn validate(s: &str) -> Result<(), NbError> {
 }
 
 impl Serialize for Fingerprint {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+    fn serialize<S: Serializer>(
+        &self,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
         serializer.serialize_str(&format!("{PREFIX}{}", self.0))
     }
 }
 
 impl<'de> Deserialize<'de> for Fingerprint {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+    fn deserialize<D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Self, D::Error> {
         let s = String::deserialize(deserializer)?;
         s.parse().map_err(serde::de::Error::custom)
     }
@@ -155,7 +161,9 @@ impl schemars::JsonSchema for Fingerprint {
     fn schema_name() -> std::borrow::Cow<'static, str> {
         std::borrow::Cow::Borrowed("Fingerprint")
     }
-    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    fn json_schema(
+        _generator: &mut schemars::SchemaGenerator,
+    ) -> schemars::Schema {
         schemars::json_schema!({
             "type": "string",
             "pattern": "^b3:[0-9a-f]{64}$"

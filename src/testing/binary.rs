@@ -52,15 +52,18 @@ pub fn fixture_child_path() -> &'static OsString {
                 dirs.push(p);
             }
         }
-        std::env::join_paths(dirs).unwrap_or_else(|_| OsString::from("/usr/bin:/bin"))
+        std::env::join_paths(dirs)
+            .unwrap_or_else(|_| OsString::from("/usr/bin:/bin"))
     })
 }
 
 fn discover_nb_binary() -> PathBuf {
     if let Some(explicit) = std::env::var_os("NB_API_TEST_NB") {
-        return resolve_nb_override(Path::new(&explicit)).unwrap_or_else(|reason| {
-            panic!("nb-api testing: invalid NB_API_TEST_NB: {reason}");
-        });
+        return resolve_nb_override(Path::new(&explicit)).unwrap_or_else(
+            |reason| {
+                panic!("nb-api testing: invalid NB_API_TEST_NB: {reason}");
+            },
+        );
     }
 
     // Candidate file names per directory. On Windows this is the PATHEXT

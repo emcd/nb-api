@@ -10,12 +10,13 @@ use crate::types::{CommitOutcome, OpOutcome};
 use super::apply::{OpMeta, PlanEffects, validate_and_apply_virtual};
 use super::index::{
     PendingIndexEdit, acquire_index_lock, apply_index_edits, index_id_on_disk,
-    index_rel_for_folder, is_index_rel, numeric_selector, reap_stale_index_lock,
-    split_folder_basename,
+    index_rel_for_folder, is_index_rel, numeric_selector,
+    reap_stale_index_lock, split_folder_basename,
 };
 use super::plan::annotate_plan_index;
 use super::virtual_tree::{
-    VirtualNode, VirtualTree, normalize_rel, parent_path, refuse_symlink_ancestors,
+    VirtualNode, VirtualTree, normalize_rel, parent_path,
+    refuse_symlink_ancestors,
 };
 
 use super::plan::Transaction;
@@ -30,7 +31,8 @@ impl Transaction {
             .show_notebook_path_unguarded(Some(&self.notebook))
             .await?;
         let gate_key = gate::git_common_dir_realpath(&notebook_root)?;
-        let _hold = gate::acquire_notebook(gate_key, self.gate_timeout, false).await?;
+        let _hold =
+            gate::acquire_notebook(gate_key, self.gate_timeout, false).await?;
 
         // A crashed writer may leave its `.nb-api-index.lock` behind; an
         // untracked lock file reads as dirty, so reap a stale one first.
@@ -53,16 +55,18 @@ impl Transaction {
             });
         }
 
-        let ignored_existing: HashSet<String> = git::list_ignored_paths(&notebook_root)?
-            .into_iter()
-            .map(|p| normalize_rel(&p))
-            .collect();
+        let ignored_existing: HashSet<String> =
+            git::list_ignored_paths(&notebook_root)?
+                .into_iter()
+                .map(|p| normalize_rel(&p))
+                .collect();
         let mut tree = VirtualTree::from_disk(&notebook_root)?;
         let mut op_meta: Vec<OpMeta> = Vec::with_capacity(self.plan.len());
         let mut effects = PlanEffects::default();
         // Disk keys at snapshot time: materialize refuses a planned create
         // that appears on disk afterwards (external same-path race).
-        let snapshot_keys: HashSet<String> = tree.nodes.keys().cloned().collect();
+        let snapshot_keys: HashSet<String> =
+            tree.nodes.keys().cloned().collect();
 
         for (index, op) in self.plan.iter().enumerate() {
             match validate_and_apply_virtual(
@@ -77,7 +81,7 @@ impl Transaction {
                 Ok(meta) => op_meta.push(meta),
                 Err(err) => {
                     return Err(annotate_plan_index(err, index as u32));
-                }
+                },
             }
         }
 
@@ -92,10 +96,11 @@ impl Transaction {
         // Disk baseline before materialize (for rollback of new owned outputs).
         // Virtual tree already includes planned ops; disk is still pre-apply.
         let baseline_on_disk: HashSet<String> = {
-            let mut s: HashSet<String> = git::list_notebook_paths(&notebook_root)?
-                .into_iter()
-                .map(|p| normalize_rel(&p))
-                .collect();
+            let mut s: HashSet<String> =
+                git::list_notebook_paths(&notebook_root)?
+                    .into_iter()
+                    .map(|p| normalize_rel(&p))
+                    .collect();
             s.extend(ignored_existing.iter().cloned());
             s
         };
@@ -140,8 +145,14 @@ impl Transaction {
             let placements = if pending.is_empty() {
                 Vec::new()
             } else {
-                let _lock = acquire_index_lock(&notebook_root, self.gate_timeout).await?;
-                let placements = apply_index_edits(&notebook_root, &pending, self.gate_timeout)?;
+                let _lock =
+                    acquire_index_lock(&notebook_root, self.gate_timeout)
+                        .await?;
+                let placements = apply_index_edits(
+                    &notebook_root,
+                    &pending,
+                    self.gate_timeout,
+                )?;
                 drop(_lock);
                 placements
             };
@@ -165,7 +176,7 @@ impl Transaction {
                                 post_revision_observed: None,
                                 guidance: "git commit may have succeeded but HEAD could not be re-read; do not retry blindly".into(),
                             });
-                        }
+                        },
                     }
                 } else {
                     None
@@ -181,19 +192,26 @@ impl Transaction {
                         // placement is last, so take the last match.
                         // All other ops keep the echoed target selector and
                         // gain a numeric id when the path is indexed.
-                        let (selector, numeric_id) =
-                            match placements.iter().rev().find(|p| p.op_index == i as u32) {
-                                Some(p) => (
-                                    Some(numeric_selector(&self.notebook, &p.folder, p.id)),
-                                    Some(p.id),
-                                ),
-                                None => (
-                                    meta.selector,
-                                    meta.path
-                                        .as_deref()
-                                        .and_then(|p| index_id_on_disk(&notebook_root, p)),
-                                ),
-                            };
+                        let (selector, numeric_id) = match placements
+                            .iter()
+                            .rev()
+                            .find(|p| p.op_index == i as u32)
+                        {
+                            Some(p) => (
+                                Some(numeric_selector(
+                                    &self.notebook,
+                                    &p.folder,
+                                    p.id,
+                                )),
+                                Some(p.id),
+                            ),
+                            None => (
+                                meta.selector,
+                                meta.path.as_deref().and_then(|p| {
+                                    index_id_on_disk(&notebook_root, p)
+                                }),
+                            ),
+                        };
                         OpOutcome {
                             index: i as u32,
                             path: meta.path,
@@ -210,10 +228,11 @@ impl Transaction {
                     pre_revision,
                     ops,
                 })
-            }
+            },
             Err(err) => {
                 let post = git::notebook_head(&notebook_root).ok();
-                if post.as_deref().is_some_and(|h| h != pre_revision.as_str()) {
+                if post.as_deref().is_some_and(|h| h != pre_revision.as_str())
+                {
                     return Err(NbError::IndeterminateCommit {
                         pre_revision,
                         post_revision_observed: post,
@@ -229,11 +248,16 @@ impl Transaction {
                     .filter(|p| !baseline_on_disk.contains(p))
                     .filter(|p| !baseline_dirs.contains(p))
                     .collect();
-                match try_restore(&notebook_root, &pre_revision, &owned_new, &baseline_dirs) {
+                match try_restore(
+                    &notebook_root,
+                    &pre_revision,
+                    &owned_new,
+                    &baseline_dirs,
+                ) {
                     Ok(()) => Err(err),
                     Err(recovery) => Err(recovery),
                 }
-            }
+            },
         }
     }
 }
@@ -303,7 +327,8 @@ fn try_restore(
             return Err(NbError::RecoveryRequired {
                 pre_revision: pre_revision.to_string(),
                 post_revision_observed: git::notebook_head(notebook_root).ok(),
-                status_observed: git::notebook_status_porcelain(notebook_root).ok(),
+                status_observed: git::notebook_status_porcelain(notebook_root)
+                    .ok(),
                 preserved_paths: Some(vec![d.clone()]),
                 guidance: format!(
                     "failed to restore baseline directory `{d}` after cleanup; do not retry blindly. underlying: {e}"
@@ -321,14 +346,14 @@ fn try_restore(
                 if let Err(e) = std::fs::remove_file(&abs) {
                     remaining.push(format!("{rel} ({e})"));
                 }
-            }
+            },
             Ok(meta) if meta.is_dir() => {
                 if let Err(e) = std::fs::remove_dir_all(&abs) {
                     remaining.push(format!("{rel} ({e})"));
                 }
-            }
-            Ok(_) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            },
+            Ok(_) => {},
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {},
             Err(e) => remaining.push(format!("{rel} ({e})")),
         }
         // Prune only empty parents that the transaction created — never a
@@ -341,7 +366,7 @@ fn try_restore(
                 }
                 let p = notebook_root.join(&cur);
                 match std::fs::remove_dir(&p) {
-                    Ok(()) => {}
+                    Ok(()) => {},
                     Err(_) => break,
                 }
                 match parent_path(&cur) {
@@ -373,7 +398,8 @@ fn try_restore(
             return Err(NbError::RecoveryRequired {
                 pre_revision: pre_revision.to_string(),
                 post_revision_observed: None,
-                status_observed: git::notebook_status_porcelain(notebook_root).ok(),
+                status_observed: git::notebook_status_porcelain(notebook_root)
+                    .ok(),
                 preserved_paths: if still_present.is_empty() {
                     None
                 } else {
@@ -383,7 +409,7 @@ fn try_restore(
                     "cleanup ran but HEAD re-read failed during verification; do not retry blindly. underlying: {e}"
                 ),
             });
-        }
+        },
     };
     let dirty = match restore_verify_dirty(notebook_root) {
         Ok(d) => d,
@@ -391,7 +417,8 @@ fn try_restore(
             return Err(NbError::RecoveryRequired {
                 pre_revision: pre_revision.to_string(),
                 post_revision_observed: Some(head),
-                status_observed: git::notebook_status_porcelain(notebook_root).ok(),
+                status_observed: git::notebook_status_porcelain(notebook_root)
+                    .ok(),
                 preserved_paths: if still_present.is_empty() {
                     None
                 } else {
@@ -401,7 +428,7 @@ fn try_restore(
                     "cleanup ran but dirty-status check failed during verification; do not retry blindly. underlying: {e}"
                 ),
             });
-        }
+        },
     };
     if head != pre_revision || dirty || !still_present.is_empty() {
         return Err(NbError::RecoveryRequired {
@@ -440,7 +467,8 @@ fn restore_verify_dirty(notebook_root: &Path) -> Result<bool, NbError> {
     if std::env::var_os("NB_API_FAIL_RESTORE_DIRTY").is_some() {
         return Err(NbError::CommandFailed {
             command: "nb-api://fail-restore-dirty".into(),
-            stderr: "injected dirty-status verify failure for rollback tests".into(),
+            stderr: "injected dirty-status verify failure for rollback tests"
+                .into(),
             exit_code: Some(1),
         });
     }
@@ -458,30 +486,35 @@ fn restore_verify_dirty(notebook_root: &Path) -> Result<bool, NbError> {
 #[cfg(feature = "testing")]
 fn simulate_external_writer(notebook_root: &Path) -> Result<(), NbError> {
     use std::io::Write as _;
-    let (folder, name) = match std::env::var("NB_API_SIMULATE_EXTERNAL_SAME_PATH") {
-        Ok(rel) => {
-            let (folder, basename) = split_folder_basename(&normalize_rel(&rel));
-            (folder, basename)
-        }
-        Err(_) => (String::new(), format!("external-{}.md", std::process::id())),
-    };
+    let (folder, name) =
+        match std::env::var("NB_API_SIMULATE_EXTERNAL_SAME_PATH") {
+            Ok(rel) => {
+                let (folder, basename) =
+                    split_folder_basename(&normalize_rel(&rel));
+                (folder, basename)
+            },
+            Err(_) => {
+                (String::new(), format!("external-{}.md", std::process::id()))
+            },
+        };
     let rel = if folder.is_empty() {
         name.clone()
     } else {
         format!("{folder}/{name}")
     };
     if !folder.is_empty() {
-        std::fs::create_dir_all(notebook_root.join(&folder)).map_err(|e| NbError::Io {
-            path: notebook_root.join(&folder),
-            source: e.into(),
+        std::fs::create_dir_all(notebook_root.join(&folder)).map_err(|e| {
+            NbError::Io {
+                path: notebook_root.join(&folder),
+                source: e.into(),
+            }
         })?;
     }
-    std::fs::write(notebook_root.join(&rel), b"# External\n\nexternal body\n").map_err(|e| {
-        NbError::Io {
+    std::fs::write(notebook_root.join(&rel), b"# External\n\nexternal body\n")
+        .map_err(|e| NbError::Io {
             path: notebook_root.join(&rel),
             source: e.into(),
-        }
-    })?;
+        })?;
     let index_abs = notebook_root.join(index_rel_for_folder(&folder));
     let mut f = OpenOptions::new()
         .create(true)
@@ -543,14 +576,18 @@ fn materialize_tree(
                     path: abs,
                     source: e.into(),
                 });
-            }
+            },
         };
         if meta.file_type().is_symlink() {
             return Err(NbError::UnsupportedStructure {
-                reason: format!("refusing to materialize through symlink `{key}`"),
+                reason: format!(
+                    "refusing to materialize through symlink `{key}`"
+                ),
             });
         }
-        if meta.is_file() && !matches!(tree.nodes.get(&key), Some(VirtualNode::File(_))) {
+        if meta.is_file()
+            && !matches!(tree.nodes.get(&key), Some(VirtualNode::File(_)))
+        {
             std::fs::remove_file(&abs).map_err(|e| NbError::Io {
                 path: abs,
                 source: e.into(),
@@ -594,7 +631,9 @@ fn materialize_tree(
         if let Ok(meta) = std::fs::symlink_metadata(&abs) {
             if meta.file_type().is_symlink() {
                 return Err(NbError::UnsupportedStructure {
-                    reason: format!("refusing to write through symlink `{key}`"),
+                    reason: format!(
+                        "refusing to write through symlink `{key}`"
+                    ),
                 });
             }
             // A planned create racing an external same-path create (file or

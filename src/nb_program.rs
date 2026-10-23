@@ -35,7 +35,8 @@ const DEFAULT_PATHEXT: &str = ".COM;.EXE;.BAT;.CMD";
 pub(crate) fn nb_candidate_names() -> Vec<OsString> {
     #[cfg(windows)]
     {
-        let pathext = std::env::var("PATHEXT").unwrap_or_else(|_| DEFAULT_PATHEXT.to_string());
+        let pathext = std::env::var("PATHEXT")
+            .unwrap_or_else(|_| DEFAULT_PATHEXT.to_string());
         pathext_names(&pathext)
     }
     #[cfg(not(windows))]

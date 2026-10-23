@@ -20,14 +20,16 @@ use crate::common::find_subsequence;
 /// failing-first test pins the behavior.
 #[test]
 fn bookmark_tags_terminal_after_content_is_canonical_metadata() {
-    let bytes: &[u8] = b"# Bm\n\n<URL>\n\n## Content\n\nbody\n\n## Tags\n\n#a\n";
+    let bytes: &[u8] =
+        b"# Bm\n\n<URL>\n\n## Content\n\nbody\n\n## Tags\n\n#a\n";
     let doc = parse(
         bytes,
         ParseContext::FromPath(PathBuf::from("bm.bookmark.md")),
     )
     .expect("parse must succeed for valid bookmark");
 
-    let tags_start = find_subsequence(bytes, b"## Tags").expect("## Tags in input");
+    let tags_start =
+        find_subsequence(bytes, b"## Tags").expect("## Tags in input");
     let expected_tags = &bytes[tags_start..];
     assert_eq!(
         doc.tag_section(),
@@ -44,7 +46,8 @@ fn bookmark_tags_terminal_after_content_is_canonical_metadata() {
         );
     }
 
-    let content_offset = find_subsequence(bytes, b"## Content").expect("## Content in input");
+    let content_offset =
+        find_subsequence(bytes, b"## Content").expect("## Content in input");
     let content_pat_len = b"## Content".len();
     let content_pat = &bytes[content_offset..content_offset + content_pat_len];
     assert!(
@@ -66,7 +69,8 @@ fn bookmark_tags_terminal_after_source_is_canonical_metadata() {
     )
     .expect("parse must succeed for bookmark with Source");
 
-    let tags_start = find_subsequence(bytes, b"## Tags").expect("## Tags in input");
+    let tags_start =
+        find_subsequence(bytes, b"## Tags").expect("## Tags in input");
     let expected_tags = &bytes[tags_start..];
     assert_eq!(
         doc.tag_section(),
@@ -98,7 +102,8 @@ fn bookmark_tags_terminal_after_source_is_canonical_metadata() {
 /// type-system clarity around outer section boundaries vs.
 /// inner-body H2s is materially better.
 #[test]
-fn bookmark_assembler_distinguishes_section_boundary_from_internal_body_role() {
+fn bookmark_assembler_distinguishes_section_boundary_from_internal_body_role()
+{
     let bytes: &[u8] =
         b"# Bookmark\n\n<URL>\n\n## Tags\n\n#official\n\n## Content\n\n## Tags in body\n";
     let doc = parse(
@@ -107,7 +112,8 @@ fn bookmark_assembler_distinguishes_section_boundary_from_internal_body_role() {
     )
     .expect("parse must succeed");
 
-    let tags_start = find_subsequence(bytes, b"## Tags").expect("## Tags in input");
+    let tags_start =
+        find_subsequence(bytes, b"## Tags").expect("## Tags in input");
     let first_tags_section_end = tags_start + b"## Tags\n\n#official\n".len();
     let expected_tags = &bytes[tags_start..first_tags_section_end];
     assert_eq!(
@@ -117,9 +123,11 @@ fn bookmark_assembler_distinguishes_section_boundary_from_internal_body_role() {
     );
 
     let inner_tags_in_body_offset =
-        find_subsequence(bytes, b"## Tags in body").expect("inner Tags in input");
+        find_subsequence(bytes, b"## Tags in body")
+            .expect("inner Tags in input");
     let inner_pat_len = b"## Tags in body".len();
-    let inner_pat = &bytes[inner_tags_in_body_offset..inner_tags_in_body_offset + inner_pat_len];
+    let inner_pat = &bytes
+        [inner_tags_in_body_offset..inner_tags_in_body_offset + inner_pat_len];
     let bodies: Vec<&[u8]> = doc.body().collect();
     assert!(
         bodies

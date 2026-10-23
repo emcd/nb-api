@@ -117,7 +117,8 @@ pub(crate) fn strip_empty_result_hint(output: &str) -> String {
     // `pos - 1`, which is naturally within `output[..pos + 1]`,
     // so the CRLF terminator is preserved exactly without
     // consuming any byte of the blank separator that follows.
-    let line_end_with_terminator = match bytes.iter().position(|&b| b == b'\n') {
+    let line_end_with_terminator = match bytes.iter().position(|&b| b == b'\n')
+    {
         Some(pos) => pos + 1,
         None => output.len(),
     };

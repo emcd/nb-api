@@ -12,7 +12,11 @@ use nb_api::parser::{DocumentKind, ParseContext, parse};
 /// extension, and that the carried `supported` list equals
 /// `nb_api::SUPPORTED_DOCUMENT_EXTENSIONS` populated as
 /// `String`.
-fn assert_unsupported_document_format(bytes: &[u8], path: &str, expected_extension: &str) {
+fn assert_unsupported_document_format(
+    bytes: &[u8],
+    path: &str,
+    expected_extension: &str,
+) {
     let result = parse(bytes, ParseContext::FromPath(PathBuf::from(path)));
     match result {
         Err(NbError::UnsupportedDocumentFormat {
@@ -20,15 +24,18 @@ fn assert_unsupported_document_format(bytes: &[u8], path: &str, expected_extensi
             supported,
         }) => {
             assert_eq!(extension, expected_extension);
-            let expected_supported: Vec<String> = nb_api::SUPPORTED_DOCUMENT_EXTENSIONS
-                .iter()
-                .map(|s| s.to_string())
-                .collect();
+            let expected_supported: Vec<String> =
+                nb_api::SUPPORTED_DOCUMENT_EXTENSIONS
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect();
             assert_eq!(supported, expected_supported);
-        }
+        },
         Err(other) => {
-            panic!("expected UnsupportedDocumentFormat for path {path:?}, got: {other:?}")
-        }
+            panic!(
+                "expected UnsupportedDocumentFormat for path {path:?}, got: {other:?}"
+            )
+        },
         Ok(doc) => panic!(
             "expected UnsupportedDocumentFormat for path {path:?}, \
              got Ok NoteDocument with kind {:?}",
@@ -73,14 +80,17 @@ fn parse_rejects_asciidoc_file_with_unsupported_document_format() {
 /// The spec explicitly notes this rule.
 #[test]
 fn parse_rejected_format_does_not_surface_as_missing_title() {
-    let result = parse(b"", ParseContext::FromPath(PathBuf::from("empty.org")));
+    let result =
+        parse(b"", ParseContext::FromPath(PathBuf::from("empty.org")));
     match result {
         Err(NbError::UnsupportedDocumentFormat { extension, .. }) => {
             assert_eq!(extension, "org");
-        }
+        },
         Err(other) => {
-            panic!("expected UnsupportedDocumentFormat for empty .org file, got: {other:?}")
-        }
+            panic!(
+                "expected UnsupportedDocumentFormat for empty .org file, got: {other:?}"
+            )
+        },
         Ok(_) => panic!("empty .org must not parse as Ok"),
     }
 }
@@ -105,7 +115,8 @@ fn parse_uppercase_bookmark_md_is_bookmark() {
         b"# bm\n\n<URL>\n",
         ParseContext::FromPath(PathBuf::from("bm.BOOKMARK.MD")),
     );
-    let doc = result.expect("uppercase .BOOKMARK.MD should resolve to Bookmark");
+    let doc =
+        result.expect("uppercase .BOOKMARK.MD should resolve to Bookmark");
     assert_eq!(doc.kind(), DocumentKind::Bookmark);
 }
 
@@ -181,7 +192,8 @@ fn parse_directory_components_do_not_participate_in_match() {
         b"# bm\n\n<URL>\n",
         ParseContext::FromPath(PathBuf::from("notes/scratch.bookmark.md")),
     );
-    let doc = result.expect("scratch.bookmark.md under notes/ should be Bookmark");
+    let doc =
+        result.expect("scratch.bookmark.md under notes/ should be Bookmark");
     assert_eq!(doc.kind(), DocumentKind::Bookmark);
 
     // `notes/bookmark.md` (no leading dot on `bookmark`) is
@@ -191,7 +203,8 @@ fn parse_directory_components_do_not_participate_in_match() {
         b"# bm\n\n<URL>\n",
         ParseContext::FromPath(PathBuf::from("notes/bookmark.md")),
     );
-    let doc = result.expect("bookmark.md without leading dot is Note, not Bookmark");
+    let doc =
+        result.expect("bookmark.md without leading dot is Note, not Bookmark");
     assert_eq!(doc.kind(), DocumentKind::Note);
 }
 
@@ -237,7 +250,8 @@ fn parse_path_with_trailing_slash_is_note() {
 /// Note. The R3 spec mandates this permissive fallback.
 #[test]
 fn parse_unrecognized_extension_is_note() {
-    let result = parse(b"body\n", ParseContext::FromPath(PathBuf::from("note.txt")));
+    let result =
+        parse(b"body\n", ParseContext::FromPath(PathBuf::from("note.txt")));
     let doc = result.expect(".txt should be permissive Markdown Note");
     assert_eq!(doc.kind(), DocumentKind::Note);
 
@@ -248,7 +262,8 @@ fn parse_unrecognized_extension_is_note() {
     assert_eq!(result.unwrap().kind(), DocumentKind::Note);
 
     // No extension at all.
-    let result = parse(b"body\n", ParseContext::FromPath(PathBuf::from("Makefile")));
+    let result =
+        parse(b"body\n", ParseContext::FromPath(PathBuf::from("Makefile")));
     assert_eq!(result.unwrap().kind(), DocumentKind::Note);
 }
 
@@ -263,7 +278,8 @@ fn parse_explicit_kind_bypasses_unsupported_format_rejection() {
         b"just content\n",
         ParseContext::Explicit(DocumentKind::Note),
     );
-    let doc = result.expect("Explicit(Note) must succeed without format check");
+    let doc =
+        result.expect("Explicit(Note) must succeed without format check");
     assert_eq!(doc.kind(), DocumentKind::Note);
 
     // Even `.org` bytes with `Explicit(Bookmark)` should
@@ -274,7 +290,8 @@ fn parse_explicit_kind_bypasses_unsupported_format_rejection() {
         b"# explicit\n\n<URL>\n",
         ParseContext::Explicit(DocumentKind::Bookmark),
     );
-    let doc = result.expect("Explicit(Bookmark) must succeed without format check");
+    let doc =
+        result.expect("Explicit(Bookmark) must succeed without format check");
     assert_eq!(doc.kind(), DocumentKind::Bookmark);
 }
 

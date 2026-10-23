@@ -70,7 +70,8 @@ where
     let after = regular_files(&notebook);
     for path in after.iter().filter(|path| !before.contains(path)) {
         let bytes = fs::read(path).expect("read writer output");
-        let relative = path.strip_prefix(&notebook).expect("relative writer path");
+        let relative =
+            path.strip_prefix(&notebook).expect("relative writer path");
         println!(
             "CREATED\t{}\t{}\t{}",
             relative.display(),
@@ -81,7 +82,13 @@ where
     println!("END_WRITER");
 }
 
-fn probe_file(env: &NbTestEnv, label: &str, name: &str, bytes: &[u8], task_ops: bool) {
+fn probe_file(
+    env: &NbTestEnv,
+    label: &str,
+    name: &str,
+    bytes: &[u8],
+    task_ops: bool,
+) {
     let path = notebook_path(env).join(name);
     fs::write(&path, bytes).expect("write exact probe bytes");
     println!("CASE\t{label}");

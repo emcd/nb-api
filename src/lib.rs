@@ -41,14 +41,14 @@ pub use fingerprint::{Fingerprint, fingerprint as compute_fingerprint};
 pub use git::{derive_git_notebook_name, git_rev_parse};
 pub use git_env::{leaked_git_names, scrub_git_env, scrub_git_env_std};
 pub use parser::{
-    BodyFragments, DocumentKind, NoteDocument, ParseContext, SUPPORTED_DOCUMENT_EXTENSIONS,
-    TagsIter, TagsStrIter, TodoState, parse,
+    BodyFragments, DocumentKind, NoteDocument, ParseContext,
+    SUPPORTED_DOCUMENT_EXTENSIONS, TagsIter, TagsStrIter, TodoState, parse,
 };
 pub use transaction::Transaction;
 pub use types::{
-    BodyFragment, BoundaryAt, CommitOutcome, LineAnchor, LineEdit, LineEol, LinePosition, LineRef,
-    NoteLine, NoteLineHit, NoteTarget, Occurrence, OpOutcome, SearchNoteLines, ShowNote,
-    ShowNoteLines,
+    BodyFragment, BoundaryAt, CommitOutcome, LineAnchor, LineEdit, LineEol,
+    LinePosition, LineRef, NoteLine, NoteLineHit, NoteTarget, Occurrence,
+    OpOutcome, SearchNoteLines, ShowNote, ShowNoteLines,
 };
 
 use serde::Deserialize;

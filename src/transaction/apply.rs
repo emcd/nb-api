@@ -4,17 +4,19 @@ use std::path::{Path, PathBuf};
 use crate::error::NbError;
 use crate::fingerprint::{self, Fingerprint};
 use crate::lines::{
-    apply_line_edits, apply_substring, require_contiguous_body, splice_body, splice_title,
+    apply_line_edits, apply_substring, require_contiguous_body, splice_body,
+    splice_title,
 };
 use crate::parser::{DocumentKind, NoteDocument, ParseContext, parse};
 
 use super::index::{
-    PendingIndexEdit, append_index_edit, blank_index_edit, move_index_edits, split_folder_basename,
+    PendingIndexEdit, append_index_edit, blank_index_edit, move_index_edits,
+    split_folder_basename,
 };
 use super::plan::PlanOp;
 use super::virtual_tree::{
-    VirtualTree, outcome_selector, refuse_create_collision, resolve_move_destination,
-    resolve_target_path,
+    VirtualTree, outcome_selector, refuse_create_collision,
+    resolve_move_destination, resolve_target_path,
 };
 
 pub(super) struct OpMeta {
@@ -60,7 +62,12 @@ pub(super) fn validate_and_apply_virtual(
             content,
             tags,
         } => {
-            refuse_create_collision(notebook_root, tree, ignored_existing, path)?;
+            refuse_create_collision(
+                notebook_root,
+                tree,
+                ignored_existing,
+                path,
+            )?;
             let bytes = build_note_bytes(title.as_deref(), content, tags);
             let fp = fingerprint_bytes(&bytes, path)?;
             tree.insert_file(path.clone(), bytes);
@@ -73,7 +80,7 @@ pub(super) fn validate_and_apply_virtual(
                 fingerprint: Some(fp),
                 index_edits: vec![append_index_edit(path)],
             })
-        }
+        },
         PlanOp::AddTodo {
             path,
             title,
@@ -81,8 +88,14 @@ pub(super) fn validate_and_apply_virtual(
             tasks,
             tags,
         } => {
-            refuse_create_collision(notebook_root, tree, ignored_existing, path)?;
-            let bytes = build_todo_bytes(title, description.as_deref(), tasks, tags);
+            refuse_create_collision(
+                notebook_root,
+                tree,
+                ignored_existing,
+                path,
+            )?;
+            let bytes =
+                build_todo_bytes(title, description.as_deref(), tasks, tags);
             let fp = fingerprint_bytes(&bytes, path)?;
             tree.insert_file(path.clone(), bytes);
             effects.written.push(path.clone());
@@ -94,7 +107,7 @@ pub(super) fn validate_and_apply_virtual(
                 fingerprint: Some(fp),
                 index_edits: vec![append_index_edit(path)],
             })
-        }
+        },
         PlanOp::AddBookmark {
             path,
             url,
@@ -102,8 +115,18 @@ pub(super) fn validate_and_apply_virtual(
             tags,
             comment,
         } => {
-            refuse_create_collision(notebook_root, tree, ignored_existing, path)?;
-            let bytes = build_bookmark_bytes(url, title.as_deref(), tags, comment.as_deref());
+            refuse_create_collision(
+                notebook_root,
+                tree,
+                ignored_existing,
+                path,
+            )?;
+            let bytes = build_bookmark_bytes(
+                url,
+                title.as_deref(),
+                tags,
+                comment.as_deref(),
+            );
             let fp = fingerprint_bytes(&bytes, path)?;
             tree.insert_file(path.clone(), bytes);
             effects.written.push(path.clone());
@@ -115,11 +138,21 @@ pub(super) fn validate_and_apply_virtual(
                 fingerprint: Some(fp),
                 index_edits: vec![append_index_edit(path)],
             })
-        }
+        },
         PlanOp::AddFolder { path } => {
-            refuse_create_collision(notebook_root, tree, ignored_existing, path)?;
+            refuse_create_collision(
+                notebook_root,
+                tree,
+                ignored_existing,
+                path,
+            )?;
             let keep = format!("{path}/.gitkeep");
-            refuse_create_collision(notebook_root, tree, ignored_existing, &keep)?;
+            refuse_create_collision(
+                notebook_root,
+                tree,
+                ignored_existing,
+                &keep,
+            )?;
             tree.insert_folder(path.clone());
             effects.mkdirs.push(path.clone());
             // Git cannot track empty dirs; persist a keep file so the folder
@@ -140,7 +173,7 @@ pub(super) fn validate_and_apply_virtual(
                 fingerprint: None,
                 index_edits: vec![append_index_edit(path)],
             })
-        }
+        },
         PlanOp::DeleteNote { target } => {
             let path = resolve_target_path(tree, ignored_existing, target)?;
             if !tree.exists(&path) {
@@ -157,14 +190,19 @@ pub(super) fn validate_and_apply_virtual(
                 fingerprint: None,
                 index_edits: vec![blank_index_edit(&path)],
             })
-        }
+        },
         PlanOp::MoveNote {
             target,
             destination,
         } => {
             let from = resolve_target_path(tree, ignored_existing, target)?;
             let to = resolve_move_destination(&from, destination);
-            refuse_create_collision(notebook_root, tree, ignored_existing, &to)?;
+            refuse_create_collision(
+                notebook_root,
+                tree,
+                ignored_existing,
+                &to,
+            )?;
             // Same-folder renames update the `.index` line in place, which
             // is only lossless when the new name is not longer than the old
             // one (the splice prefix must not overlap the appender region).
@@ -192,7 +230,7 @@ pub(super) fn validate_and_apply_virtual(
                 fingerprint: None,
                 index_edits: move_index_edits(&from, &to),
             })
-        }
+        },
         PlanOp::MarkTaskDone {
             target,
             task_number,
@@ -216,7 +254,7 @@ pub(super) fn validate_and_apply_virtual(
                 fingerprint: Some(fp),
                 index_edits: Vec::new(),
             })
-        }
+        },
         PlanOp::UnmarkTaskDone {
             target,
             task_number,
@@ -228,7 +266,8 @@ pub(super) fn validate_and_apply_virtual(
                     selector: target.value().to_string(),
                 })?
                 .to_vec();
-            let new_bytes = set_todo_state(&bytes, &path, false, *task_number)?;
+            let new_bytes =
+                set_todo_state(&bytes, &path, false, *task_number)?;
             let noop = new_bytes == bytes;
             let fp = fingerprint_bytes(&new_bytes, &path)?;
             tree.insert_file(path.clone(), new_bytes);
@@ -240,7 +279,7 @@ pub(super) fn validate_and_apply_virtual(
                 fingerprint: Some(fp),
                 index_edits: Vec::new(),
             })
-        }
+        },
         PlanOp::ReplaceNoteBody {
             target,
             new_body,
@@ -261,7 +300,9 @@ pub(super) fn validate_and_apply_virtual(
             if &current != expected {
                 return Err(NbError::FingerprintMismatch {
                     target: target.clone(),
-                    guidance: "body fingerprint does not match; re-read and retry".into(),
+                    guidance:
+                        "body fingerprint does not match; re-read and retry"
+                            .into(),
                 });
             }
             let new_bytes = splice_body(&doc, new_body.as_bytes())?;
@@ -276,7 +317,7 @@ pub(super) fn validate_and_apply_virtual(
                 fingerprint: Some(fp),
                 index_edits: Vec::new(),
             })
-        }
+        },
         PlanOp::EditNoteSubstring {
             target,
             pattern,
@@ -322,7 +363,7 @@ pub(super) fn validate_and_apply_virtual(
                 fingerprint: Some(fp),
                 index_edits: Vec::new(),
             })
-        }
+        },
         PlanOp::EditNoteLines { target, edits } => {
             let path = resolve_target_path(tree, ignored_existing, target)?;
             let bytes = tree
@@ -346,7 +387,7 @@ pub(super) fn validate_and_apply_virtual(
                 fingerprint: Some(fp),
                 index_edits: Vec::new(),
             })
-        }
+        },
         PlanOp::RetitleNote { target, title } => {
             let path = resolve_target_path(tree, ignored_existing, target)?;
             let bytes = tree
@@ -372,7 +413,7 @@ pub(super) fn validate_and_apply_virtual(
                 fingerprint: Some(fp),
                 index_edits: Vec::new(),
             })
-        }
+        },
         PlanOp::EditNoteTags {
             target,
             add,
@@ -398,7 +439,7 @@ pub(super) fn validate_and_apply_virtual(
                 fingerprint: Some(fp),
                 index_edits: Vec::new(),
             })
-        }
+        },
     }
 }
 
@@ -406,12 +447,19 @@ fn parse_doc(bytes: &[u8], path: &str) -> Result<NoteDocument, NbError> {
     parse(bytes, ParseContext::FromPath(PathBuf::from(path)))
 }
 
-fn fingerprint_bytes(bytes: &[u8], path: &str) -> Result<Fingerprint, NbError> {
+fn fingerprint_bytes(
+    bytes: &[u8],
+    path: &str,
+) -> Result<Fingerprint, NbError> {
     let doc = parse_doc(bytes, path)?;
     Ok(fingerprint::fingerprint(&doc))
 }
 
-fn build_note_bytes(title: Option<&str>, content: &str, tags: &[String]) -> Vec<u8> {
+fn build_note_bytes(
+    title: Option<&str>,
+    content: &str,
+    tags: &[String],
+) -> Vec<u8> {
     let mut out = Vec::new();
     if let Some(t) = title {
         out.extend_from_slice(format!("# {t}\n\n").as_bytes());
@@ -532,7 +580,8 @@ fn set_todo_state(
     let doc = parse_doc(bytes, path)?;
     if doc.kind() != DocumentKind::Todo {
         return Err(NbError::UnsupportedStructure {
-            reason: "mark_task_done/unmark_task_done require a Todo document".into(),
+            reason: "mark_task_done/unmark_task_done require a Todo document"
+                .into(),
         });
     }
     let mut out = bytes.to_vec();
@@ -629,15 +678,16 @@ fn apply_tag_edit(
                 match tag_line {
                     Some(line) => {
                         out.splice(range, line.into_bytes());
-                    }
+                    },
                     None => {
                         out.splice(range, std::iter::empty::<u8>());
-                    }
+                    },
                 }
                 Ok(out)
             } else if let Some(line) = tag_line {
                 // Insert after title or at start.
-                let insert_at = doc.title_byte_range().map(|r| r.end).unwrap_or(0);
+                let insert_at =
+                    doc.title_byte_range().map(|r| r.end).unwrap_or(0);
                 let mut block = Vec::new();
                 if insert_at > 0 {
                     block.push(b'\n');
@@ -650,7 +700,7 @@ fn apply_tag_edit(
             } else {
                 Ok(source.to_vec())
             }
-        }
+        },
         DocumentKind::Todo | DocumentKind::Bookmark => {
             let section = if tags.is_empty() {
                 None
@@ -665,7 +715,8 @@ fn apply_tag_edit(
             };
             if let Some(range) = doc.tags_byte_range() {
                 let mut out = source.to_vec();
-                let replacement = section.map(|s| s.into_bytes()).unwrap_or_default();
+                let replacement =
+                    section.map(|s| s.into_bytes()).unwrap_or_default();
                 out.splice(range, replacement);
                 Ok(out)
             } else if let Some(s) = section {
@@ -679,7 +730,7 @@ fn apply_tag_edit(
             } else {
                 Ok(source.to_vec())
             }
-        }
+        },
     };
     let _ = path;
     result

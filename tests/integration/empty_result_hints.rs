@@ -74,7 +74,8 @@ async fn list_strips_hint_block_for_empty_notebook() {
 async fn list_returns_full_output_for_non_empty_notebook() {
     let env = NbTestEnv::new().expect("fixture initialization");
     with_isolated_env(&env, false, || async {
-        let client = NbClient::new(&config_for(&env)).expect("client construction");
+        let client =
+            NbClient::new(&config_for(&env)).expect("client construction");
 
         client
             .add_note(Some("alpha"), "alpha body", &[], None, None)
@@ -145,7 +146,8 @@ async fn list_and_folders_sweep_sanity() {
     // empty folders; non-empty notebook has both populated.
     let env = NbTestEnv::new().expect("fixture initialization");
     with_isolated_env(&env, false, || async {
-        let client = NbClient::new(&config_for(&env)).expect("client construction");
+        let client =
+            NbClient::new(&config_for(&env)).expect("client construction");
 
         // Initially empty: both methods should return their
         // empty-result signals only.
@@ -153,7 +155,8 @@ async fn list_and_folders_sweep_sanity() {
             .list_notes(None, &[], None, None)
             .await
             .expect("list");
-        let folders_empty = client.list_folders(None, None).await.expect("folders");
+        let folders_empty =
+            client.list_folders(None, None).await.expect("folders");
         assert_eq!(list_empty, "0 items.\n");
         assert_eq!(folders_empty, "0 folders.\n");
 
@@ -168,7 +171,8 @@ async fn list_and_folders_sweep_sanity() {
             .list_notes(None, &[], None, None)
             .await
             .expect("list");
-        let folders_pop = client.list_folders(None, None).await.expect("folders");
+        let folders_pop =
+            client.list_folders(None, None).await.expect("folders");
         assert!(list_pop.contains("one"));
         assert!(folders_pop.contains("dir"));
         assert!(!list_pop.contains("Add a note:"));
@@ -182,7 +186,8 @@ async fn list_after_deleting_all_items_returns_clean_signal() {
     // Sanity: delete all items then re-list; should be clean.
     let env = NbTestEnv::new().expect("fixture initialization");
     with_isolated_env(&env, false, || async {
-        let client = NbClient::new(&config_for(&env)).expect("client construction");
+        let client =
+            NbClient::new(&config_for(&env)).expect("client construction");
 
         let added = client
             .add_note(Some("only"), "body", &[], None, None)
@@ -260,7 +265,8 @@ async fn list_preserves_lf_terminator_via_shim() {
     let env = NbTestEnv::new().expect("fixture initialization");
     let crafted = "0 items.\n\nAdd a note:\n  nb add scratch:\n";
     with_shim_nb_env(&env, crafted, || async {
-        let client = NbClient::new(&config_for(&env)).expect("client construction");
+        let client =
+            NbClient::new(&config_for(&env)).expect("client construction");
         let output = client
             .list_notes(None, &[], None, None)
             .await
@@ -326,7 +332,8 @@ async fn list_preserves_trailing_hint_without_final_newline_via_shim() {
     let env = NbTestEnv::new().expect("fixture initialization");
     let crafted = "0 items.\n\nAdd a note:\n  nb add scratch:";
     with_shim_nb_env(&env, crafted, || async {
-        let client = NbClient::new(&config_for(&env)).expect("client construction");
+        let client =
+            NbClient::new(&config_for(&env)).expect("client construction");
         let output = client
             .list_notes(None, &[], None, None)
             .await
@@ -386,7 +393,8 @@ async fn folders_crlf_terminator_via_shim() {
     let env = NbTestEnv::new().expect("fixture initialization");
     let crafted = "0 folders.\r\n\r\nImport a file:\r\n  nb import scratch:\r\nHelp information:\r\n  nb help import\r\n";
     with_shim_nb_env(&env, crafted, || async {
-        let client = NbClient::new(&config_for(&env)).expect("client construction");
+        let client =
+            NbClient::new(&config_for(&env)).expect("client construction");
         let output = client.list_folders(None, None).await.expect("folders");
         assert_eq!(
             output, "0 folders.\r\n",

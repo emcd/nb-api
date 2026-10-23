@@ -6,12 +6,15 @@ use crate::error::NbError;
 use crate::fingerprint;
 use crate::gate;
 use crate::lines::{
-    document_lines, note_line_from_body_line, require_contiguous_body, search_lines,
+    document_lines, note_line_from_body_line, require_contiguous_body,
+    search_lines,
 };
 use crate::output::strip_empty_result_hint;
 use crate::parser::{ParseContext, parse};
 use crate::transaction;
-use crate::types::{BodyFragment, NoteTarget, SearchNoteLines, ShowNote, ShowNoteLines};
+use crate::types::{
+    BodyFragment, NoteTarget, SearchNoteLines, ShowNote, ShowNoteLines,
+};
 use crate::validate::validate_folder_option;
 use crate::{NbClient, SearchMode};
 
@@ -19,7 +22,10 @@ use super::core::ShowClassification;
 
 impl NbClient {
     /// Returns status information about the resolved notebook.
-    pub async fn show_notebook_status(&self, notebook: Option<&str>) -> Result<String, NbError> {
+    pub async fn show_notebook_status(
+        &self,
+        notebook: Option<&str>,
+    ) -> Result<String, NbError> {
         let notebook = self.resolve_notebook(notebook).await?;
         self.exec_vec(vec![format!("{}:", notebook), "status".to_string()])
             .await
@@ -33,7 +39,10 @@ impl NbClient {
     }
 
     /// Returns the path for a notebook.
-    pub async fn show_notebook_path(&self, notebook: Option<&str>) -> Result<PathBuf, NbError> {
+    pub async fn show_notebook_path(
+        &self,
+        notebook: Option<&str>,
+    ) -> Result<PathBuf, NbError> {
         let notebook = self.resolve_notebook_name(notebook)?;
         self.ensure_notebook(&notebook).await?;
         self.with_notebook_gate(
@@ -44,23 +53,33 @@ impl NbClient {
     }
 
     /// Shows a note as a structured [`ShowNote`] (gate-held).
-    pub async fn show_note(&self, id: &str, notebook: Option<&str>) -> Result<ShowNote, NbError> {
-        let (notebook, selector) = self.resolve_target_selector(id, notebook).await?;
+    pub async fn show_note(
+        &self,
+        id: &str,
+        notebook: Option<&str>,
+    ) -> Result<ShowNote, NbError> {
+        let (notebook, selector) =
+            self.resolve_target_selector(id, notebook).await?;
         self.with_notebook_gate(&notebook, async {
             self.show_note_inner(&notebook, &selector).await
         })
         .await
     }
 
-    async fn show_note_inner(&self, notebook: &str, selector: &str) -> Result<ShowNote, NbError> {
+    async fn show_note_inner(
+        &self,
+        notebook: &str,
+        selector: &str,
+    ) -> Result<ShowNote, NbError> {
         match self.probe_show_classification(selector).await {
             ShowClassification::NonTextual { actual_type } => {
                 return Err(NbError::UnsupportedShowTarget {
                     selector: selector.to_string(),
                     actual_type,
                 });
-            }
-            ShowClassification::Textual | ShowClassification::ProbeFailure => {}
+            },
+            ShowClassification::Textual | ShowClassification::ProbeFailure => {
+            },
         }
         let path = self.resolve_item_path(selector).await?;
         let root = self.show_notebook_path_unguarded(Some(notebook)).await?;
@@ -69,13 +88,17 @@ impl NbClient {
             path: path.clone(),
             source: e.into(),
         })?;
-        let doc = match parse(&source, ParseContext::FromPath(PathBuf::from(&rel))) {
+        let doc = match parse(
+            &source,
+            ParseContext::FromPath(PathBuf::from(&rel)),
+        ) {
             Ok(doc) => doc,
             // nb may classify additional textual extensions as showable; map
             // unrecognized formats to a Note partition for structured show.
-            Err(NbError::UnsupportedDocumentFormat { .. }) => {
-                parse(&source, ParseContext::Explicit(crate::DocumentKind::Note))?
-            }
+            Err(NbError::UnsupportedDocumentFormat { .. }) => parse(
+                &source,
+                ParseContext::Explicit(crate::DocumentKind::Note),
+            )?,
             Err(err) => return Err(err),
         };
         let kind_str = format!("{:?}", doc.kind()).to_lowercase();
@@ -90,7 +113,8 @@ impl NbClient {
             .to_string();
         // Fragment offsets into `source`: body_ranges are source-absolute.
         let ranges = doc.body_ranges();
-        let mut fragments: Vec<BodyFragment> = Vec::with_capacity(ranges.len());
+        let mut fragments: Vec<BodyFragment> =
+            Vec::with_capacity(ranges.len());
         for (i, span) in ranges.iter().enumerate() {
             let bytes = std::str::from_utf8(&source[span.clone()])
                 .map_err(|_| non_utf8(rel.clone()))?
@@ -129,7 +153,9 @@ impl NbClient {
                 .to_string()
         });
         Ok(ShowNote {
-            selector: numeric_selector_for_path(notebook, &root, &rel, selector),
+            selector: numeric_selector_for_path(
+                notebook, &root, &rel, selector,
+            ),
             path: rel.clone(),
             kind: doc.kind(),
             todo_state: doc.todo_state(),
@@ -154,7 +180,8 @@ impl NbClient {
         target: NoteTarget,
         notebook: Option<&str>,
     ) -> Result<Vec<u8>, NbError> {
-        let (notebook, selector) = self.resolve_note_target(&target, notebook).await?;
+        let (notebook, selector) =
+            self.resolve_note_target(&target, notebook).await?;
         self.with_notebook_gate(&notebook, async {
             let path = self.resolve_item_path(&selector).await?;
             std::fs::read(&path).map_err(|e| NbError::Io {
@@ -173,11 +200,15 @@ impl NbClient {
         limit: Option<u32>,
         notebook: Option<&str>,
     ) -> Result<ShowNoteLines, NbError> {
-        let (notebook, selector) = self.resolve_note_target(&target, notebook).await?;
+        let (notebook, selector) =
+            self.resolve_note_target(&target, notebook).await?;
         self.with_notebook_gate(&notebook, async {
             let shown = self.show_note_inner(&notebook, &selector).await?;
             let source = shown.source.as_bytes().to_vec();
-            let doc = parse(&source, ParseContext::FromPath(PathBuf::from(&shown.path)))?;
+            let doc = parse(
+                &source,
+                ParseContext::FromPath(PathBuf::from(&shown.path)),
+            )?;
             let body = require_contiguous_body(&doc)?;
             let (eol, has_final_eol, lines) = document_lines(&body);
             let total_lines = lines.len() as u32;
@@ -260,11 +291,15 @@ impl NbClient {
         pattern: &str,
         notebook: Option<&str>,
     ) -> Result<SearchNoteLines, NbError> {
-        let (notebook, selector) = self.resolve_note_target(&target, notebook).await?;
+        let (notebook, selector) =
+            self.resolve_note_target(&target, notebook).await?;
         self.with_notebook_gate(&notebook, async {
             let shown = self.show_note_inner(&notebook, &selector).await?;
             let source = shown.source.as_bytes().to_vec();
-            let doc = parse(&source, ParseContext::FromPath(PathBuf::from(&shown.path)))?;
+            let doc = parse(
+                &source,
+                ParseContext::FromPath(PathBuf::from(&shown.path)),
+            )?;
             let body = require_contiguous_body(&doc)?;
             let hits = search_lines(&body, pattern.as_bytes())?;
             Ok(SearchNoteLines {
@@ -278,7 +313,10 @@ impl NbClient {
         .await
     }
 
-    pub(super) async fn resolve_item_path(&self, selector: &str) -> Result<PathBuf, NbError> {
+    pub(super) async fn resolve_item_path(
+        &self,
+        selector: &str,
+    ) -> Result<PathBuf, NbError> {
         let output = self
             .exec_vec(vec![
                 "show".to_string(),
@@ -294,7 +332,7 @@ impl NbClient {
                     NbError::NotFound {
                         selector: selector.to_string(),
                     }
-                }
+                },
                 other => other,
             })?;
         let path = output.trim();
@@ -314,11 +352,13 @@ impl NbClient {
         notebook: Option<&str>,
     ) -> Result<(String, String), NbError> {
         match target {
-            NoteTarget::Selector { value } => self.resolve_target_selector(value, notebook).await,
+            NoteTarget::Selector { value } => {
+                self.resolve_target_selector(value, notebook).await
+            },
             NoteTarget::Path { value } => {
                 let notebook = self.resolve_notebook(notebook).await?;
                 Ok((notebook.clone(), format!("{notebook}:{value}")))
-            }
+            },
         }
     }
 
@@ -333,7 +373,10 @@ impl NbClient {
     /// (selector not found, internal error), return
     /// [`ShowClassification::ProbeFailure`] so the caller can
     /// fall through to the original show path.
-    async fn probe_show_classification(&self, selector: &str) -> ShowClassification {
+    async fn probe_show_classification(
+        &self,
+        selector: &str,
+    ) -> ShowClassification {
         let textual = self
             .exec_vec(vec![
                 "show".to_string(),
@@ -364,7 +407,7 @@ impl NbClient {
                         actual_type: trimmed.to_string(),
                     }
                 }
-            }
+            },
             Err(_) => ShowClassification::ProbeFailure,
         }
     }
@@ -484,7 +527,10 @@ pub(super) fn notebook_dir_from_env(notebook: &str) -> Option<PathBuf> {
     }
 }
 
-pub(super) fn path_relative_to(root: &Path, path: &Path) -> Result<String, NbError> {
+pub(super) fn path_relative_to(
+    root: &Path,
+    path: &Path,
+) -> Result<String, NbError> {
     let root = root.canonicalize().map_err(|e| NbError::Io {
         path: root.to_path_buf(),
         source: e.into(),
@@ -493,15 +539,15 @@ pub(super) fn path_relative_to(root: &Path, path: &Path) -> Result<String, NbErr
         path: path.to_path_buf(),
         source: e.into(),
     })?;
-    let rel = path
-        .strip_prefix(&root)
-        .map_err(|_| NbError::ValidationError {
-            reason: format!(
-                "path {} is not under notebook root {}",
-                path.display(),
-                root.display()
-            ),
-            location: None,
-        })?;
+    let rel =
+        path.strip_prefix(&root)
+            .map_err(|_| NbError::ValidationError {
+                reason: format!(
+                    "path {} is not under notebook root {}",
+                    path.display(),
+                    root.display()
+                ),
+                location: None,
+            })?;
     Ok(rel.to_string_lossy().replace('\\', "/"))
 }

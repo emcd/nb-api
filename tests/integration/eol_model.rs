@@ -2,7 +2,10 @@
 //! `line-eol-model` specification, exercised through the public client.
 
 use nb_api::testing::NbTestEnv;
-use nb_api::{BoundaryAt, Config, LineEdit, LineEol, LinePosition, LineRef, NbClient, NoteTarget};
+use nb_api::{
+    BoundaryAt, Config, LineEdit, LineEol, LinePosition, LineRef, NbClient,
+    NoteTarget,
+};
 
 use crate::common::with_isolated_env;
 
@@ -36,7 +39,12 @@ async fn lf_body_reports_document_eol() {
         let client = NbClient::new(&config_for(&env)).expect("client");
         add_body(&client, "eol.md", "a\nb\n").await;
         let lines = client
-            .show_note_lines(NoteTarget::path("eol.md"), Some(1), Some(10), None)
+            .show_note_lines(
+                NoteTarget::path("eol.md"),
+                Some(1),
+                Some(10),
+                None,
+            )
             .await
             .expect("lines");
         assert_eq!(lines.eol, Some(LineEol::Lf));
@@ -55,7 +63,12 @@ async fn cr_only_body_is_single_line_with_preserved_cr() {
         let client = NbClient::new(&config_for(&env)).expect("client");
         add_body(&client, "cr.md", "a\rb\rc").await;
         let lines = client
-            .show_note_lines(NoteTarget::path("cr.md"), Some(1), Some(10), None)
+            .show_note_lines(
+                NoteTarget::path("cr.md"),
+                Some(1),
+                Some(10),
+                None,
+            )
             .await
             .expect("lines");
         assert_eq!(lines.eol, None);
@@ -83,7 +96,12 @@ async fn stray_cr_before_first_supported_eol_preserved() {
         let client = NbClient::new(&config_for(&env)).expect("client");
         add_body(&client, "stray.md", "a\rb\nc\n").await;
         let lines = client
-            .show_note_lines(NoteTarget::path("stray.md"), Some(1), Some(10), None)
+            .show_note_lines(
+                NoteTarget::path("stray.md"),
+                Some(1),
+                Some(10),
+                None,
+            )
             .await
             .expect("lines");
         assert_eq!(lines.eol, Some(LineEol::Lf));
@@ -102,7 +120,12 @@ async fn mixed_body_uses_first_supported_eol() {
         let client = NbClient::new(&config_for(&env)).expect("client");
         add_body(&client, "mixed.md", "a\nb\r\nc\n").await;
         let lines = client
-            .show_note_lines(NoteTarget::path("mixed.md"), Some(1), Some(10), None)
+            .show_note_lines(
+                NoteTarget::path("mixed.md"),
+                Some(1),
+                Some(10),
+                None,
+            )
             .await
             .expect("lines");
         assert_eq!(lines.eol, Some(LineEol::Lf));
@@ -122,7 +145,12 @@ async fn final_line_without_eol_uses_null_marker() {
         let client = NbClient::new(&config_for(&env)).expect("client");
         add_body(&client, "noeol.md", "a\nb").await;
         let lines = client
-            .show_note_lines(NoteTarget::path("noeol.md"), Some(1), Some(10), None)
+            .show_note_lines(
+                NoteTarget::path("noeol.md"),
+                Some(1),
+                Some(10),
+                None,
+            )
             .await
             .expect("lines");
         assert_eq!(lines.eol, Some(LineEol::Lf));
@@ -142,7 +170,12 @@ async fn insert_after_on_cr_only_adopts_lf() {
         let client = NbClient::new(&config_for(&env)).expect("client");
         add_body(&client, "adopt.md", "a\rb\rc").await;
         let lines = client
-            .show_note_lines(NoteTarget::path("adopt.md"), Some(1), Some(10), None)
+            .show_note_lines(
+                NoteTarget::path("adopt.md"),
+                Some(1),
+                Some(10),
+                None,
+            )
             .await
             .expect("lines");
         assert_eq!(lines.eol, None);
@@ -162,7 +195,12 @@ async fn insert_after_on_cr_only_adopts_lf() {
         let shown = client.show_note("adopt.md", None).await.expect("show");
         assert!(shown.body.contains("a\rb\rc\nx\n"), "{:?}", shown.body);
         let lines = client
-            .show_note_lines(NoteTarget::path("adopt.md"), Some(1), Some(10), None)
+            .show_note_lines(
+                NoteTarget::path("adopt.md"),
+                Some(1),
+                Some(10),
+                None,
+            )
             .await
             .expect("lines2");
         assert_eq!(lines.eol, Some(LineEol::Lf));
@@ -178,7 +216,12 @@ async fn insert_at_dollar_without_final_eol_normalizes() {
         let client = NbClient::new(&config_for(&env)).expect("client");
         add_body(&client, "dollar.md", "a\nb").await;
         let before = client
-            .show_note_lines(NoteTarget::path("dollar.md"), Some(1), Some(10), None)
+            .show_note_lines(
+                NoteTarget::path("dollar.md"),
+                Some(1),
+                Some(10),
+                None,
+            )
             .await
             .expect("lines");
         let old_anchor = before.lines[1].anchor.clone();
@@ -198,7 +241,12 @@ async fn insert_at_dollar_without_final_eol_normalizes() {
         let shown = client.show_note("dollar.md", None).await.expect("show");
         assert_eq!(shown.body, "a\nb\nc\n");
         let after = client
-            .show_note_lines(NoteTarget::path("dollar.md"), Some(1), Some(10), None)
+            .show_note_lines(
+                NoteTarget::path("dollar.md"),
+                Some(1),
+                Some(10),
+                None,
+            )
             .await
             .expect("lines2");
         assert!(after.has_final_eol);
@@ -223,7 +271,12 @@ async fn replace_final_line_without_eol_normalizes() {
         let client = NbClient::new(&config_for(&env)).expect("client");
         add_body(&client, "repl.md", "a\nb").await;
         let lines = client
-            .show_note_lines(NoteTarget::path("repl.md"), Some(1), Some(10), None)
+            .show_note_lines(
+                NoteTarget::path("repl.md"),
+                Some(1),
+                Some(10),
+                None,
+            )
             .await
             .expect("lines");
         client
@@ -251,7 +304,12 @@ async fn insert_appends_document_crlf() {
         let client = NbClient::new(&config_for(&env)).expect("client");
         add_body(&client, "crlf.md", "a\r\nb\r\n").await;
         let lines = client
-            .show_note_lines(NoteTarget::path("crlf.md"), Some(1), Some(10), None)
+            .show_note_lines(
+                NoteTarget::path("crlf.md"),
+                Some(1),
+                Some(10),
+                None,
+            )
             .await
             .expect("lines");
         assert_eq!(lines.eol, Some(LineEol::CrLf));

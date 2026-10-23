@@ -143,9 +143,9 @@ impl NbTestEnvBuilder {
             .prefix("nb-api-test-")
             .tempdir()
             .map_err(|e| NbTestError::Io {
-                context: "create isolated root tempdir".to_string(),
-                source: e,
-            })?;
+            context: "create isolated root tempdir".to_string(),
+            source: e,
+        })?;
         let nb_dir = root.path().join(".nb");
         std::fs::create_dir_all(&nb_dir).map_err(|e| NbTestError::Io {
             context: format!("create nb dir at {}", nb_dir.display()),
@@ -155,12 +155,17 @@ impl NbTestEnvBuilder {
             Some(path) => path,
             None => {
                 let path = root.path().join("work");
-                std::fs::create_dir_all(&path).map_err(|e| NbTestError::Io {
-                    context: format!("create working dir at {}", path.display()),
-                    source: e,
+                std::fs::create_dir_all(&path).map_err(|e| {
+                    NbTestError::Io {
+                        context: format!(
+                            "create working dir at {}",
+                            path.display()
+                        ),
+                        source: e,
+                    }
                 })?;
                 path
-            }
+            },
         };
         let home_dir = root.path().join("home");
         std::fs::create_dir_all(&home_dir).map_err(|e| NbTestError::Io {
@@ -313,11 +318,17 @@ impl NbTestEnv {
         // first `nb` invocation hangs on a `read` for Name/Email
         // when stdin is not a TTY.
         let gitconfig = self.home_dir.join(".gitconfig");
-        let gitconfig_contents =
-            format!("[user]\n\tname = {GIT_AUTHOR_NAME}\n\temail = {GIT_AUTHOR_EMAIL}\n",);
-        std::fs::write(&gitconfig, gitconfig_contents).map_err(|e| NbTestError::Io {
-            context: format!("write .gitconfig to {}", gitconfig.display()),
-            source: e,
+        let gitconfig_contents = format!(
+            "[user]\n\tname = {GIT_AUTHOR_NAME}\n\temail = {GIT_AUTHOR_EMAIL}\n",
+        );
+        std::fs::write(&gitconfig, gitconfig_contents).map_err(|e| {
+            NbTestError::Io {
+                context: format!(
+                    "write .gitconfig to {}",
+                    gitconfig.display()
+                ),
+                source: e,
+            }
         })?;
 
         // Pre-create a hidden init stub. `nb`'s main loop short-
@@ -383,15 +394,15 @@ impl NbTestEnv {
         // reads on every call. The init stub is left in place
         // (hidden, never listed) so the test process can verify
         // `_init` bypass behavior without rebuilding it.
-        std::fs::write(self.nb_dir.join(".current"), &self.notebook).map_err(|e| {
-            NbTestError::Io {
+        std::fs::write(self.nb_dir.join(".current"), &self.notebook).map_err(
+            |e| NbTestError::Io {
                 context: format!(
                     "write .current to {}",
                     self.nb_dir.join(".current").display()
                 ),
                 source: e,
-            }
-        })?;
+            },
+        )?;
 
         // Ensure a clean committed baseline. nb's `_git checkpoint` runs
         // the init commit in a background subshell (`( ... ) &`). When nb
@@ -460,17 +471,25 @@ impl NbTestEnv {
                 status.env("HOME", &self.home_dir);
                 apply_git_config_env(&mut status);
                 status.current_dir(&notebook_root);
-                status.args(["status", "--porcelain", "-uall", "--ignored=no"]);
-                let status_out = status.output().map_err(|e| NbTestError::Io {
-                    context: format!(
-                        "fixture baseline `git status --porcelain` in {}",
-                        notebook_root.display()
-                    ),
-                    source: e,
-                })?;
+                status.args([
+                    "status",
+                    "--porcelain",
+                    "-uall",
+                    "--ignored=no",
+                ]);
+                let status_out =
+                    status.output().map_err(|e| NbTestError::Io {
+                        context: format!(
+                            "fixture baseline `git status --porcelain` in {}",
+                            notebook_root.display()
+                        ),
+                        source: e,
+                    })?;
                 if !status_out.status.success() {
-                    let stdout = String::from_utf8_lossy(&status_out.stdout).into_owned();
-                    let stderr = String::from_utf8_lossy(&status_out.stderr).into_owned();
+                    let stdout = String::from_utf8_lossy(&status_out.stdout)
+                        .into_owned();
+                    let stderr = String::from_utf8_lossy(&status_out.stderr)
+                        .into_owned();
                     return Err(NbTestError::Nb {
                         context: format!(
                             "fixture baseline `git status --porcelain` in {}",
@@ -517,8 +536,10 @@ impl NbTestEnv {
                     source: e,
                 })?;
                 if !add.status.success() {
-                    let stdout = String::from_utf8_lossy(&add.stdout).into_owned();
-                    let stderr = String::from_utf8_lossy(&add.stderr).into_owned();
+                    let stdout =
+                        String::from_utf8_lossy(&add.stdout).into_owned();
+                    let stderr =
+                        String::from_utf8_lossy(&add.stderr).into_owned();
                     return Err(NbTestError::Nb {
                         context: format!(
                             "fixture baseline `git add -A` in {}",
@@ -541,13 +562,14 @@ impl NbTestEnv {
                 apply_git_config_env(&mut git_commit);
                 git_commit.current_dir(&notebook_root);
                 git_commit.args(["commit", "-m", "[nb] Initialize"]);
-                let commit = git_commit.output().map_err(|e| NbTestError::Io {
-                    context: format!(
-                        "fixture baseline `git commit` in {}",
-                        notebook_root.display()
-                    ),
-                    source: e,
-                })?;
+                let commit =
+                    git_commit.output().map_err(|e| NbTestError::Io {
+                        context: format!(
+                            "fixture baseline `git commit` in {}",
+                            notebook_root.display()
+                        ),
+                        source: e,
+                    })?;
                 if !commit.status.success() {
                     // A `nothing to commit` exit is not an error; the
                     // settle loop re-checks status next iteration. Git
@@ -578,7 +600,9 @@ impl NbTestEnv {
                     "fixture baseline did not settle clean in {}",
                     notebook_root.display()
                 ),
-                source: std::io::Error::other("notebook repo never reached a clean baseline"),
+                source: std::io::Error::other(
+                    "notebook repo never reached a clean baseline",
+                ),
             })
         })();
         if let Err(NbTestError::Io { source, .. }) = &baseline_result
@@ -586,7 +610,9 @@ impl NbTestEnv {
         {
             // Poisoned process PATH (issues/api/7): git unresolvable,
             // baseline intentionally skipped.
-            tracing::debug!("fixture baseline skipped: git not on process PATH");
+            tracing::debug!(
+                "fixture baseline skipped: git not on process PATH"
+            );
         } else {
             baseline_result?;
         }

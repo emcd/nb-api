@@ -1,8 +1,8 @@
 use std::collections::VecDeque;
 
 use crate::argv::{
-    child_folder_names, empty_tasks_message, is_empty_tasks_error, normalize_folder,
-    tasks_command_args, tasks_scope,
+    child_folder_names, empty_tasks_message, is_empty_tasks_error,
+    normalize_folder, tasks_command_args, tasks_scope,
 };
 use crate::error::NbError;
 use crate::fingerprint::Fingerprint;
@@ -11,8 +11,8 @@ use crate::transaction;
 use crate::transaction::Transaction;
 use crate::types::{CommitOutcome, LineEdit, NoteTarget, Occurrence};
 use crate::validate::{
-    detect_duplicate_title_heading, validate_destination, validate_folder_option,
-    validate_folder_path,
+    detect_duplicate_title_heading, validate_destination,
+    validate_folder_option, validate_folder_path,
 };
 use crate::{NbClient, TaskStatus};
 
@@ -84,7 +84,8 @@ impl NbClient {
         id: &str,
         notebook: Option<&str>,
     ) -> Result<CommitOutcome, NbError> {
-        let (nb, selector) = self.resolve_target_selector(id, notebook).await?;
+        let (nb, selector) =
+            self.resolve_target_selector(id, notebook).await?;
         let target = self.note_target_for_selector(&nb, &selector).await?;
         let mut tx = self.transaction(Some(&nb)).await?;
         tx.delete_note(target)?;
@@ -99,7 +100,8 @@ impl NbClient {
         notebook: Option<&str>,
     ) -> Result<CommitOutcome, NbError> {
         validate_destination(destination)?;
-        let (nb, selector) = self.resolve_target_selector(id, notebook).await?;
+        let (nb, selector) =
+            self.resolve_target_selector(id, notebook).await?;
         let target = self.note_target_for_selector(&nb, &selector).await?;
         let mut tx = self.transaction(Some(&nb)).await?;
         tx.move_note(target, destination)?;
@@ -152,7 +154,8 @@ impl NbClient {
         task_number: Option<u32>,
         notebook: Option<&str>,
     ) -> Result<CommitOutcome, NbError> {
-        let (nb, selector) = self.resolve_target_selector(id, notebook).await?;
+        let (nb, selector) =
+            self.resolve_target_selector(id, notebook).await?;
         let target = self.note_target_for_selector(&nb, &selector).await?;
         let mut tx = self.transaction(Some(&nb)).await?;
         tx.mark_task_done(target, task_number)?;
@@ -166,7 +169,8 @@ impl NbClient {
         task_number: Option<u32>,
         notebook: Option<&str>,
     ) -> Result<CommitOutcome, NbError> {
-        let (nb, selector) = self.resolve_target_selector(id, notebook).await?;
+        let (nb, selector) =
+            self.resolve_target_selector(id, notebook).await?;
         let target = self.note_target_for_selector(&nb, &selector).await?;
         let mut tx = self.transaction(Some(&nb)).await?;
         tx.unmark_task_done(target, task_number)?;
@@ -283,10 +287,12 @@ impl NbClient {
                     if !output.is_empty() {
                         outputs.push(output.to_string());
                     }
-                }
-                Err(NbError::CommandFailed { stderr, .. }) if is_empty_tasks_error(&stderr) => {
+                },
+                Err(NbError::CommandFailed { stderr, .. })
+                    if is_empty_tasks_error(&stderr) =>
+                {
                     saw_empty = true;
-                }
+                },
                 Err(err) => return Err(err),
             }
         }

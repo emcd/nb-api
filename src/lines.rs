@@ -10,8 +10,8 @@ use std::ops::Range;
 use crate::error::NbError;
 use crate::parser::NoteDocument;
 use crate::types::{
-    BoundaryAt, LineAnchor, LineEdit, LineEol, LinePosition, LineRef, NoteLine, NoteLineHit,
-    Occurrence,
+    BoundaryAt, LineAnchor, LineEdit, LineEol, LinePosition, LineRef,
+    NoteLine, NoteLineHit, Occurrence,
 };
 
 /// A single body line with absolute offsets into the contiguous body bytes.
@@ -102,7 +102,9 @@ pub fn document_lines(body: &[u8]) -> (Option<LineEol>, bool, Vec<BodyLine>) {
     (Some(eol), has_final_eol, lines)
 }
 
-pub fn require_contiguous_body(doc: &NoteDocument) -> Result<Vec<u8>, NbError> {
+pub fn require_contiguous_body(
+    doc: &NoteDocument,
+) -> Result<Vec<u8>, NbError> {
     let ranges = doc.body_ranges();
     if ranges.len() >= 2 {
         return Err(NbError::FragmentedBody {
@@ -117,19 +119,22 @@ pub fn note_line_from_body_line(line: &BodyLine, body: &[u8]) -> NoteLine {
     NoteLine {
         number: line.number,
         anchor: line.anchor.clone(),
-        text: String::from_utf8_lossy(&body[line.text_range.clone()]).into_owned(),
+        text: String::from_utf8_lossy(&body[line.text_range.clone()])
+            .into_owned(),
     }
 }
 
-pub fn verify_line_ref(lines: &[BodyLine], reference: &LineRef) -> Result<usize, NbError> {
-    let idx = reference
-        .number
-        .checked_sub(1)
-        .ok_or_else(|| NbError::AnchorMismatch {
+pub fn verify_line_ref(
+    lines: &[BodyLine],
+    reference: &LineRef,
+) -> Result<usize, NbError> {
+    let idx = reference.number.checked_sub(1).ok_or_else(|| {
+        NbError::AnchorMismatch {
             target: format!("line {}", reference.number),
             number: reference.number,
             guidance: "line numbers are 1-based".to_string(),
-        })? as usize;
+        }
+    })? as usize;
     let line = lines.get(idx).ok_or_else(|| NbError::AnchorMismatch {
         target: format!("line {}", reference.number),
         number: reference.number,
@@ -153,7 +158,10 @@ pub fn verify_line_ref(lines: &[BodyLine], reference: &LineRef) -> Result<usize,
 /// that materialize a new boundary on an `eol: None` document adopt `Lf`.
 /// Inserting at a position equal to end-of-body when the final line lacks a
 /// terminator first terminates the previous final line.
-pub fn apply_line_edits(body: &[u8], edits: &[LineEdit]) -> Result<Vec<u8>, NbError> {
+pub fn apply_line_edits(
+    body: &[u8],
+    edits: &[LineEdit],
+) -> Result<Vec<u8>, NbError> {
     let (eol_opt, has_final_eol, lines) = document_lines(body);
     // Effective EOL for materialized boundaries: declared, else Lf when any
     // edit introduces a boundary. Pure-delete batches on eol-None stay boundary-free.
@@ -205,7 +213,7 @@ pub fn apply_line_edits(body: &[u8], edits: &[LineEdit]) -> Result<Vec<u8>, NbEr
                     insert: bytes,
                     edit_index,
                 });
-            }
+            },
             LineEdit::Delete { start, end } => {
                 let span = inclusive_span(&lines, start, end)?;
                 resolved.push(Resolved {
@@ -213,7 +221,7 @@ pub fn apply_line_edits(body: &[u8], edits: &[LineEdit]) -> Result<Vec<u8>, NbEr
                     insert: Vec::new(),
                     edit_index,
                 });
-            }
+            },
             LineEdit::Replace {
                 start,
                 end,
@@ -229,7 +237,7 @@ pub fn apply_line_edits(body: &[u8], edits: &[LineEdit]) -> Result<Vec<u8>, NbEr
                     insert: bytes,
                     edit_index,
                 });
-            }
+            },
         }
     }
     for i in 0..resolved.len() {
@@ -300,20 +308,23 @@ fn insert_offset(
             }
             let _ = has_final_eol;
             Ok(body.len())
-        }
+        },
         LinePosition::Before { line } => {
             let idx = verify_line_ref(lines, line)?;
             Ok(lines[idx].full_range.start)
-        }
+        },
         LinePosition::After { line } => {
             let idx = verify_line_ref(lines, line)?;
             Ok(lines[idx].full_range.end)
-        }
+        },
     }
 }
 
 /// Non-overlapping left-to-right substring matches in `body`.
-pub fn find_matches(body: &[u8], pattern: &[u8]) -> Result<Vec<Range<usize>>, NbError> {
+pub fn find_matches(
+    body: &[u8],
+    pattern: &[u8],
+) -> Result<Vec<Range<usize>>, NbError> {
     if pattern.is_empty() {
         return Err(NbError::EmptySubstringPattern);
     }
@@ -352,7 +363,8 @@ pub fn apply_substring(
         Occurrence::Nth { n } => {
             if *n == 0 {
                 return Err(NbError::ValidationError {
-                    reason: "occurrence nth.n is 1-based; 0 is invalid".to_string(),
+                    reason: "occurrence nth.n is 1-based; 0 is invalid"
+                        .to_string(),
                     location: None,
                 });
             }
@@ -361,7 +373,7 @@ pub fn apply_substring(
                 .nth((*n as usize) - 1)
                 .into_iter()
                 .collect()
-        }
+        },
     };
     let mut out = body.to_vec();
     for m in selected.into_iter().rev() {
@@ -371,7 +383,10 @@ pub fn apply_substring(
 }
 
 /// Search line texts for `pattern` (byte-level).
-pub fn search_lines(body: &[u8], pattern: &[u8]) -> Result<Vec<NoteLineHit>, NbError> {
+pub fn search_lines(
+    body: &[u8],
+    pattern: &[u8],
+) -> Result<Vec<NoteLineHit>, NbError> {
     if pattern.is_empty() {
         return Err(NbError::EmptySubstringPattern);
     }
@@ -400,12 +415,16 @@ pub fn search_lines(body: &[u8], pattern: &[u8]) -> Result<Vec<NoteLineHit>, NbE
 }
 
 /// Splice `new_body` into a document that has a contiguous body domain.
-pub fn splice_body(doc: &NoteDocument, new_body: &[u8]) -> Result<Vec<u8>, NbError> {
+pub fn splice_body(
+    doc: &NoteDocument,
+    new_body: &[u8],
+) -> Result<Vec<u8>, NbError> {
     let ranges = doc.body_ranges();
     if ranges.len() >= 2 {
         return Err(NbError::FragmentedBody {
             fragment_count: ranges.len() as u32,
-            guidance: "replace_note_body requires a contiguous body".to_string(),
+            guidance: "replace_note_body requires a contiguous body"
+                .to_string(),
         });
     }
     let source = doc.source();
@@ -415,7 +434,9 @@ pub fn splice_body(doc: &NoteDocument, new_body: &[u8]) -> Result<Vec<u8>, NbErr
         return Ok(out);
     }
     let span = ranges[0].clone();
-    let mut out = Vec::with_capacity(source.len() - (span.end - span.start) + new_body.len());
+    let mut out = Vec::with_capacity(
+        source.len() - (span.end - span.start) + new_body.len(),
+    );
     out.extend_from_slice(&source[..span.start]);
     out.extend_from_slice(new_body);
     out.extend_from_slice(&source[span.end..]);
@@ -423,7 +444,10 @@ pub fn splice_body(doc: &NoteDocument, new_body: &[u8]) -> Result<Vec<u8>, NbErr
 }
 
 /// Replace title line bytes (should include trailing newline when original had one).
-pub fn splice_title(doc: &NoteDocument, new_title_line: &[u8]) -> Result<Vec<u8>, NbError> {
+pub fn splice_title(
+    doc: &NoteDocument,
+    new_title_line: &[u8],
+) -> Result<Vec<u8>, NbError> {
     let source = doc.source();
     match doc.title_byte_range() {
         Some(span) => {
@@ -431,12 +455,14 @@ pub fn splice_title(doc: &NoteDocument, new_title_line: &[u8]) -> Result<Vec<u8>
             if !title.ends_with(b"\n") {
                 title.push(b'\n');
             }
-            let mut out = Vec::with_capacity(source.len() - (span.end - span.start) + title.len());
+            let mut out = Vec::with_capacity(
+                source.len() - (span.end - span.start) + title.len(),
+            );
             out.extend_from_slice(&source[..span.start]);
             out.extend_from_slice(&title);
             out.extend_from_slice(&source[span.end..]);
             Ok(out)
-        }
+        },
         None => {
             let mut title = new_title_line.to_vec();
             if !title.ends_with(b"\n") {
@@ -449,6 +475,6 @@ pub fn splice_title(doc: &NoteDocument, new_title_line: &[u8]) -> Result<Vec<u8>
             }
             out.extend_from_slice(source);
             Ok(out)
-        }
+        },
     }
 }

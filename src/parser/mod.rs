@@ -38,13 +38,16 @@ mod types;
 
 pub use dispatch::SUPPORTED_DOCUMENT_EXTENSIONS;
 pub use document::{
-    BodyFragments, DocumentKind, NoteDocument, ParseContext, TagsIter, TagsStrIter, TodoState,
+    BodyFragments, DocumentKind, NoteDocument, ParseContext, TagsIter,
+    TagsStrIter, TodoState,
 };
 
 use crate::error::NbError;
 use crate::tokenizer::tokenize;
 
-use assemble::{assemble_bookmark, assemble_note, assemble_todo, translate_parse_failure};
+use assemble::{
+    assemble_bookmark, assemble_note, assemble_todo, translate_parse_failure,
+};
 use classify::{classify_bookmark, classify_note, classify_todo};
 use dispatch::{FormatDispatch, format_dispatch};
 use document::Partition;
@@ -57,7 +60,10 @@ use document::Partition;
 /// parse layer are [`ParseErrorKind::MissingTitle`] for
 /// Todo/Bookmark files with no non-blank line. Notes are
 /// permissive on empty source.
-pub fn parse(bytes: &[u8], context: ParseContext) -> Result<NoteDocument, NbError> {
+pub fn parse(
+    bytes: &[u8],
+    context: ParseContext,
+) -> Result<NoteDocument, NbError> {
     let kind = match context {
         ParseContext::FromPath(path) => match format_dispatch(&path) {
             FormatDispatch::SupportedKind(kind) => kind,
@@ -73,7 +79,7 @@ pub fn parse(bytes: &[u8], context: ParseContext) -> Result<NoteDocument, NbErro
                         .map(|s| s.to_string())
                         .collect(),
                 });
-            }
+            },
             FormatDispatch::MarkdownNote => DocumentKind::Note,
         },
         // `Explicit(DocumentKind)` bypasses path dispatch and
@@ -95,21 +101,21 @@ pub fn parse(bytes: &[u8], context: ParseContext) -> Result<NoteDocument, NbErro
                 Ok(p) => Partition::Note(p),
                 Err(failure) => return Err(translate_parse_failure(failure)),
             }
-        }
+        },
         DocumentKind::Todo => {
             let tokens = classify_todo(&lines);
             match assemble_todo(&source, &preamble, &lines, &tokens) {
                 Ok(p) => Partition::Todo(p),
                 Err(failure) => return Err(translate_parse_failure(failure)),
             }
-        }
+        },
         DocumentKind::Bookmark => {
             let tokens = classify_bookmark(&lines);
             match assemble_bookmark(&source, &preamble, &lines, &tokens) {
                 Ok(p) => Partition::Bookmark(p),
                 Err(failure) => return Err(translate_parse_failure(failure)),
             }
-        }
+        },
     };
     let doc = NoteDocument { source, partition };
     // Sanity-check the partition in debug builds. Production

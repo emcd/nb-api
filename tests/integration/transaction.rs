@@ -1,7 +1,10 @@
 //! Transaction collect-then-commit and body-aware surface.
 
 use nb_api::testing::NbTestEnv;
-use nb_api::{BoundaryAt, Config, LineEdit, LinePosition, NbClient, NoteTarget, Occurrence};
+use nb_api::{
+    BoundaryAt, Config, LineEdit, LinePosition, NbClient, NoteTarget,
+    Occurrence,
+};
 
 use crate::common::with_isolated_env;
 
@@ -327,7 +330,10 @@ async fn add_folder_persists_when_gitkeep_is_ignored() {
         let root = client.show_notebook_path(None).await.expect("path");
         std::fs::write(root.join(".gitignore"), b".gitkeep\n").unwrap();
         git_capture(&root, &["add", "-A"]);
-        git_capture(&root, &["commit", "-m", "ignore-gitkeep", "--no-gpg-sign"]);
+        git_capture(
+            &root,
+            &["commit", "-m", "ignore-gitkeep", "--no-gpg-sign"],
+        );
 
         let mut tx = client.transaction(None).await.expect("tx");
         tx.add_folder("kept-dir").unwrap();
@@ -376,13 +382,15 @@ async fn ignored_symlink_ancestor_create_refused() {
     with_isolated_env(&env, false, || async {
         let client = NbClient::new(&config_for(&env)).expect("client");
         let root = client.show_notebook_path(None).await.expect("path");
-        let external = env.nb_dir().parent().unwrap().join("external-symlink-dir");
+        let external =
+            env.nb_dir().parent().unwrap().join("external-symlink-dir");
         std::fs::create_dir_all(&external).unwrap();
         std::fs::write(external.join("preexisting.txt"), b"keep\n").unwrap();
         std::fs::write(root.join(".gitignore"), b"ignored-link\n").unwrap();
         git_capture(&root, &["add", "-A"]);
         git_capture(&root, &["commit", "-m", "ignore-link", "--no-gpg-sign"]);
-        std::os::unix::fs::symlink(&external, root.join("ignored-link")).unwrap();
+        std::os::unix::fs::symlink(&external, root.join("ignored-link"))
+            .unwrap();
         let pre = head(&root);
         let pre_status = git_capture(&root, &["status", "--porcelain"]);
 
@@ -463,8 +471,11 @@ async fn qualified_selector_outcome_not_double_prefixed() {
         tx.commit().await.expect("add");
         let mut tx = client.transaction(None).await.expect("tx2");
         let nb = env.notebook();
-        tx.retitle_note(NoteTarget::selector(format!("{nb}:q.md")), "# New Title\n")
-            .unwrap();
+        tx.retitle_note(
+            NoteTarget::selector(format!("{nb}:q.md")),
+            "# New Title\n",
+        )
+        .unwrap();
         let outcome = tx.commit().await.expect("retitle");
         let sel = outcome.ops[0].selector.as_deref().expect("selector");
         assert_eq!(sel, &format!("{nb}:q.md"));

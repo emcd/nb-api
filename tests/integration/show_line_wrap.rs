@@ -44,7 +44,8 @@ async fn show_preserves_long_unbroken_line_verbatim() {
             .expect("add note");
         let path = outcome.ops[0].path.as_deref().expect("path");
 
-        let output = show_text(&client.show_note(path, None).await.expect("show note"));
+        let output =
+            show_text(&client.show_note(path, None).await.expect("show note"));
         assert!(
             output.contains(LONG_LINE),
             "show output did not contain the long line verbatim; \

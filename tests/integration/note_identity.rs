@@ -24,7 +24,8 @@ fn index_lines(root: &std::path::Path, folder: &str) -> Vec<String> {
     };
     let bytes = std::fs::read(root.join(&rel)).expect("read .index");
     let text = String::from_utf8(bytes).expect("index utf8");
-    let mut lines: Vec<String> = text.split('\n').map(str::to_string).collect();
+    let mut lines: Vec<String> =
+        text.split('\n').map(str::to_string).collect();
     if text.ends_with('\n') {
         lines.pop();
     }
@@ -37,7 +38,13 @@ async fn mangled_title_filename_and_numeric_outcome() {
     with_isolated_env(&env, false, || async {
         let client = NbClient::new(&config_for(&env)).expect("client");
         let outcome = client
-            .add_note(Some("Hello World Title"), "body\n", &[], Some("work"), None)
+            .add_note(
+                Some("Hello World Title"),
+                "body\n",
+                &[],
+                Some("work"),
+                None,
+            )
             .await
             .expect("add");
         let op = &outcome.ops[0];

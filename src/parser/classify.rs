@@ -3,8 +3,9 @@
 use crate::tokenizer::Line;
 
 use super::helpers::{
-    atx_heading_level, heading_text, is_blank_line, is_exact_content_or_source_heading,
-    is_exact_reserved_heading_text, is_exact_reserved_section, is_tags_prefix_line, is_url_line,
+    atx_heading_level, heading_text, is_blank_line,
+    is_exact_content_or_source_heading, is_exact_reserved_heading_text,
+    is_exact_reserved_section, is_tags_prefix_line, is_url_line,
     strip_leading_spaces,
 };
 use super::types::{HeadingRole, MarkdownToken};
@@ -74,7 +75,9 @@ pub(crate) fn classify_todo(lines: &[Line<'_>]) -> Vec<MarkdownToken> {
         }
         if let Some(level) = atx_heading_level(content) {
             let text = heading_text(content, level);
-            let role = if level == 2 && is_exact_reserved_heading_text(content, "Tags") {
+            let role = if level == 2
+                && is_exact_reserved_heading_text(content, "Tags")
+            {
                 HeadingRole::SectionBoundary
             } else {
                 HeadingRole::InternalBody
@@ -125,12 +128,12 @@ pub(crate) fn classify_bookmark(lines: &[Line<'_>]) -> Vec<MarkdownToken> {
                     None => {
                         fence_char = Some(fc);
                         fence_run = run;
-                    }
+                    },
                     Some(open_fc) if fc == open_fc && run >= fence_run => {
                         fence_char = None;
                         fence_run = 0;
-                    }
-                    _ => {}
+                    },
+                    _ => {},
                 }
                 tokens.push(MarkdownToken::Body(line_id));
                 continue;

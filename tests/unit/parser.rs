@@ -15,8 +15,10 @@ use nb_api::parser::{DocumentKind, ParseContext, parse};
 
 #[test]
 fn w1_1_titled_tagged_note() {
-    let bytes: &[u8] = b"# Writer Note\n\n#alpha #beta\n\nWriter body\nsecond line\n\n";
-    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md"))).unwrap();
+    let bytes: &[u8] =
+        b"# Writer Note\n\n#alpha #beta\n\nWriter body\nsecond line\n\n";
+    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md")))
+        .unwrap();
     assert_eq!(doc.kind(), DocumentKind::Note);
     assert_eq!(doc.title(), Some(&b"# Writer Note\n"[..]));
     assert_eq!(doc.tags_prefix(), Some(&b"#alpha #beta\n"[..]));
@@ -27,9 +29,11 @@ fn w1_1_titled_tagged_note() {
 
 #[test]
 fn w1_1_partition_length_54() {
-    let bytes: &[u8] = b"# Writer Note\n\n#alpha #beta\n\nWriter body\nsecond line\n\n";
+    let bytes: &[u8] =
+        b"# Writer Note\n\n#alpha #beta\n\nWriter body\nsecond line\n\n";
     assert_eq!(bytes.len(), 54);
-    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md"))).unwrap();
+    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md")))
+        .unwrap();
     assert_eq!(doc.title().unwrap(), &bytes[0..14]);
     assert_eq!(doc.tags_prefix().unwrap(), &bytes[15..28]);
     let body: Vec<&[u8]> = doc.body().collect();
@@ -41,7 +45,8 @@ fn w1_1_partition_length_54() {
 #[test]
 fn w1_2_titleless_tagged_note() {
     let bytes: &[u8] = b"#alpha #beta\n\nWriter titleless body\n\n";
-    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md"))).unwrap();
+    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md")))
+        .unwrap();
     assert_eq!(doc.kind(), DocumentKind::Note);
     assert_eq!(doc.title(), None);
     assert_eq!(doc.tags_prefix(), Some(&b"#alpha #beta\n"[..]));
@@ -56,7 +61,9 @@ fn w1_2_titleless_tagged_note() {
 fn w1_3_tagged_todo() {
     let bytes: &[u8] =
         b"# [ ] Writer Todo\n\n## Description\n\nWriter description\n\n## Tags\n\n#alpha #beta\n\n";
-    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("todo.todo.md"))).unwrap();
+    let doc =
+        parse(bytes, ParseContext::FromPath(PathBuf::from("todo.todo.md")))
+            .unwrap();
     assert_eq!(doc.kind(), DocumentKind::Todo);
     assert_eq!(doc.title(), Some(&b"# [ ] Writer Todo\n"[..]));
     assert_eq!(doc.todo_state(), Some(nb_api::TodoState::Open));
@@ -110,7 +117,8 @@ fn w1_5_offline_bookmark_without_title() {
 #[test]
 fn e1_1_titled_note() {
     let bytes: &[u8] = b"# Title\n\nBody\n";
-    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md"))).unwrap();
+    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md")))
+        .unwrap();
     assert_eq!(doc.title(), Some(&bytes[0..8]));
     let body: Vec<&[u8]> = doc.body().collect();
     assert_eq!(body[0], &bytes[9..14]);
@@ -122,7 +130,8 @@ fn e1_1_titled_note() {
 #[test]
 fn e1_2_titleless_body() {
     let bytes: &[u8] = b"Just content.\n";
-    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md"))).unwrap();
+    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md")))
+        .unwrap();
     assert_eq!(doc.title(), None);
     assert_eq!(doc.tags_prefix(), None);
     let body: Vec<&[u8]> = doc.body().collect();
@@ -135,7 +144,8 @@ fn e1_2_titleless_body() {
 #[test]
 fn e1_3_hash_title_not_h1() {
     let bytes: &[u8] = b"#Title\n\nBody\n";
-    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md"))).unwrap();
+    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md")))
+        .unwrap();
     assert_eq!(doc.title(), None);
     let body: Vec<&[u8]> = doc.body().collect();
     assert_eq!(body[0], &bytes[0..13]);
@@ -147,7 +157,8 @@ fn e1_3_hash_title_not_h1() {
 #[test]
 fn e1_4_4space_indent_not_h1() {
     let bytes: &[u8] = b"    # Title\n\nBody\n";
-    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md"))).unwrap();
+    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md")))
+        .unwrap();
     assert_eq!(doc.title(), None);
     let body: Vec<&[u8]> = doc.body().collect();
     assert_eq!(body[0], &bytes[0..18]);
@@ -159,7 +170,8 @@ fn e1_4_4space_indent_not_h1() {
 #[test]
 fn e1_5_setext_title_not_h1() {
     let bytes: &[u8] = b"Title\n=====\n\nBody\n";
-    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md"))).unwrap();
+    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md")))
+        .unwrap();
     assert_eq!(doc.title(), None);
     let body: Vec<&[u8]> = doc.body().collect();
     assert_eq!(body[0], &bytes[0..18]);
@@ -171,7 +183,8 @@ fn e1_5_setext_title_not_h1() {
 #[test]
 fn e2_leading_blank_lines() {
     let bytes: &[u8] = b"\n\n# Title\n\nBody\n";
-    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md"))).unwrap();
+    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md")))
+        .unwrap();
     assert_eq!(doc.title(), Some(&bytes[2..10]));
     let body: Vec<&[u8]> = doc.body().collect();
     assert_eq!(body[0], &bytes[11..16]);
@@ -186,7 +199,8 @@ fn e3_3_tags_in_body_not_metadata() {
     // prefix-line tags. A `## Tags` H2 in the body is NOT
     // treated as metadata; the entire source is body.
     let bytes: &[u8] = b"Text\n\n## Tags\n\n#alpha #beta\n";
-    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md"))).unwrap();
+    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md")))
+        .unwrap();
     assert_eq!(doc.kind(), DocumentKind::Note);
     assert_eq!(doc.title(), None);
     assert_eq!(doc.tags_prefix(), None);
@@ -200,7 +214,8 @@ fn e3_3_tags_in_body_not_metadata() {
 #[test]
 fn e4_1_bom_preserved() {
     let bytes: &[u8] = b"\xef\xbb\xbf# Title\n\nBody\n";
-    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md"))).unwrap();
+    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md")))
+        .unwrap();
     assert_eq!(doc.title(), Some(&bytes[3..11]));
     let body: Vec<&[u8]> = doc.body().collect();
     assert_eq!(body[0], &bytes[12..17]);
@@ -216,7 +231,8 @@ fn e4_2_cr_only_terminators() {
     // by the probe in tests/integration/probe_empirical.rs).
     // The parser must preserve them byte-for-byte.
     let bytes: &[u8] = b"# Title\r\rBody\rSecond\r";
-    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md"))).unwrap();
+    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md")))
+        .unwrap();
     assert_eq!(doc.title(), Some(&bytes[0..8]));
     let body: Vec<&[u8]> = doc.body().collect();
     assert_eq!(body[0], &bytes[9..21]);
@@ -229,7 +245,8 @@ fn e4_2_cr_only_terminators() {
 #[test]
 fn e4_3_invalid_utf8_preserved() {
     let bytes: &[u8] = b"# Title\n\nBody \xff\xfe\n";
-    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md"))).unwrap();
+    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md")))
+        .unwrap();
     assert_eq!(doc.title(), Some(&bytes[0..8]));
     let body: Vec<&[u8]> = doc.body().collect();
     assert_eq!(body[0], &bytes[9..17]);
@@ -241,7 +258,8 @@ fn e4_3_invalid_utf8_preserved() {
 
 #[test]
 fn e5_1_dot_todo_is_note() {
-    let bytes: &[u8] = b"# [ ] Task\n\n## Description\n\nBody\n\n## Tags\n\n#alpha #beta\n";
+    let bytes: &[u8] =
+        b"# [ ] Task\n\n## Description\n\nBody\n\n## Tags\n\n#alpha #beta\n";
     let doc = parse(
         bytes,
         ParseContext::FromPath(PathBuf::from("canonical.todo")),
@@ -271,7 +289,8 @@ fn e5_2_dot_todo_md_is_todo() {
 #[test]
 fn e6_checkbox_less_todo() {
     let bytes: &[u8] = b"# Task\n\nBody\n";
-    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("x.todo.md"))).unwrap();
+    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("x.todo.md")))
+        .unwrap();
     assert_eq!(doc.kind(), DocumentKind::Todo);
     assert_eq!(doc.title(), Some(&bytes[0..7]));
     assert_eq!(doc.todo_state(), None);
@@ -284,8 +303,10 @@ fn e6_checkbox_less_todo() {
 
 #[test]
 fn e7_1_nonterminal_tags_todo() {
-    let bytes: &[u8] = b"# [ ] Task\n\n## Tags\n\n#alpha\n\n## Description\n\nBody\n";
-    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("x.todo.md"))).unwrap();
+    let bytes: &[u8] =
+        b"# [ ] Task\n\n## Tags\n\n#alpha\n\n## Description\n\nBody\n";
+    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("x.todo.md")))
+        .unwrap();
     assert_eq!(doc.kind(), DocumentKind::Todo);
     // The final H2 is `## Description`, not `## Tags`, so the
     // parser does NOT treat the `## Tags` H2 as metadata; it is
@@ -301,7 +322,8 @@ fn e7_1_nonterminal_tags_todo() {
 fn e7_2_duplicate_tags_todo() {
     let bytes: &[u8] =
         b"# [ ] Task\n\n## Tags\n\n#first\n\n## Description\n\nBody\n\n## Tags\n\n#last\n";
-    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("x.todo.md"))).unwrap();
+    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("x.todo.md")))
+        .unwrap();
     assert_eq!(doc.kind(), DocumentKind::Todo);
     // The final H2 is `## Tags\n\n#last\n` at bytes[51..66];
     // earlier `## Tags` is body. Spec tags are at 51..66.
@@ -426,7 +448,8 @@ fn e10_2_h2_in_source_fence_is_body() {
 #[test]
 fn todo_with_terminal_tags_33_byte_local_prose_example() {
     let bytes: &[u8] = b"# [ ] Task\n\nbody\n\n## Tags\n\n#a #b\n";
-    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("x.todo.md"))).unwrap();
+    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("x.todo.md")))
+        .unwrap();
     assert_eq!(doc.kind(), DocumentKind::Todo);
     let tags_section = doc.tag_section().expect("tags section");
     assert_eq!(tags_section, &bytes[18..33]);
@@ -450,8 +473,9 @@ fn parse_fails_for_empty_todo() {
 
 #[test]
 fn parse_fails_for_empty_bookmark() {
-    let err = parse(b"", ParseContext::FromPath(PathBuf::from("x.bookmark.md")))
-        .expect_err("empty Bookmark must refuse");
+    let err =
+        parse(b"", ParseContext::FromPath(PathBuf::from("x.bookmark.md")))
+            .expect_err("empty Bookmark must refuse");
     assert!(matches!(
         err,
         NbError::ParseError {
@@ -463,7 +487,8 @@ fn parse_fails_for_empty_bookmark() {
 
 #[test]
 fn parse_accepts_empty_note() {
-    let doc = parse(b"", ParseContext::FromPath(PathBuf::from("x.md"))).unwrap();
+    let doc =
+        parse(b"", ParseContext::FromPath(PathBuf::from("x.md"))).unwrap();
     assert_eq!(doc.kind(), DocumentKind::Note);
     assert_eq!(doc.title(), None);
     assert_eq!(doc.tags_prefix(), None);
@@ -478,7 +503,8 @@ fn explicit_kind_overrides_path() {
     // Path says `.md` (Note) but explicit kind is Bookmark;
     // explicit wins.
     let bytes: &[u8] = b"# Title\n\nBody\n";
-    let doc = parse(bytes, ParseContext::Explicit(DocumentKind::Bookmark)).unwrap();
+    let doc =
+        parse(bytes, ParseContext::Explicit(DocumentKind::Bookmark)).unwrap();
     assert_eq!(doc.kind(), DocumentKind::Bookmark);
 }
 
@@ -488,7 +514,8 @@ fn explicit_kind_overrides_path() {
 fn atx_h1_with_closing_hashes() {
     // `# Title #` is a valid ATX H1 with heading text "Title".
     let bytes: &[u8] = b"# Title #\n\nBody\n";
-    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md"))).unwrap();
+    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md")))
+        .unwrap();
     assert_eq!(doc.kind(), DocumentKind::Note);
     assert_eq!(doc.title(), Some(&bytes[0..10]));
 }
@@ -498,7 +525,8 @@ fn atx_h1_with_closing_hashes() {
 #[test]
 fn body_iterator_yields_each_fragment_in_order() {
     let bytes: &[u8] = b"# Title\n\nA\n\nB\n";
-    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md"))).unwrap();
+    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md")))
+        .unwrap();
     let fragments: Vec<&[u8]> = doc.body().collect();
     assert_eq!(fragments.len(), 1);
     assert_eq!(fragments[0], &bytes[9..14]);
@@ -509,15 +537,18 @@ fn body_iterator_yields_each_fragment_in_order() {
 #[test]
 fn tag_token_spans_for_titled_tagged_note() {
     let bytes: &[u8] = b"# Writer Note\n\n#alpha #beta\n\nWriter body\n\n";
-    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md"))).unwrap();
+    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md")))
+        .unwrap();
     let tokens: Vec<&[u8]> = doc.tags().collect();
     assert_eq!(tokens, vec![&b"alpha"[..], &b"beta"[..]]);
 }
 
 #[test]
 fn tag_token_spans_for_tagged_todo() {
-    let bytes: &[u8] = b"# [ ] Task\n\n## Description\n\nBody\n\n## Tags\n\n#alpha #beta\n\n";
-    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("x.todo.md"))).unwrap();
+    let bytes: &[u8] =
+        b"# [ ] Task\n\n## Description\n\nBody\n\n## Tags\n\n#alpha #beta\n\n";
+    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("x.todo.md")))
+        .unwrap();
     let tokens: Vec<&[u8]> = doc.tags().collect();
     assert_eq!(tokens, vec![&b"alpha"[..], &b"beta"[..]]);
 }
@@ -527,7 +558,8 @@ fn tag_token_spans_for_tagged_todo() {
 #[test]
 fn title_str_signals_invalid_utf8() {
     let bytes: &[u8] = b"# T\xff\xfe\n\nbody\n";
-    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md"))).unwrap();
+    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md")))
+        .unwrap();
     let title_str = doc.title_str().expect("has title");
     assert!(title_str.is_err());
 }
@@ -537,8 +569,10 @@ fn tags_str_yields_valid_utf8_tokens() {
     // Build a valid tags-prefix line where both tokens are
     // valid UTF-8. The accessor should yield Ok(...) for each.
     let bytes: &[u8] = b"# T\n\n#valid #beta\n";
-    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md"))).unwrap();
-    let tokens: Vec<Result<&str, std::str::Utf8Error>> = doc.tags_str().collect();
+    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md")))
+        .unwrap();
+    let tokens: Vec<Result<&str, std::str::Utf8Error>> =
+        doc.tags_str().collect();
     assert_eq!(tokens.len(), 2);
     assert_eq!(tokens[0], Ok("valid"));
     assert_eq!(tokens[1], Ok("beta"));

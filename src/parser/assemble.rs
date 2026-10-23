@@ -4,8 +4,12 @@ use crate::error::NbError;
 use crate::tokenizer::{Line, Preamble};
 
 use super::document::{BookmarkPartition, NotePartition, TodoPartition};
-use super::helpers::{consume_leading_blank_intervals, is_exact_reserved_heading_text};
-use super::types::{ByteRange, H2Section, HeadingRole, MarkdownToken, ParseFailure};
+use super::helpers::{
+    consume_leading_blank_intervals, is_exact_reserved_heading_text,
+};
+use super::types::{
+    ByteRange, H2Section, HeadingRole, MarkdownToken, ParseFailure,
+};
 
 // =================================================================
 // Per-kind assemblers
@@ -57,48 +61,50 @@ pub(crate) fn assemble_note(
             | MarkdownToken::TagsPrefix(line_id)
             | MarkdownToken::Url(line_id)
             | MarkdownToken::Body(line_id) => lines[*line_id].range.clone(),
-            MarkdownToken::Heading { line_id, .. } => lines[*line_id].range.clone(),
+            MarkdownToken::Heading { line_id, .. } => {
+                lines[*line_id].range.clone()
+            },
         };
         match (&stage, token) {
             (Stage::BeforeHeader, MarkdownToken::BlankLine(_)) => {
                 separator_ranges.push(token_range.clone());
-            }
+            },
             (Stage::BeforeHeader, MarkdownToken::Heading { level: 1, .. }) => {
                 title_range = Some(token_range);
                 stage = Stage::AfterTitle;
-            }
+            },
             (Stage::BeforeHeader, MarkdownToken::TagsPrefix(_)) => {
                 tags_prefix_range = Some(token_range);
                 stage = Stage::AfterTags;
-            }
+            },
             (Stage::BeforeHeader, _) => {
                 body_start = Some(token_range.start);
                 body_end = token_range.end;
                 stage = Stage::InBody;
-            }
+            },
             (Stage::AfterTitle, MarkdownToken::BlankLine(_)) => {
                 separator_ranges.push(token_range.clone());
-            }
+            },
             (Stage::AfterTitle, MarkdownToken::TagsPrefix(_)) => {
                 tags_prefix_range = Some(token_range);
                 stage = Stage::AfterTags;
-            }
+            },
             (Stage::AfterTitle, _) => {
                 body_start = Some(token_range.start);
                 body_end = token_range.end;
                 stage = Stage::InBody;
-            }
+            },
             (Stage::AfterTags, MarkdownToken::BlankLine(_)) => {
                 separator_ranges.push(token_range.clone());
-            }
+            },
             (Stage::AfterTags, _) => {
                 body_start = Some(token_range.start);
                 body_end = token_range.end;
                 stage = Stage::InBody;
-            }
+            },
             (Stage::InBody, _) => {
                 body_end = token_range.end;
-            }
+            },
         }
     }
     let body_ranges: Vec<ByteRange> = match body_start {
@@ -153,33 +159,37 @@ pub(crate) fn assemble_todo(
                 role,
                 ..
             } => {
-                sections.push((lines[*line_id].range.clone(), text.clone(), *role));
+                sections.push((
+                    lines[*line_id].range.clone(),
+                    text.clone(),
+                    *role,
+                ));
                 lines[*line_id].range.clone()
-            }
+            },
         };
         match (&stage, token) {
             (Stage::BeforeTitle, _) if is_todo_title_relevant(token) => {
                 stage = Stage::AfterTitle;
                 title_range = Some(token_range);
-            }
+            },
             (Stage::BeforeTitle, MarkdownToken::BlankLine(_)) => {
                 separator_ranges.push(token_range.clone());
-            }
+            },
             (Stage::BeforeTitle, _) => {
                 // Empty source for Todo.
                 return Err(ParseFailure::MissingTitle);
-            }
+            },
             (Stage::AfterTitle, MarkdownToken::BlankLine(_)) => {
                 separator_ranges.push(token_range.clone());
-            }
+            },
             (Stage::AfterTitle, _) => {
                 stage = Stage::InBody;
                 body_start = Some(token_range.start);
                 body_end = token_range.end;
-            }
+            },
             (Stage::InBody, _) => {
                 body_end = token_range.end;
-            }
+            },
         }
     }
     let _ = stage; // suppress unused mutation warning
@@ -194,7 +204,8 @@ pub(crate) fn assemble_todo(
     // Compute full section extents (heading + body). A trailing
     // blank-line terminator is stripped from a section only when a
     // complete blank line precedes the next heading.
-    let h2_sections: Vec<H2Section> = compute_section_extents(source, &sections);
+    let h2_sections: Vec<H2Section> =
+        compute_section_extents(source, &sections);
     // Compute the tag_section_range. Per the spec, the
     // `tag_section_range` SHALL be set only when the FINAL H2
     // itself is Tags — not when ANY H2 happens to be Tags.
@@ -207,7 +218,9 @@ pub(crate) fn assemble_todo(
     // `classify_todo` and cannot be canonical terminal Tags.
     let tag_section_range: Option<ByteRange> = h2_sections
         .last()
-        .filter(|sec| sec.text == "Tags" && sec.role == HeadingRole::SectionBoundary)
+        .filter(|sec| {
+            sec.text == "Tags" && sec.role == HeadingRole::SectionBoundary
+        })
         .map(|sec| sec.range.clone());
     let body_ranges = if let Some(tag) = &tag_section_range {
         if let Some(bs) = body_start {
@@ -227,7 +240,8 @@ pub(crate) fn assemble_todo(
                 let is_complete_blank_line = sep_start < tag.start
                     && (sep_start == bs
                         || (sep_start > 0
-                            && (source[sep_start - 1] == b'\n' || source[sep_start - 1] == b'\r')));
+                            && (source[sep_start - 1] == b'\n'
+                                || source[sep_start - 1] == b'\r')));
                 if is_complete_blank_line {
                     separator_ranges.push(sep_start..tag.start);
                     if bs < sep_start {
@@ -292,7 +306,8 @@ pub(crate) fn assemble_bookmark(
     let mut url_range: Option<ByteRange> = None;
     let mut cursor_after_metadata: usize = pos_after_prefix;
     let mut body_ranges: Vec<ByteRange> = Vec::new();
-    let mut collected_headings: Vec<(ByteRange, String, HeadingRole)> = Vec::new();
+    let mut collected_headings: Vec<(ByteRange, String, HeadingRole)> =
+        Vec::new();
 
     // Walk tokens for title + URL + build heading list. Body
     // fragmentation runs after this initial pass against the
@@ -312,59 +327,66 @@ pub(crate) fn assemble_bookmark(
                 // Bookmark sections are H2+. H1 titles are metadata,
                 // not section starts.
                 if *level >= 2 {
-                    collected_headings.push((lines[*line_id].range.clone(), text.clone(), *role));
+                    collected_headings.push((
+                        lines[*line_id].range.clone(),
+                        text.clone(),
+                        *role,
+                    ));
                 }
                 lines[*line_id].range.clone()
-            }
+            },
         };
         if !metadata_done {
             match (&stage, token) {
                 (Stage::BeforeTitle, MarkdownToken::BlankLine(_)) => {
                     separator_ranges.push(token_range.clone());
                     cursor_after_metadata = token_range.end;
-                }
-                (Stage::BeforeTitle, MarkdownToken::Heading { level: 1, .. }) => {
+                },
+                (
+                    Stage::BeforeTitle,
+                    MarkdownToken::Heading { level: 1, .. },
+                ) => {
                     title_range = Some(token_range.clone());
                     cursor_after_metadata = token_range.end;
                     stage = Stage::AfterTitle;
-                }
+                },
                 (Stage::BeforeTitle, MarkdownToken::Url(_)) => {
                     // Titleless Bookmark: URL is the first non-blank
                     // line. Set url_range and treat as AfterUrl.
                     url_range = Some(token_range.clone());
                     cursor_after_metadata = token_range.end;
                     stage = Stage::AfterUrl;
-                }
+                },
                 (Stage::BeforeTitle, _) => {
                     // No valid H1 title. cursor_after_metadata =
                     // token.start (first non-blank).
                     cursor_after_metadata = token_range.start;
                     metadata_done = true;
-                }
+                },
                 (Stage::AfterTitle, MarkdownToken::BlankLine(_)) => {
                     separator_ranges.push(token_range.clone());
                     cursor_after_metadata = token_range.end;
-                }
+                },
                 (Stage::AfterTitle, MarkdownToken::Url(_)) => {
                     url_range = Some(token_range.clone());
                     cursor_after_metadata = token_range.end;
                     stage = Stage::AfterUrl;
-                }
+                },
                 (Stage::AfterTitle, _) => {
                     // No URL. cursor_after_metadata = token.start.
                     cursor_after_metadata = token_range.start;
                     metadata_done = true;
-                }
+                },
                 (Stage::AfterUrl, MarkdownToken::BlankLine(_)) => {
                     separator_ranges.push(token_range.clone());
                     cursor_after_metadata = token_range.end;
-                }
+                },
                 (Stage::AfterUrl, _) => {
                     // First non-blank after URL: H2/body region
                     // starts here.
                     cursor_after_metadata = token_range.start;
                     metadata_done = true;
-                }
+                },
             }
         }
     }
@@ -385,7 +407,8 @@ pub(crate) fn assemble_bookmark(
     // Compute heading section extents via the inclusive
     // contract: a trailing blank-line terminator is stripped
     // only when the preceding byte is also a line terminator.
-    let sections: Vec<H2Section> = compute_section_extents(source, &collected_headings);
+    let sections: Vec<H2Section> =
+        compute_section_extents(source, &collected_headings);
 
     // Canonical Tags selection: first H2 Tags (with the
     // exact-form rule) before any Content/Source, else the
@@ -413,7 +436,8 @@ pub(crate) fn assemble_bookmark(
             }
         }
     }
-    let tag_section_range = canonical_tags_idx.map(|i| sections[i].range.clone());
+    let tag_section_range =
+        canonical_tags_idx.map(|i| sections[i].range.clone());
 
     // Body fragmentation: dual-cursor algorithm mirroring
     // build_bookmark_partition.
@@ -421,7 +445,8 @@ pub(crate) fn assemble_bookmark(
     let mut open_body: Option<ByteRange> = None;
     let mut seen_section = false;
 
-    let flush = |open_body: &mut Option<ByteRange>, body_ranges: &mut Vec<ByteRange>| {
+    let flush = |open_body: &mut Option<ByteRange>,
+                 body_ranges: &mut Vec<ByteRange>| {
         if let Some(r) = open_body.take()
             && r.start < r.end
         {
@@ -535,7 +560,7 @@ pub(crate) fn compute_section_extents(
                     }
                 }
                 end
-            }
+            },
             None => source.len(),
         };
         sections.push(H2Section {

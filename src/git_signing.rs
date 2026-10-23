@@ -5,14 +5,17 @@ use tokio::process::Command;
 pub(crate) const GIT_SIGNING_OVERRIDES: [(&str, &str); 2] =
     [("commit.gpgsign", "false"), ("tag.gpgsign", "false")];
 
-pub(crate) fn git_signing_env_vars(start_index: usize) -> Vec<(String, String)> {
+pub(crate) fn git_signing_env_vars(
+    start_index: usize,
+) -> Vec<(String, String)> {
     let total = start_index.saturating_add(GIT_SIGNING_OVERRIDES.len());
     let mut env_vars = Vec::with_capacity(1 + GIT_SIGNING_OVERRIDES.len() * 2);
     env_vars.push(("GIT_CONFIG_COUNT".to_string(), total.to_string()));
     for (offset, (key, value)) in GIT_SIGNING_OVERRIDES.iter().enumerate() {
         let index = start_index + offset;
         env_vars.push((format!("GIT_CONFIG_KEY_{index}"), (*key).to_string()));
-        env_vars.push((format!("GIT_CONFIG_VALUE_{index}"), (*value).to_string()));
+        env_vars
+            .push((format!("GIT_CONFIG_VALUE_{index}"), (*value).to_string()));
     }
     env_vars
 }

@@ -143,7 +143,11 @@ pub fn lock_env() -> MutexGuard<'static, ()> {
 /// `with_leaked_git_env`, which does not overwrite `NB_DIR` or
 /// `HOME`).
 #[allow(clippy::await_holding_lock)]
-pub async fn with_isolated_env<F, Fut, R>(env: &NbTestEnv, poison_git: bool, f: F) -> R
+pub async fn with_isolated_env<F, Fut, R>(
+    env: &NbTestEnv,
+    poison_git: bool,
+    f: F,
+) -> R
 where
     F: FnOnce() -> Fut,
     Fut: Future<Output = R>,
@@ -183,9 +187,21 @@ where
 fn set_poison() {
     // SAFETY: see with_isolated_env.
     unsafe { std::env::set_var("GIT_DIR", "/nonexistent-GIT_DIR-poison") };
-    unsafe { std::env::set_var("GIT_INDEX_FILE", "/nonexistent-GIT_INDEX_FILE-poison") };
-    unsafe { std::env::set_var("GIT_COMMON_DIR", "/nonexistent-GIT_COMMON_DIR-poison") };
-    unsafe { std::env::set_var("GIT_WORK_TREE", "/nonexistent-GIT_WORK_TREE-poison") };
+    unsafe {
+        std::env::set_var(
+            "GIT_INDEX_FILE",
+            "/nonexistent-GIT_INDEX_FILE-poison",
+        )
+    };
+    unsafe {
+        std::env::set_var(
+            "GIT_COMMON_DIR",
+            "/nonexistent-GIT_COMMON_DIR-poison",
+        )
+    };
+    unsafe {
+        std::env::set_var("GIT_WORK_TREE", "/nonexistent-GIT_WORK_TREE-poison")
+    };
     unsafe {
         std::env::set_var(
             "GIT_OBJECT_DIRECTORY",
@@ -255,7 +271,9 @@ impl Drop for EnvSnapshot {
 /// stub would trip warning-denied Clippy on other platforms.
 /// Tests and helpers are gated `#[cfg(unix)]` end to end.
 #[cfg(unix)]
-fn resolve_nb_in_path(path_var: Option<&OsString>) -> Option<std::path::PathBuf> {
+fn resolve_nb_in_path(
+    path_var: Option<&OsString>,
+) -> Option<std::path::PathBuf> {
     use std::os::unix::fs::PermissionsExt;
     let path_var = path_var?;
     for dir in std::env::split_paths(path_var) {
@@ -312,7 +330,8 @@ fn resolve_nb_in_path(path_var: Option<&OsString>) -> Option<std::path::PathBuf>
 /// through). There is no "deleted-between-PATH-lookup-and-
 /// exec" window.
 #[cfg(unix)]
-static SHIM_DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+static SHIM_DIR: std::sync::OnceLock<std::path::PathBuf> =
+    std::sync::OnceLock::new();
 
 /// Resolve the real `nb` binary against the unmodified PATH
 /// and create the persistent shim directory (once per
@@ -321,14 +340,15 @@ static SHIM_DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::
 fn ensure_shim_dir() -> &'static std::path::Path {
     SHIM_DIR.get_or_init(|| {
         let path_var = std::env::var_os("PATH");
-        let real_nb = resolve_nb_in_path(path_var.as_ref()).unwrap_or_else(|| {
-            panic!(
-                "with_shim_nb_env: could not find `nb` in PATH. \
+        let real_nb =
+            resolve_nb_in_path(path_var.as_ref()).unwrap_or_else(|| {
+                panic!(
+                    "with_shim_nb_env: could not find `nb` in PATH. \
                  Ensure `nb` is installed and discoverable. \
                  Checked PATH={:?}",
-                path_var
-            )
-        });
+                    path_var
+                )
+            });
         let dir = tempfile::Builder::new()
             .prefix("nb-shim-")
             .tempdir()
@@ -342,13 +362,17 @@ fn ensure_shim_dir() -> &'static std::path::Path {
         std::mem::forget(dir);
         std::fs::write(
             path.join("nb"),
-            SHIM_SCRIPT_TEMPLATE.replace("__REAL_NB__", &real_nb.display().to_string()),
+            SHIM_SCRIPT_TEMPLATE
+                .replace("__REAL_NB__", &real_nb.display().to_string()),
         )
         .expect("write shim script");
         {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(path.join("nb"), std::fs::Permissions::from_mode(0o755))
-                .expect("chmod shim script");
+            std::fs::set_permissions(
+                path.join("nb"),
+                std::fs::Permissions::from_mode(0o755),
+            )
+            .expect("chmod shim script");
         }
         path
     })
@@ -357,7 +381,11 @@ fn ensure_shim_dir() -> &'static std::path::Path {
 /// of subsequent tests).
 #[cfg(unix)]
 #[allow(dead_code, clippy::await_holding_lock)]
-pub async fn with_shim_nb_env<F, Fut, R>(env: &NbTestEnv, shim_output: &str, f: F) -> R
+pub async fn with_shim_nb_env<F, Fut, R>(
+    env: &NbTestEnv,
+    shim_output: &str,
+    f: F,
+) -> R
 where
     F: FnOnce() -> Fut,
     Fut: Future<Output = R>,
@@ -440,7 +468,9 @@ fn env_snapshot_restores_path_and_shim_output_on_panic() {
             std::env::var_os("SHIM_OUTPUT").as_deref(),
             Some(std::ffi::OsStr::new("poisoned-output"))
         );
-        panic!("env_snapshot_restores_path_and_shim_output_on_panic: deliberate panic");
+        panic!(
+            "env_snapshot_restores_path_and_shim_output_on_panic: deliberate panic"
+        );
     });
 
     assert!(
@@ -479,7 +509,8 @@ fn nb_test_env_new_survives_poisoned_process_path() {
     unsafe {
         std::env::set_var("PATH", "/poisoned/path/issues-api-7");
     }
-    let env = NbTestEnv::new().expect("fixture must init despite poisoned process PATH");
+    let env = NbTestEnv::new()
+        .expect("fixture must init despite poisoned process PATH");
     assert!(
         env.nb_dir().join(".current").is_file(),
         "notebook fixture must exist on disk"

@@ -7,7 +7,11 @@ const NOTEBOOK_FIELD_MESSAGE: &str = "Invalid `notebook`: use a bare notebook na
 const FOLDER_FIELD_MESSAGE: &str = "Invalid folder path: use `folder` for folder paths only, not notebook-qualified selectors. To choose a notebook, use the separate `notebook` field.";
 
 pub(crate) fn validate_notebook_name(name: &str) -> Result<(), NbError> {
-    if name.trim().is_empty() || name.contains(':') || name.contains('/') || name.contains('\\') {
+    if name.trim().is_empty()
+        || name.contains(':')
+        || name.contains('/')
+        || name.contains('\\')
+    {
         return Err(NbError::ValidationError {
             reason: NOTEBOOK_FIELD_MESSAGE.to_string(),
             location: None,
@@ -16,7 +20,9 @@ pub(crate) fn validate_notebook_name(name: &str) -> Result<(), NbError> {
     Ok(())
 }
 
-pub(crate) fn validate_folder_option(folder: Option<&str>) -> Result<(), NbError> {
+pub(crate) fn validate_folder_option(
+    folder: Option<&str>,
+) -> Result<(), NbError> {
     if let Some(path) = folder {
         validate_folder_path(path)?;
     }
@@ -45,7 +51,9 @@ pub(crate) fn validate_destination(destination: &str) -> Result<(), NbError> {
     Ok(())
 }
 
-pub(crate) fn parse_qualified_selector(selector: &str) -> Result<Option<(&str, &str)>, NbError> {
+pub(crate) fn parse_qualified_selector(
+    selector: &str,
+) -> Result<Option<(&str, &str)>, NbError> {
     let Some((notebook, path)) = selector.split_once(':') else {
         return Ok(None);
     };
@@ -84,12 +92,16 @@ pub(crate) fn parse_qualified_selector(selector: &str) -> Result<Option<(&str, &
 /// duplicate H1. Used by [`NbClient::add_note`](crate::NbClient::add_note)
 /// to detect the common agent-side mistake of including the title
 /// H1 inside the body content.
-pub(crate) fn detect_duplicate_title_heading(title: &str, content: &str) -> Option<String> {
+pub(crate) fn detect_duplicate_title_heading(
+    title: &str,
+    content: &str,
+) -> Option<String> {
     let trimmed_title = title.trim();
     if trimmed_title.is_empty() {
         return None;
     }
-    let first_nonblank = content.lines().find(|line| !line.trim().is_empty())?;
+    let first_nonblank =
+        content.lines().find(|line| !line.trim().is_empty())?;
     let bytes = first_nonblank.as_bytes();
 
     // 0-3 leading spaces. 4 or more is an indented code block.

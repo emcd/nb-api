@@ -85,7 +85,11 @@ pub(super) enum PlanOp {
     },
 }
 impl Transaction {
-    pub(crate) fn new(client: NbClient, notebook: String, gate_timeout: Duration) -> Self {
+    pub(crate) fn new(
+        client: NbClient,
+        notebook: String,
+        gate_timeout: Duration,
+    ) -> Self {
         Self {
             client,
             notebook,
@@ -103,7 +107,8 @@ impl Transaction {
     ) -> Result<(), NbError> {
         let path = validate_create_path(path, true)?;
         if let Some(t) = title
-            && let Some(heading) = crate::validate::detect_duplicate_title_heading(t, content)
+            && let Some(heading) =
+                crate::validate::detect_duplicate_title_heading(t, content)
         {
             return Err(NbError::DuplicateTitleHeading {
                 title: t.to_string(),
@@ -181,7 +186,11 @@ impl Transaction {
         Ok(())
     }
 
-    pub fn move_note(&mut self, target: NoteTarget, destination: &str) -> Result<(), NbError> {
+    pub fn move_note(
+        &mut self,
+        target: NoteTarget,
+        destination: &str,
+    ) -> Result<(), NbError> {
         validate_target(&target)?;
         crate::validate::validate_destination(destination)?;
         // Preserve a trailing slash: `foo/` means "into folder foo" (basename
@@ -278,7 +287,8 @@ impl Transaction {
         validate_target(&target)?;
         if edits.is_empty() {
             return Err(NbError::ValidationError {
-                reason: "edit_note_lines requires a non-empty edits batch".into(),
+                reason: "edit_note_lines requires a non-empty edits batch"
+                    .into(),
                 location: None,
             });
         }
@@ -286,7 +296,11 @@ impl Transaction {
         Ok(())
     }
 
-    pub fn retitle_note(&mut self, target: NoteTarget, title: &str) -> Result<(), NbError> {
+    pub fn retitle_note(
+        &mut self,
+        target: NoteTarget,
+        title: &str,
+    ) -> Result<(), NbError> {
         validate_target(&target)?;
         self.plan.push(PlanOp::RetitleNote {
             target,
@@ -302,12 +316,15 @@ impl Transaction {
         remove: &[String],
     ) -> Result<(), NbError> {
         validate_target(&target)?;
-        let add_set: HashSet<&str> = add.iter().map(|s| s.trim_start_matches('#')).collect();
+        let add_set: HashSet<&str> =
+            add.iter().map(|s| s.trim_start_matches('#')).collect();
         for r in remove {
             let key = r.trim_start_matches('#');
             if add_set.contains(key) {
                 return Err(NbError::ValidationError {
-                    reason: format!("contradictory tag add/remove for `{key}`"),
+                    reason: format!(
+                        "contradictory tag add/remove for `{key}`"
+                    ),
                     location: None,
                 });
             }
@@ -376,9 +393,13 @@ fn validate_create_path(path: &str, file: bool) -> Result<String, NbError> {
             location: None,
         });
     }
-    if raw.starts_with('/') || raw.starts_with('\\') || Path::new(raw).is_absolute() {
+    if raw.starts_with('/')
+        || raw.starts_with('\\')
+        || Path::new(raw).is_absolute()
+    {
         return Err(NbError::ValidationError {
-            reason: "path must be notebook-relative (absolute paths refused)".into(),
+            reason: "path must be notebook-relative (absolute paths refused)"
+                .into(),
             location: None,
         });
     }
@@ -406,7 +427,8 @@ fn validate_create_path(path: &str, file: bool) -> Result<String, NbError> {
         .any(|p| p.is_empty() || p == "." || p == "..")
     {
         return Err(NbError::ValidationError {
-            reason: "path must not contain empty, `.`, or `..` segments".into(),
+            reason: "path must not contain empty, `.`, or `..` segments"
+                .into(),
             location: None,
         });
     }

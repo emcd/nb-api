@@ -32,8 +32,13 @@ async fn replace_note_body_destroys_existing_body() {
     with_isolated_env(&env, false, || async {
         let client = NbClient::new(&config_for(&env)).expect("client");
         let mut tx = client.transaction(None).await.expect("tx");
-        tx.add_note("t.md", None, "original content that should be gone\n", &[])
-            .unwrap();
+        tx.add_note(
+            "t.md",
+            None,
+            "original content that should be gone\n",
+            &[],
+        )
+        .unwrap();
         tx.commit().await.expect("add");
 
         let shown = client.show_note("t.md", None).await.expect("show");

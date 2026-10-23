@@ -1,6 +1,6 @@
 use nb_api::{
-    BoundaryAt, LineEdit, LineEol, LinePosition, LineRef, NoteTarget, Occurrence, SearchMode,
-    TaskStatus,
+    BoundaryAt, LineEdit, LineEol, LinePosition, LineRef, NoteTarget,
+    Occurrence, SearchMode, TaskStatus,
 };
 
 #[test]
@@ -43,14 +43,19 @@ fn occurrence_and_line_edit_round_trip() {
 
     let o = Occurrence::All;
     assert_eq!(
-        serde_json::from_str::<Occurrence>(&serde_json::to_string(&o).unwrap()).unwrap(),
+        serde_json::from_str::<Occurrence>(
+            &serde_json::to_string(&o).unwrap()
+        )
+        .unwrap(),
         o
     );
 }
 
 #[test]
 fn line_ref_preserves_anchor_string() {
-    let anchor = nb_api::LineAnchor::parse("b3l1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
+    let anchor =
+        nb_api::LineAnchor::parse("b3l1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+            .unwrap();
     let r = LineRef {
         number: 1,
         anchor: anchor.clone(),
@@ -63,8 +68,9 @@ fn line_ref_preserves_anchor_string() {
 #[test]
 fn note_line_has_no_terminator_and_ignores_unknown_fields() {
     let anchor = "b3l1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    let json =
-        format!(r#"{{"number":1,"anchor":"{anchor}","text":"hi","terminator":"lf","extra":1}}"#);
+    let json = format!(
+        r#"{{"number":1,"anchor":"{anchor}","text":"hi","terminator":"lf","extra":1}}"#
+    );
     let line: nb_api::NoteLine = serde_json::from_str(&json).unwrap();
     assert_eq!(line.text, "hi");
     let ser = serde_json::to_string(&line).unwrap();

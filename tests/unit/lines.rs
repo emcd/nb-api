@@ -1,4 +1,6 @@
-use nb_api::{BoundaryAt, LineEdit, LineEol, LinePosition, LineRef, Occurrence};
+use nb_api::{
+    BoundaryAt, LineEdit, LineEol, LinePosition, LineRef, Occurrence,
+};
 
 // Direct unit coverage of line split/anchor via show path is in integration tests.
 // Here we only lock wire type serde for line edits.
@@ -8,11 +10,17 @@ fn line_edit_delete_round_trip() {
     let edit = LineEdit::Delete {
         start: LineRef {
             number: 1,
-            anchor: nb_api::LineAnchor::parse("b3l1:0123456789abcdef0123456789abcdef").unwrap(),
+            anchor: nb_api::LineAnchor::parse(
+                "b3l1:0123456789abcdef0123456789abcdef",
+            )
+            .unwrap(),
         },
         end: LineRef {
             number: 2,
-            anchor: nb_api::LineAnchor::parse("b3l1:0123456789abcdef0123456789abcdef").unwrap(),
+            anchor: nb_api::LineAnchor::parse(
+                "b3l1:0123456789abcdef0123456789abcdef",
+            )
+            .unwrap(),
         },
     };
     let json = serde_json::to_string(&edit).unwrap();

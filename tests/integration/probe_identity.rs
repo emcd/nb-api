@@ -63,7 +63,8 @@ where
     print_out("COMMAND", &run_nb(env, args));
     let after = regular_files(&notebook);
     for path in after.iter().filter(|path| !before.contains(path)) {
-        let relative = path.strip_prefix(&notebook).expect("relative writer path");
+        let relative =
+            path.strip_prefix(&notebook).expect("relative writer path");
         println!("CREATED\t{}", relative.display());
     }
     println!("END_WRITER");
@@ -166,7 +167,8 @@ fn probe_identity_model() {
     println!("--- file created DIRECTLY (nb-api style, no .index entry) ---");
     let notebook = env.nb_dir().join(env.notebook());
     let direct = notebook.join("1787096169-0.md");
-    fs::write(&direct, "# Direct File\n\nWritten without nb add\n").expect("write direct file");
+    fs::write(&direct, "# Direct File\n\nWritten without nb add\n")
+        .expect("write direct file");
     println!("=== nb list after direct create ===");
     print_out("LIST", &run_nb(&env, ["list", "--no-color"]));
     println!("=== nb show <filename> after direct create ===");

@@ -86,7 +86,8 @@ fn leaf_io_error_with_raw_code_captures_os_error() {
 /// `From<IoError> for io::Error` is lossy here (per the spec).
 #[test]
 fn leaf_io_error_without_raw_code_preserves_kind_drops_os_error() {
-    let io_err = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied");
+    let io_err =
+        std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied");
     let snapshot = IoError::from(io_err);
     assert_eq!(snapshot.kind, IoErrorKind::PermissionDenied);
     assert_eq!(snapshot.os_error, None);
@@ -253,7 +254,8 @@ fn three_link_chain_has_no_duplication() {
     assert_eq!(mid.kind, IoErrorKind::Other, "DeepWrap snapshot is Other");
     assert_eq!(mid.message, "DeepWrap");
 
-    let leaf_link = mid.source.as_deref().expect("leaf link must be reachable");
+    let leaf_link =
+        mid.source.as_deref().expect("leaf link must be reachable");
     assert_eq!(
         leaf_link.os_error,
         Some(11),
@@ -264,7 +266,8 @@ fn three_link_chain_has_no_duplication() {
         "leaf message must be non-empty"
     );
     assert!(
-        leaf_link.message.contains("11") || leaf_link.message.contains("os error"),
+        leaf_link.message.contains("11")
+            || leaf_link.message.contains("os error"),
         "leaf message should reference the OS error; got {:?}",
         leaf_link.message
     );

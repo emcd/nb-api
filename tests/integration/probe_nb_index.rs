@@ -184,7 +184,9 @@ fn probe_advisor_index_and_mangling() {
     dump_index(&env, &nb);
     print_out("LIST_cafe", &run_nb(&env, ["list", "--no-color"]));
     // try to show created cafe file
-    let list = String::from_utf8_lossy(&run_nb(&env, ["list", "--no-color"]).stdout).to_string();
+    let list =
+        String::from_utf8_lossy(&run_nb(&env, ["list", "--no-color"]).stdout)
+            .to_string();
     println!("LIST_RAW {:?}", list);
 
     println!("=== TITLELESS twice ===");

@@ -29,7 +29,8 @@ fn index_lines(root: &std::path::Path, folder: &str) -> Vec<String> {
     };
     let bytes = std::fs::read(root.join(&rel)).expect("read .index");
     let text = String::from_utf8(bytes).expect("index utf8");
-    let mut lines: Vec<String> = text.split('\n').map(str::to_string).collect();
+    let mut lines: Vec<String> =
+        text.split('\n').map(str::to_string).collect();
     if text.ends_with('\n') {
         lines.pop();
     }
@@ -249,8 +250,11 @@ async fn growing_in_folder_rename_is_refused() {
         // Same-folder rename to a LONGER name cannot splice losslessly:
         // refuse at plan validation (delete + recreate instead).
         let mut tx = client.transaction(None).await.expect("tx");
-        tx.move_note(NoteTarget::path("foo/a.md"), "foo/a_much_longer_name.md")
-            .unwrap();
+        tx.move_note(
+            NoteTarget::path("foo/a.md"),
+            "foo/a_much_longer_name.md",
+        )
+        .unwrap();
         let err = tx.commit().await.expect_err("growing rename");
         assert!(
             matches!(err, nb_api::NbError::PlanValidation { .. })
@@ -310,7 +314,7 @@ async fn same_path_external_create_refuses_collision() {
                     post_revision_observed.is_some_and(|h| h != pre),
                     "HEAD must show the external commit"
                 );
-            }
+            },
             other => panic!("expected IndeterminateCommit, got {other:?}"),
         }
         assert_eq!(

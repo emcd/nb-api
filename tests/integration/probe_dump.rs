@@ -46,13 +46,24 @@ fn probe_dump() {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.is_dir() {
-                    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                    let name = path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("");
                     if !name.starts_with('.') {
-                        println!("{:indent$}DIR  {}/", "", name, indent = depth);
+                        println!(
+                            "{:indent$}DIR  {}/",
+                            "",
+                            name,
+                            indent = depth
+                        );
                         walk(&path, depth + 2);
                     }
                 } else {
-                    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                    let name = path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("");
                     println!(
                         "{:indent$}FILE {}/{}",
                         "",
@@ -77,7 +88,8 @@ fn probe_dump() {
                 let path = entry.path();
                 if path.is_dir() {
                     dump_all(&path);
-                } else if let Some(name) = path.file_name().and_then(|n| n.to_str())
+                } else if let Some(name) =
+                    path.file_name().and_then(|n| n.to_str())
                     && (name.ends_with(".md")
                         || name.ends_with(".todo")
                         || name.ends_with(".bookmark"))
@@ -102,7 +114,7 @@ fn probe_dump() {
                             for line in text.lines() {
                                 println!("  | {}", line);
                             }
-                        }
+                        },
                         Err(e) => println!("READ ERROR: {}", e),
                     }
                     println!();
@@ -130,8 +142,7 @@ fn probe_dump() {
     );
 
     // Probe: todo with tags section
-    let content =
-        "# [ ] Buy milk\n\n## Description\n\nGet 2L skim\n\n## Tags\n\n#shopping #errands\n";
+    let content = "# [ ] Buy milk\n\n## Description\n\nGet 2L skim\n\n## Tags\n\n#shopping #errands\n";
     let result = run_nb(
         &env,
         &["add", "Todo With Tags", "--type", "todo", "--content", "-"],
@@ -215,7 +226,11 @@ fn probe_dump() {
     dump_all(&env.nb_dir().to_path_buf());
 }
 
-fn run_nb(env: &NbTestEnv, args: &[&str], stdin: Option<&str>) -> (i32, String, String) {
+fn run_nb(
+    env: &NbTestEnv,
+    args: &[&str],
+    stdin: Option<&str>,
+) -> (i32, String, String) {
     let mut command = env.nb_command();
     command.args(args);
     if stdin.is_some() {
@@ -227,7 +242,12 @@ fn run_nb(env: &NbTestEnv, args: &[&str], stdin: Option<&str>) -> (i32, String, 
     (output.status.code().unwrap_or(-1), stdout, stderr)
 }
 
-fn print_probe(label: &str, cmd: &str, stdin: Option<&str>, result: (i32, String, String)) {
+fn print_probe(
+    label: &str,
+    cmd: &str,
+    stdin: Option<&str>,
+    result: (i32, String, String),
+) {
     let (exit, stdout, stderr) = result;
     println!("=== PROBE: {} ===", label);
     println!("CMD: {}", cmd);

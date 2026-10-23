@@ -52,7 +52,8 @@ fn config_for(env: &NbTestEnv) -> Config {
 async fn add_rejects_exact_duplicate_h1() {
     let env = NbTestEnv::new().expect("fixture initialization");
     with_isolated_env(&env, false, || async {
-        let client = NbClient::new(&config_for(&env)).expect("client construction");
+        let client =
+            NbClient::new(&config_for(&env)).expect("client construction");
 
         let result = client
             .add_note(
@@ -66,12 +67,15 @@ async fn add_rejects_exact_duplicate_h1() {
 
         match result {
             Err(NbError::DuplicateTitleHeading { title, heading }) => {
-                assert_eq!(title, "Title", "title should be the user-supplied value");
+                assert_eq!(
+                    title, "Title",
+                    "title should be the user-supplied value"
+                );
                 assert_eq!(
                     heading, "# Title",
                     "heading should be the exact source line"
                 );
-            }
+            },
             other => panic!("expected DuplicateTitleHeading, got: {other:?}"),
         }
     })
@@ -82,17 +86,24 @@ async fn add_rejects_exact_duplicate_h1() {
 async fn add_rejects_duplicate_h1_with_leading_blank_lines() {
     let env = NbTestEnv::new().expect("fixture initialization");
     with_isolated_env(&env, false, || async {
-        let client = NbClient::new(&config_for(&env)).expect("client construction");
+        let client =
+            NbClient::new(&config_for(&env)).expect("client construction");
 
         let result = client
-            .add_note(Some("Title"), "\n\n\n# Title\n\nbody\n", &[], None, None)
+            .add_note(
+                Some("Title"),
+                "\n\n\n# Title\n\nbody\n",
+                &[],
+                None,
+                None,
+            )
             .await;
 
         match result {
             Err(NbError::DuplicateTitleHeading { title, heading }) => {
                 assert_eq!(title, "Title");
                 assert_eq!(heading, "# Title");
-            }
+            },
             other => panic!("expected DuplicateTitleHeading, got: {other:?}"),
         }
     })
@@ -103,7 +114,8 @@ async fn add_rejects_duplicate_h1_with_leading_blank_lines() {
 async fn add_allows_different_h1_text() {
     let env = NbTestEnv::new().expect("fixture initialization");
     with_isolated_env(&env, false, || async {
-        let client = NbClient::new(&config_for(&env)).expect("client construction");
+        let client =
+            NbClient::new(&config_for(&env)).expect("client construction");
 
         let result = client
             .add_note(
@@ -149,7 +161,8 @@ async fn add_allows_lower_level_headings() {
 async fn add_allows_content_without_h1() {
     let env = NbTestEnv::new().expect("fixture initialization");
     with_isolated_env(&env, false, || async {
-        let client = NbClient::new(&config_for(&env)).expect("client construction");
+        let client =
+            NbClient::new(&config_for(&env)).expect("client construction");
 
         let result = client
             .add_note(
@@ -174,7 +187,8 @@ async fn add_allows_no_title_with_h1_in_content() {
     // metadata.
     let env = NbTestEnv::new().expect("fixture initialization");
     with_isolated_env(&env, false, || async {
-        let client = NbClient::new(&config_for(&env)).expect("client construction");
+        let client =
+            NbClient::new(&config_for(&env)).expect("client construction");
 
         let result = client
             .add_note(None, "# Title\n\nbody\n", &[], None, None)
@@ -222,13 +236,16 @@ async fn add_allows_whitespace_only_title_with_h1_in_content() {
     // empty). The validation is skipped entirely.
     let env = NbTestEnv::new().expect("fixture initialization");
     with_isolated_env(&env, false, || async {
-        let client = NbClient::new(&config_for(&env)).expect("client construction");
+        let client =
+            NbClient::new(&config_for(&env)).expect("client construction");
 
         let result = client
             .add_note(Some("   \t  "), "# Title\n\nbody\n", &[], None, None)
             .await;
 
-        result.expect("whitespace-only title should skip duplicate-title validation");
+        result.expect(
+            "whitespace-only title should skip duplicate-title validation",
+        );
     })
     .await;
 }
@@ -241,7 +258,8 @@ async fn add_allows_case_different_h1() {
     // (no fuzzy match per spec).
     let env = NbTestEnv::new().expect("fixture initialization");
     with_isolated_env(&env, false, || async {
-        let client = NbClient::new(&config_for(&env)).expect("client construction");
+        let client =
+            NbClient::new(&config_for(&env)).expect("client construction");
 
         let result = client
             .add_note(Some("Title"), "# title\n\nbody\n", &[], None, None)
@@ -266,7 +284,8 @@ async fn add_carries_verbatim_title_in_duplicate_error() {
     // exact source line.
     let env = NbTestEnv::new().expect("fixture initialization");
     with_isolated_env(&env, false, || async {
-        let client = NbClient::new(&config_for(&env)).expect("client construction");
+        let client =
+            NbClient::new(&config_for(&env)).expect("client construction");
 
         let result = client
             .add_note(Some("  Title  "), "# Title\n\nbody\n", &[], None, None)
@@ -278,7 +297,7 @@ async fn add_carries_verbatim_title_in_duplicate_error() {
                     "title carries the user-supplied value verbatim"
                 );
                 assert_eq!(heading, "# Title");
-            }
+            },
             other => panic!("expected DuplicateTitleHeading, got: {other:?}"),
         }
     })
@@ -295,7 +314,8 @@ async fn add_rejects_h1_with_closing_hashes() {
     // comparison, so any of these forms trigger rejection.
     let env = NbTestEnv::new().expect("fixture initialization");
     with_isolated_env(&env, false, || async {
-        let client = NbClient::new(&config_for(&env)).expect("client construction");
+        let client =
+            NbClient::new(&config_for(&env)).expect("client construction");
 
         for (label, content, expected_heading) in [
             ("single closing hash", "# Title #\n\nbody\n", "# Title #"),
@@ -325,8 +345,10 @@ async fn add_rejects_h1_with_closing_hashes() {
                         heading, expected_heading,
                         "{label}: heading carries exact source line"
                     );
-                }
-                other => panic!("{label}: expected DuplicateTitleHeading, got: {other:?}"),
+                },
+                other => panic!(
+                    "{label}: expected DuplicateTitleHeading, got: {other:?}"
+                ),
             }
         }
     })
@@ -367,7 +389,8 @@ async fn add_rejects_h1_with_3_leading_spaces() {
     // indentation. `   # Title` IS an H1 with text "Title".
     let env = NbTestEnv::new().expect("fixture initialization");
     with_isolated_env(&env, false, || async {
-        let client = NbClient::new(&config_for(&env)).expect("client construction");
+        let client =
+            NbClient::new(&config_for(&env)).expect("client construction");
 
         let result = client
             .add_note(Some("Title"), "   # Title\n\nbody\n", &[], None, None)
@@ -377,7 +400,7 @@ async fn add_rejects_h1_with_3_leading_spaces() {
             Err(NbError::DuplicateTitleHeading { title, heading }) => {
                 assert_eq!(title, "Title");
                 assert_eq!(heading, "   # Title");
-            }
+            },
             other => panic!("expected DuplicateTitleHeading, got: {other:?}"),
         }
     })
@@ -392,7 +415,8 @@ async fn add_rejects_h1_with_tab_delimiter() {
     // as the delimiter.
     let env = NbTestEnv::new().expect("fixture initialization");
     with_isolated_env(&env, false, || async {
-        let client = NbClient::new(&config_for(&env)).expect("client construction");
+        let client =
+            NbClient::new(&config_for(&env)).expect("client construction");
 
         let result = client
             .add_note(Some("Title"), "#\tTitle\n\nbody\n", &[], None, None)
@@ -402,7 +426,7 @@ async fn add_rejects_h1_with_tab_delimiter() {
             Err(NbError::DuplicateTitleHeading { title, heading }) => {
                 assert_eq!(title, "Title");
                 assert_eq!(heading, "#\tTitle");
-            }
+            },
             other => panic!("expected DuplicateTitleHeading, got: {other:?}"),
         }
     })
@@ -416,13 +440,16 @@ async fn add_allows_4_space_indented_line() {
     // with the literal text `# Title`, not an H1.
     let env = NbTestEnv::new().expect("fixture initialization");
     with_isolated_env(&env, false, || async {
-        let client = NbClient::new(&config_for(&env)).expect("client construction");
+        let client =
+            NbClient::new(&config_for(&env)).expect("client construction");
 
         let result = client
             .add_note(Some("Title"), "    # Title\n\nbody\n", &[], None, None)
             .await;
 
-        result.expect("4-space indented line is a code block, not an H1; not flagged");
+        result.expect(
+            "4-space indented line is a code block, not an H1; not flagged",
+        );
     })
     .await;
 }
@@ -437,7 +464,8 @@ async fn add_rejects_literal_trailing_hash() {
     // line, NOT a stripped version.
     let env = NbTestEnv::new().expect("fixture initialization");
     with_isolated_env(&env, false, || async {
-        let client = NbClient::new(&config_for(&env)).expect("client construction");
+        let client =
+            NbClient::new(&config_for(&env)).expect("client construction");
 
         let result = client
             .add_note(Some("C#"), "# C#\n\nbody\n", &[], None, None)
@@ -450,7 +478,7 @@ async fn add_rejects_literal_trailing_hash() {
                     heading, "# C#",
                     "heading carries the exact source line, not stripped"
                 );
-            }
+            },
             other => panic!("expected DuplicateTitleHeading, got: {other:?}"),
         }
     })
@@ -536,7 +564,8 @@ async fn add_allows_h1_without_space() {
     // by a space, tab, or end of line.
     let env = NbTestEnv::new().expect("fixture initialization");
     with_isolated_env(&env, false, || async {
-        let client = NbClient::new(&config_for(&env)).expect("client construction");
+        let client =
+            NbClient::new(&config_for(&env)).expect("client construction");
 
         let result = client
             .add_note(Some("Title"), "#Title\n\nbody\n", &[], None, None)

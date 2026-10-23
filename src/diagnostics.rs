@@ -40,7 +40,10 @@ pub(crate) fn append_warning(mut output: String, warning: String) -> String {
 /// removing the need to classify `nb` stderr at all. Whether
 /// this helper is deleted is a separate change when the
 /// native rewrite lands; the deletion is NOT automatic.
-pub(crate) fn is_selector_not_found(stderr: &str, expected_selector: &str) -> bool {
+pub(crate) fn is_selector_not_found(
+    stderr: &str,
+    expected_selector: &str,
+) -> bool {
     exact_normalized_diagnostic(stderr, "Not found: ", expected_selector)
 }
 
@@ -51,8 +54,15 @@ pub(crate) fn is_selector_not_found(stderr: &str, expected_selector: &str) -> bo
 /// `! Notebook not found: <expected>`. See
 /// [`is_selector_not_found`] for normalization details and
 /// verified failure-mode negatives.
-pub(crate) fn is_notebook_not_found(stderr: &str, expected_notebook: &str) -> bool {
-    exact_normalized_diagnostic(stderr, "Notebook not found: ", expected_notebook)
+pub(crate) fn is_notebook_not_found(
+    stderr: &str,
+    expected_notebook: &str,
+) -> bool {
+    exact_normalized_diagnostic(
+        stderr,
+        "Notebook not found: ",
+        expected_notebook,
+    )
 }
 
 /// Verify the normalized diagnostic for `nb show` / `nb

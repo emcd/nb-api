@@ -179,7 +179,8 @@ fn bookmark_crlf_body_direct_to_tags_preserves_terminator() {
 /// legitimate blank-line separators).
 #[test]
 fn bookmark_lf_blank_separator_still_emitted() {
-    let bytes: &[u8] = b"# B\n\n<U>\n\n## Description\nbody\n\n## Tags\n\n#a\n";
+    let bytes: &[u8] =
+        b"# B\n\n<U>\n\n## Description\nbody\n\n## Tags\n\n#a\n";
     let doc = check_partition(bytes, "x.bookmark.md");
     let body: Vec<&[u8]> = doc.body().collect();
     assert_eq!(body.len(), 1, "expected single body fragment, got {body:?}");
@@ -232,7 +233,8 @@ fn bookmark_exact_tags_inside_content_is_section_boundary() {
     // Content closes). The `## Tags` line must be classified
     // as `SectionBoundary` so the assembler can pick it as the
     // canonical Tags.
-    let bytes: &[u8] = b"# B\n\n<URL>\n\n## Content\n\nbody\n\n## Tags\n\n#a\n";
+    let bytes: &[u8] =
+        b"# B\n\n<URL>\n\n## Content\n\nbody\n\n## Tags\n\n#a\n";
     let doc = check_partition(bytes, "x.bookmark.md");
     assert_eq!(doc.kind(), DocumentKind::Bookmark);
     // The canonical Tags is the terminal `## Tags` line INSIDE
@@ -321,7 +323,8 @@ fn todo_cr_blank_separator() {
 /// CRLF between separator and body.
 #[test]
 fn todo_crlf_blank_separator() {
-    let bytes: &[u8] = b"# [ ] Task\r\n\r\nbody\r\n\r\n## Tags\r\n\r\n#alpha\r\n";
+    let bytes: &[u8] =
+        b"# [ ] Task\r\n\r\nbody\r\n\r\n## Tags\r\n\r\n#alpha\r\n";
     let doc = check_partition(bytes, "x.todo.md");
     assert_eq!(doc.kind(), DocumentKind::Todo);
     let body: Vec<&[u8]> = doc.body().collect();
@@ -340,7 +343,8 @@ fn todo_crlf_blank_separator() {
 #[test]
 fn tags_str_trailing_whitespace_tag_accepted() {
     let bytes: &[u8] = b"# Title\n\n#alpha #beta   \n\nbody\n";
-    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md"))).unwrap();
+    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md")))
+        .unwrap();
     assert!(doc.tags_prefix().is_some());
 }
 
@@ -354,8 +358,10 @@ fn tags_str_signals_invalid_utf8_per_item() {
     // Tags prefix line with one valid ASCII token and one
     // token containing an invalid UTF-8 byte sequence.
     let bytes: &[u8] = b"# Title\n\n#valid #bad\xff\xffhere\n\nbody\n";
-    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md"))).unwrap();
-    let tokens: Vec<Result<&str, std::str::Utf8Error>> = doc.tags_str().collect();
+    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md")))
+        .unwrap();
+    let tokens: Vec<Result<&str, std::str::Utf8Error>> =
+        doc.tags_str().collect();
     assert_eq!(tokens.len(), 2);
     assert_eq!(tokens[0], Ok("valid"));
     assert!(

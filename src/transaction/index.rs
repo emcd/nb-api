@@ -71,7 +71,8 @@ fn titleless_stem() -> String {
         }
     }
     // Fallback: zero-padded epoch seconds (14 chars) + process-unique suffix.
-    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    static COUNTER: std::sync::atomic::AtomicU64 =
+        std::sync::atomic::AtomicU64::new(0);
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -86,7 +87,10 @@ fn titleless_stem() -> String {
 /// `extension` is the dotted kind suffix without leading dot (`md`,
 /// `todo.md`, `bookmark.md`). Collision `-N` suffixing happens at commit
 /// time via retry in the one-shot wrappers.
-pub(crate) fn filename_for_title(title: Option<&str>, extension: &str) -> String {
+pub(crate) fn filename_for_title(
+    title: Option<&str>,
+    extension: &str,
+) -> String {
     let stem = title
         .map(|t| mangle_stem(t.trim()))
         .filter(|s| !s.is_empty());
@@ -104,11 +108,18 @@ pub(crate) fn suffixed_filename(filename: &str, n: u32) -> String {
     }
 }
 
-pub(crate) fn join_folder_file(folder: Option<&str>, filename: &str) -> String {
+pub(crate) fn join_folder_file(
+    folder: Option<&str>,
+    filename: &str,
+) -> String {
     match folder {
         Some(f) if !f.trim().is_empty() => {
-            format!("{}/{}", normalize_rel(f), filename.trim_start_matches('/'))
-        }
+            format!(
+                "{}/{}",
+                normalize_rel(f),
+                filename.trim_start_matches('/')
+            )
+        },
         _ => filename.to_string(),
     }
 }
@@ -182,7 +193,8 @@ pub(super) fn parse_index_lines(bytes: &[u8]) -> Vec<String> {
         return Vec::new();
     }
     let text = String::from_utf8_lossy(bytes);
-    let mut lines: Vec<String> = text.split('\n').map(str::to_string).collect();
+    let mut lines: Vec<String> =
+        text.split('\n').map(str::to_string).collect();
     if text.ends_with('\n') {
         lines.pop();
     }
@@ -199,7 +211,11 @@ pub(super) fn render_index_lines(lines: &[String]) -> Vec<u8> {
 }
 
 /// Numeric selector for a post-write placement (`nb:3`, `nb:work/3`).
-pub(super) fn numeric_selector(notebook: &str, folder: &str, id: u32) -> String {
+pub(super) fn numeric_selector(
+    notebook: &str,
+    folder: &str,
+    id: u32,
+) -> String {
     if folder.is_empty() {
         format!("{notebook}:{id}")
     } else {
@@ -257,7 +273,8 @@ fn index_lock_path(notebook_root: &Path) -> PathBuf {
 }
 
 fn new_lock_nonce() -> String {
-    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    static COUNTER: std::sync::atomic::AtomicU64 =
+        std::sync::atomic::AtomicU64::new(0);
     let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -326,14 +343,17 @@ pub(super) async fn acquire_index_lock(
                 // Heartbeat: a live holder must never look stale. Refresh
                 // mtime every timeout/3 (at least every 30s for huge
                 // timeouts, at most every 5ms to avoid spin on tiny ones).
-                let beat = (timeout / 3).clamp(Duration::from_millis(5), Duration::from_secs(30));
+                let beat = (timeout / 3)
+                    .clamp(Duration::from_millis(5), Duration::from_secs(30));
                 let heartbeat_path = path.clone();
                 let heartbeat_nonce = nonce.clone();
                 let heartbeat = tokio::spawn(async move {
                     loop {
                         tokio::time::sleep(beat).await;
                         let owned = std::fs::read_to_string(&heartbeat_path)
-                            .map(|content| content.trim_end() == heartbeat_nonce)
+                            .map(|content| {
+                                content.trim_end() == heartbeat_nonce
+                            })
                             .unwrap_or(false);
                         if !owned {
                             break;
@@ -353,7 +373,7 @@ pub(super) async fn acquire_index_lock(
                     nonce,
                     heartbeat: Some(heartbeat),
                 });
-            }
+            },
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                 if try_remove_lock_if_stale(&path, timeout) {
                     continue;
@@ -365,13 +385,13 @@ pub(super) async fn acquire_index_lock(
                     });
                 }
                 tokio::time::sleep(Duration::from_millis(10)).await;
-            }
+            },
             Err(e) => {
                 return Err(NbError::Io {
                     path: path.clone(),
                     source: e.into(),
                 });
-            }
+            },
         }
     }
 }
@@ -401,7 +421,8 @@ pub(super) fn apply_index_edits(
 ) -> Result<Vec<IndexPlacement>, NbError> {
     // Group by file, preserving plan order within each file.
     let mut order: Vec<String> = Vec::new();
-    let mut grouped: HashMap<String, Vec<(u32, &PendingIndexEdit)>> = HashMap::new();
+    let mut grouped: HashMap<String, Vec<(u32, &PendingIndexEdit)>> =
+        HashMap::new();
     for (op_index, edit) in pending {
         grouped
             .entry(edit.file_rel.clone())
@@ -465,7 +486,12 @@ pub(super) fn apply_index_edits(
                 .map(|(_, e)| *e)
                 .filter(|e| !matches!(e.kind, PendingIndexKind::Append { .. }))
                 .collect();
-            merge_index_rewrite(&abs, &appends, &mutations, contention_timeout)?;
+            merge_index_rewrite(
+                &abs,
+                &appends,
+                &mutations,
+                contention_timeout,
+            )?;
         }
         // Post-write re-read: last occurrence wins (basenames unique).
         let fresh = std::fs::read(&abs).map_err(|e| NbError::Io {
@@ -476,20 +502,23 @@ pub(super) fn apply_index_edits(
         for (op_index, edit) in edits {
             let (folder, basename) = match &edit.kind {
                 PendingIndexKind::Append { basename } => {
-                    let (folder, _) =
-                        split_folder_basename(&pending_basename_path(file_rel, basename));
+                    let (folder, _) = split_folder_basename(
+                        &pending_basename_path(file_rel, basename),
+                    );
                     (folder, basename.clone())
-                }
+                },
                 PendingIndexKind::Blank { basename } => {
-                    let (folder, _) =
-                        split_folder_basename(&pending_basename_path(file_rel, basename));
+                    let (folder, _) = split_folder_basename(
+                        &pending_basename_path(file_rel, basename),
+                    );
                     (folder, basename.clone())
-                }
+                },
                 PendingIndexKind::Rename { new_basename, .. } => {
-                    let (folder, _) =
-                        split_folder_basename(&pending_basename_path(file_rel, new_basename));
+                    let (folder, _) = split_folder_basename(
+                        &pending_basename_path(file_rel, new_basename),
+                    );
                     (folder, new_basename.clone())
-                }
+                },
             };
             if let Some(pos) = lines.iter().rposition(|l| l == &basename) {
                 placements.push(IndexPlacement {
@@ -574,20 +603,23 @@ fn merge_index_rewrite(
         let mut lines = parse_index_lines(&base);
         for edit in mutations {
             match &edit.kind {
-                PendingIndexKind::Append { .. } => {}
+                PendingIndexKind::Append { .. } => {},
                 PendingIndexKind::Blank { basename } => {
-                    if let Some(pos) = lines.iter().position(|l| l == basename) {
+                    if let Some(pos) = lines.iter().position(|l| l == basename)
+                    {
                         lines[pos] = String::new();
                     }
-                }
+                },
                 PendingIndexKind::Rename {
                     old_basename,
                     new_basename,
                 } => {
-                    if let Some(pos) = lines.iter().position(|l| l == old_basename) {
+                    if let Some(pos) =
+                        lines.iter().position(|l| l == old_basename)
+                    {
                         lines[pos] = new_basename.clone();
                     }
-                }
+                },
             }
         }
         for basename in appends {
@@ -661,7 +693,8 @@ fn merge_index_rewrite(
         let tail_len = tail.len() as u64;
         let stale_len = s0.saturating_sub(prefix_len + tail_len);
         let expected = prefix_len + (s1 - s0);
-        let collapsed = collapse_stale_range(&fd, prefix_len + tail_len, stale_len);
+        let collapsed =
+            collapse_stale_range(&fd, prefix_len + tail_len, stale_len);
         if !collapsed {
             // Portable fallback (non-Linux, or filesystems without
             // collapse support): truncate with a documented residual
@@ -729,7 +762,10 @@ fn pending_basename_path(file_rel: &str, basename: &str) -> String {
 
 /// Scan a notebook-relative `.index` on disk for `basename`; blank lines are
 /// skipped (deleted ids stay dead, never reused).
-pub(super) fn index_id_on_disk(notebook_root: &Path, rel_path: &str) -> Option<u32> {
+pub(super) fn index_id_on_disk(
+    notebook_root: &Path,
+    rel_path: &str,
+) -> Option<u32> {
     let (folder, basename) = split_folder_basename(rel_path);
     index_id_in_folder(notebook_root, &folder, &basename)
 }

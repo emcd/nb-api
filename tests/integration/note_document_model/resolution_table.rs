@@ -10,7 +10,8 @@ use crate::common::check_partition;
 /// invariants, and return the doc.
 #[test]
 fn resolution_w1_1_titled_tagged_note_partition() {
-    let bytes: &[u8] = b"# Writer Note\n\n#alpha #beta\n\nWriter body\nsecond line\n\n";
+    let bytes: &[u8] =
+        b"# Writer Note\n\n#alpha #beta\n\nWriter body\nsecond line\n\n";
     let doc = check_partition(bytes, "note.md");
     assert_eq!(doc.title().unwrap(), &bytes[0..14]);
     assert_eq!(doc.tags_prefix().unwrap(), &bytes[15..28]);
@@ -152,7 +153,8 @@ fn resolution_e4_3_invalid_utf8_partition() {
 
 #[test]
 fn resolution_e5_1_dot_todo_is_note_partition() {
-    let bytes: &[u8] = b"# [ ] Task\n\n## Description\n\nBody\n\n## Tags\n\n#alpha #beta\n";
+    let bytes: &[u8] =
+        b"# [ ] Task\n\n## Description\n\nBody\n\n## Tags\n\n#alpha #beta\n";
     let doc = check_partition(bytes, "canonical.todo");
     assert_eq!(doc.kind(), DocumentKind::Note);
 }
@@ -175,7 +177,8 @@ fn resolution_e6_checkbox_less_todo_partition() {
 
 #[test]
 fn resolution_e7_1_nonterminal_tags_todo_partition() {
-    let bytes: &[u8] = b"# [ ] Task\n\n## Tags\n\n#alpha\n\n## Description\n\nBody\n";
+    let bytes: &[u8] =
+        b"# [ ] Task\n\n## Tags\n\n#alpha\n\n## Description\n\nBody\n";
     let doc = check_partition(bytes, "x.todo.md");
     assert_eq!(doc.tag_section(), None);
     let body: Vec<&[u8]> = doc.body().collect();

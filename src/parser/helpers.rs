@@ -6,7 +6,10 @@ use crate::tokenizer::Line;
 
 use super::document::TodoState;
 
-pub(crate) fn consume_leading_blank_intervals(source: &[u8], mut pos: usize) -> usize {
+pub(crate) fn consume_leading_blank_intervals(
+    source: &[u8],
+    mut pos: usize,
+) -> usize {
     let line_end_at = |pos: usize| -> usize {
         let mut i = pos;
         while i < source.len() {
@@ -23,7 +26,9 @@ pub(crate) fn consume_leading_blank_intervals(source: &[u8], mut pos: usize) -> 
         }
         match source[pos] {
             b'\n' => pos + 1,
-            b'\r' if pos + 1 < source.len() && source[pos + 1] == b'\n' => pos + 2,
+            b'\r' if pos + 1 < source.len() && source[pos + 1] == b'\n' => {
+                pos + 2
+            },
             b'\r' => pos + 1,
             _ => pos,
         }
@@ -61,7 +66,9 @@ pub(crate) fn parse_todo_state_from_title(line: &[u8]) -> Option<TodoState> {
     if let Some(rest) = rest.strip_prefix(b"[ ] ") {
         let _ = rest;
         Some(TodoState::Open)
-    } else if rest.strip_prefix(b"[x] ").is_some() || rest.strip_prefix(b"[X] ").is_some() {
+    } else if rest.strip_prefix(b"[x] ").is_some()
+        || rest.strip_prefix(b"[X] ").is_some()
+    {
         Some(TodoState::Done)
     } else {
         None
@@ -84,7 +91,11 @@ pub(crate) fn is_tags_prefix_line(line: &[u8]) -> bool {
         }
         i += 1;
         let token_start = i;
-        while i < line.len() && line[i] != b' ' && line[i] != b'\t' && line[i] != b'#' {
+        while i < line.len()
+            && line[i] != b' '
+            && line[i] != b'\t'
+            && line[i] != b'#'
+        {
             i += 1;
         }
         if i == token_start {
@@ -149,7 +160,10 @@ pub(crate) fn strip_leading_spaces(line: &[u8]) -> Option<&[u8]> {
 /// computation here is permissive on purpose: it surfaces the
 /// underlying bytes for downstream consumers, which can decide
 /// whether to treat invalid-UTF-8 tokens as errors.
-pub(crate) fn tag_token_spans_in(source: &[u8], range: Option<&Range<usize>>) -> Vec<Range<usize>> {
+pub(crate) fn tag_token_spans_in(
+    source: &[u8],
+    range: Option<&Range<usize>>,
+) -> Vec<Range<usize>> {
     let Some(range) = range else {
         return Vec::new();
     };
@@ -159,7 +173,10 @@ pub(crate) fn tag_token_spans_in(source: &[u8], range: Option<&Range<usize>>) ->
     while i < slice.len() {
         // Skip whitespace and line terminators.
         while i < slice.len()
-            && (slice[i] == b' ' || slice[i] == b'\t' || slice[i] == b'\n' || slice[i] == b'\r')
+            && (slice[i] == b' '
+                || slice[i] == b'\t'
+                || slice[i] == b'\n'
+                || slice[i] == b'\r')
         {
             i += 1;
         }
@@ -196,7 +213,10 @@ pub(crate) fn tag_token_spans_in(source: &[u8], range: Option<&Range<usize>>) ->
 /// `## Tags` / `## Content` / `## Source` (level 2, no
 /// leading indent, no tab after `##`, no closing-hash
 /// sequence, no trailing whitespace).
-pub(crate) fn is_exact_reserved_section(line_content: &[u8], level: u8) -> bool {
+pub(crate) fn is_exact_reserved_section(
+    line_content: &[u8],
+    level: u8,
+) -> bool {
     level == 2
         && (is_exact_reserved_heading_text(line_content, "Tags")
             || is_exact_reserved_heading_text(line_content, "Content")
@@ -207,7 +227,10 @@ pub(crate) fn is_exact_reserved_section(line_content: &[u8], level: u8) -> bool 
 /// `## Content` or `## Source` (level 2, no leading
 /// indent, no tab after `##`, no closing-hash
 /// sequence, no trailing whitespace).
-pub(crate) fn is_exact_content_or_source_heading(line_content: &[u8], level: u8) -> bool {
+pub(crate) fn is_exact_content_or_source_heading(
+    line_content: &[u8],
+    level: u8,
+) -> bool {
     level == 2
         && (is_exact_reserved_heading_text(line_content, "Content")
             || is_exact_reserved_heading_text(line_content, "Source"))
@@ -220,7 +243,10 @@ pub(crate) fn is_exact_content_or_source_heading(line_content: &[u8], level: u8)
 /// whitespace — strict match against `## <expected>`. Used
 /// by the Todo and Bookmark classifiers to recognize
 /// reserved metadata candidates.
-pub(crate) fn is_exact_reserved_heading_text(line_content: &[u8], expected: &str) -> bool {
+pub(crate) fn is_exact_reserved_heading_text(
+    line_content: &[u8],
+    expected: &str,
+) -> bool {
     let prefix: &[u8] = b"## ";
     if !line_content.starts_with(prefix) {
         return false;
@@ -232,7 +258,8 @@ pub(crate) fn is_exact_reserved_heading_text(line_content: &[u8], expected: &str
 /// True if `line` is blank: zero content OR content is entirely
 /// ASCII whitespace (` `, tab).
 pub(crate) fn is_blank_line(line: &Line<'_>) -> bool {
-    line.content.is_empty() || line.content.iter().all(|&b| b == b' ' || b == b'\t')
+    line.content.is_empty()
+        || line.content.iter().all(|&b| b == b' ' || b == b'\t')
 }
 
 /// Detect an ATX heading level (1..=6) at `line`. Returns the
@@ -288,7 +315,9 @@ pub(crate) fn heading_text(line: &[u8], level: u8) -> String {
     }
     let text_start = i;
     let mut text_end = line.len();
-    while text_end > text_start && (line[text_end - 1] == b' ' || line[text_end - 1] == b'\t') {
+    while text_end > text_start
+        && (line[text_end - 1] == b' ' || line[text_end - 1] == b'\t')
+    {
         text_end -= 1;
     }
     // Optional closing-hash sequence: strip a trailing run of `#`
@@ -300,7 +329,10 @@ pub(crate) fn heading_text(line: &[u8], level: u8) -> String {
             j -= 1;
             trailing_hashes += 1;
         }
-        if trailing_hashes > 0 && j > text_start && (line[j - 1] == b' ' || line[j - 1] == b'\t') {
+        if trailing_hashes > 0
+            && j > text_start
+            && (line[j - 1] == b' ' || line[j - 1] == b'\t')
+        {
             text_end = j - 1;
             while text_end > text_start
                 && (line[text_end - 1] == b' ' || line[text_end - 1] == b'\t')

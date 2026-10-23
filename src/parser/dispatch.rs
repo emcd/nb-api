@@ -19,7 +19,8 @@ use super::document::DocumentKind;
 /// The list is intentionally narrow; future formats (Org,
 /// AsciiDoc, LaTeX) land in P3+ as separate parser modules per
 /// `nb-api:todos/format/{1,2,3}`.
-pub const SUPPORTED_DOCUMENT_EXTENSIONS: &[&str] = &["md", "markdown", "todo.md", "bookmark.md"];
+pub const SUPPORTED_DOCUMENT_EXTENSIONS: &[&str] =
+    &["md", "markdown", "todo.md", "bookmark.md"];
 
 /// Recognized-but-unsupported dotted suffixes (R3 revision).
 /// Files whose final filename ends with one of these are

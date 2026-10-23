@@ -2,7 +2,9 @@ use std::path::PathBuf;
 use std::process::Command as StdCommand;
 
 #[cfg(test)]
-use super::binary::{SAFE_PATH_DIRS, canonicalize_executable, resolve_nb_override};
+use super::binary::{
+    SAFE_PATH_DIRS, canonicalize_executable, resolve_nb_override,
+};
 #[cfg(test)]
 use std::path::Path;
 
@@ -125,9 +127,10 @@ fn home_from_passwd_style_line(line: &str) -> Option<PathBuf> {
 fn parse_dscl_home(stdout: &str) -> Option<PathBuf> {
     for line in stdout.lines() {
         let line = line.trim();
-        let Some(rest) = line
-            .strip_prefix("NFSHomeDirectory:")
-            .or_else(|| line.strip_prefix("dsAttrTypeNative:NFSHomeDirectory:"))
+        let Some(rest) =
+            line.strip_prefix("NFSHomeDirectory:").or_else(|| {
+                line.strip_prefix("dsAttrTypeNative:NFSHomeDirectory:")
+            })
         else {
             continue;
         };
@@ -251,9 +254,11 @@ mod nb_resolve_tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let bin = dir.path().join("fake-nb");
         fs::write(&bin, b"#!/bin/sh\n").expect("write");
-        fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).expect("chmod");
+        fs::set_permissions(&bin, fs::Permissions::from_mode(0o755))
+            .expect("chmod");
         let abs = bin.canonicalize().expect("canonicalize fixture path");
-        let got = canonicalize_executable(&abs).expect("accept absolute executable");
+        let got =
+            canonicalize_executable(&abs).expect("accept absolute executable");
         assert!(got.is_absolute());
         assert_eq!(got, abs);
     }

@@ -21,11 +21,12 @@ pub fn derive_git_notebook_name() -> Option<String> {
         git_common_dir
     };
     let git_common_dir = git_common_dir.canonicalize().ok()?;
-    let master_root = if git_common_dir.file_name().is_some_and(|n| n == ".git") {
-        git_common_dir.parent()?.to_path_buf()
-    } else {
-        return None;
-    };
+    let master_root =
+        if git_common_dir.file_name().is_some_and(|n| n == ".git") {
+            git_common_dir.parent()?.to_path_buf()
+        } else {
+            return None;
+        };
     master_root
         .file_name()
         .and_then(|name| name.to_str())
@@ -110,7 +111,8 @@ pub fn git_capture(cwd: &Path, args: &[String]) -> Result<String, NbError> {
 
 /// HEAD revision (`git rev-parse HEAD`) for a notebook worktree.
 pub fn notebook_head(notebook_root: &Path) -> Result<String, NbError> {
-    let out = git_capture(notebook_root, &["rev-parse".into(), "HEAD".into()])?;
+    let out =
+        git_capture(notebook_root, &["rev-parse".into(), "HEAD".into()])?;
     let rev = out.trim().to_string();
     if rev.is_empty() {
         return Err(NbError::CommandFailed {
@@ -157,7 +159,9 @@ pub fn notebook_is_dirty(notebook_root: &Path) -> Result<bool, NbError> {
 }
 
 /// Concise porcelain status for recovery errors.
-pub fn notebook_status_porcelain(notebook_root: &Path) -> Result<String, NbError> {
+pub fn notebook_status_porcelain(
+    notebook_root: &Path,
+) -> Result<String, NbError> {
     git_capture(
         notebook_root,
         &["status".into(), "--porcelain".into(), "-uall".into()],
@@ -221,7 +225,7 @@ pub fn notebook_commit_all(
                 ],
             )?;
             Ok(true)
-        }
+        },
         _ => Err(NbError::CommandFailed {
             command: "git diff --cached --quiet".into(),
             stderr: format!("unexpected exit {status}"),
@@ -231,7 +235,10 @@ pub fn notebook_commit_all(
 }
 
 /// Hard-reset worktree/index to `revision` and remove untracked files.
-pub fn notebook_reset_clean(notebook_root: &Path, revision: &str) -> Result<(), NbError> {
+pub fn notebook_reset_clean(
+    notebook_root: &Path,
+    revision: &str,
+) -> Result<(), NbError> {
     git_capture(
         notebook_root,
         &["reset".into(), "--hard".into(), revision.to_string()],
@@ -241,9 +248,12 @@ pub fn notebook_reset_clean(notebook_root: &Path, revision: &str) -> Result<(), 
 }
 
 /// List tracked + untracked (non-ignored) notebook-relative paths, excluding `.git`.
-pub fn list_notebook_paths(notebook_root: &Path) -> Result<Vec<String>, NbError> {
+pub fn list_notebook_paths(
+    notebook_root: &Path,
+) -> Result<Vec<String>, NbError> {
     let mut paths = Vec::new();
-    let tracked = git_capture(notebook_root, &["ls-files".into(), "-z".into()])?;
+    let tracked =
+        git_capture(notebook_root, &["ls-files".into(), "-z".into()])?;
     for p in tracked.split('\0') {
         if !p.is_empty() {
             paths.push(p.to_string());
@@ -264,7 +274,11 @@ pub fn list_notebook_paths(notebook_root: &Path) -> Result<Vec<String>, NbError>
         }
     }
     // Also include empty directories that exist on disk (folders).
-    fn walk_dirs(base: &Path, rel: &Path, out: &mut Vec<String>) -> Result<(), NbError> {
+    fn walk_dirs(
+        base: &Path,
+        rel: &Path,
+        out: &mut Vec<String>,
+    ) -> Result<(), NbError> {
         let entries = std::fs::read_dir(base).map_err(|e| NbError::Io {
             path: base.to_path_buf(),
             source: e.into(),
@@ -285,10 +299,9 @@ pub fn list_notebook_paths(notebook_root: &Path) -> Result<Vec<String>, NbError>
             if file_type.is_dir() {
                 let child_rel = rel.join(&name);
                 let rel_str = child_rel.to_string_lossy().replace('\\', "/");
-                if !out
-                    .iter()
-                    .any(|p| p == &rel_str || p.starts_with(&format!("{rel_str}/")))
-                {
+                if !out.iter().any(|p| {
+                    p == &rel_str || p.starts_with(&format!("{rel_str}/"))
+                }) {
                     out.push(rel_str);
                 }
                 walk_dirs(&entry.path(), &child_rel, out)?;
@@ -301,7 +314,9 @@ pub fn list_notebook_paths(notebook_root: &Path) -> Result<Vec<String>, NbError>
 }
 
 /// Existing ignored paths on disk (not part of the editable virtual tree).
-pub fn list_ignored_paths(notebook_root: &Path) -> Result<Vec<String>, NbError> {
+pub fn list_ignored_paths(
+    notebook_root: &Path,
+) -> Result<Vec<String>, NbError> {
     let ignored = git_capture(
         notebook_root,
         &[

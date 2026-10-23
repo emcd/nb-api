@@ -84,7 +84,9 @@ async fn show_accepts_md_extension() {
             .await
             .expect("add .md note");
 
-        let output = show_text(&client.show_note("1", None).await.expect("show .md note"));
+        let output = show_text(
+            &client.show_note("1", None).await.expect("show .md note"),
+        );
         assert!(
             output.contains("hello md"),
             "show output missing content: {output:?}"
@@ -108,7 +110,9 @@ async fn show_accepts_txt_extension() {
 
         add_note_with_type(&env, env.notebook(), "beta", "hello txt", "txt");
 
-        let output = show_text(&client.show_note("1", None).await.expect("show .txt note"));
+        let output = show_text(
+            &client.show_note("1", None).await.expect("show .txt note"),
+        );
         assert!(
             output.contains("hello txt"),
             "show output missing content: {output:?}"
@@ -132,7 +136,9 @@ async fn show_accepts_org_extension() {
 
         add_note_with_type(&env, env.notebook(), "gamma", "hello org", "org");
 
-        let output = show_text(&client.show_note("1", None).await.expect("show .org note"));
+        let output = show_text(
+            &client.show_note("1", None).await.expect("show .org note"),
+        );
         assert!(
             output.contains("hello org"),
             "show output missing content: {output:?}"
@@ -154,9 +160,17 @@ async fn show_accepts_text_extension() {
         })
         .expect("client construction");
 
-        add_note_with_type(&env, env.notebook(), "delta", "hello text", "text");
+        add_note_with_type(
+            &env,
+            env.notebook(),
+            "delta",
+            "hello text",
+            "text",
+        );
 
-        let output = show_text(&client.show_note("1", None).await.expect("show .text note"));
+        let output = show_text(
+            &client.show_note("1", None).await.expect("show .text note"),
+        );
         assert!(
             output.contains("hello text"),
             "show output missing content: {output:?}"
@@ -190,7 +204,8 @@ async fn show_accepts_todo_via_md_extension() {
             .await
             .expect("add todo");
 
-        let output = show_text(&client.show_note("1", None).await.expect("show todo"));
+        let output =
+            show_text(&client.show_note("1", None).await.expect("show todo"));
         assert!(
             output.contains("task one"),
             "show output missing todo title: {output:?}"
@@ -217,28 +232,51 @@ async fn show_accepts_source_data_markup_extensions() {
         })
         .expect("client construction");
 
-        add_note_with_type(&env, env.notebook(), "jsonnote", "{\"k\":\"v\"}", "json");
-        add_note_with_type(&env, env.notebook(), "pynote", "def f(): pass", "py");
-        add_note_with_type(&env, env.notebook(), "rsnote", "fn main() {}", "rs");
+        add_note_with_type(
+            &env,
+            env.notebook(),
+            "jsonnote",
+            "{\"k\":\"v\"}",
+            "json",
+        );
+        add_note_with_type(
+            &env,
+            env.notebook(),
+            "pynote",
+            "def f(): pass",
+            "py",
+        );
+        add_note_with_type(
+            &env,
+            env.notebook(),
+            "rsnote",
+            "fn main() {}",
+            "rs",
+        );
         add_note_with_type(&env, env.notebook(), "yamlnote", "k: v", "yaml");
         add_note_with_type(&env, env.notebook(), "csvnote", "a,b,c", "csv");
 
-        let json_out = show_text(&client.show_note("1", None).await.expect("show .json"));
+        let json_out =
+            show_text(&client.show_note("1", None).await.expect("show .json"));
         assert!(
             json_out.contains("\"k\":\"v\""),
             "json output: {json_out:?}"
         );
 
-        let py_out = show_text(&client.show_note("2", None).await.expect("show .py"));
+        let py_out =
+            show_text(&client.show_note("2", None).await.expect("show .py"));
         assert!(py_out.contains("def f()"), "py output: {py_out:?}");
 
-        let rs_out = show_text(&client.show_note("3", None).await.expect("show .rs"));
+        let rs_out =
+            show_text(&client.show_note("3", None).await.expect("show .rs"));
         assert!(rs_out.contains("fn main()"), "rs output: {rs_out:?}");
 
-        let yaml_out = show_text(&client.show_note("4", None).await.expect("show .yaml"));
+        let yaml_out =
+            show_text(&client.show_note("4", None).await.expect("show .yaml"));
         assert!(yaml_out.contains("k: v"), "yaml output: {yaml_out:?}");
 
-        let csv_out = show_text(&client.show_note("5", None).await.expect("show .csv"));
+        let csv_out =
+            show_text(&client.show_note("5", None).await.expect("show .csv"));
         assert!(csv_out.contains("a,b,c"), "csv output: {csv_out:?}");
     })
     .await;
@@ -262,9 +300,16 @@ async fn show_accepts_uppercase_extension_via_native_classification() {
         })
         .expect("client construction");
 
-        add_note_with_type(&env, env.notebook(), "uppermd", "uppercase content", "MD");
+        add_note_with_type(
+            &env,
+            env.notebook(),
+            "uppermd",
+            "uppercase content",
+            "MD",
+        );
 
-        let output = show_text(&client.show_note("1", None).await.expect("show .MD"));
+        let output =
+            show_text(&client.show_note("1", None).await.expect("show .MD"));
         assert!(
             output.contains("uppercase content"),
             "show .MD output: {output:?}"
@@ -293,7 +338,8 @@ async fn show_accepts_extensionless_file() {
         // write is the canonical way to create an extensionless
         // item.
         let note_path = env.nb_dir().join(env.notebook()).join("extless");
-        std::fs::write(&note_path, b"extensionless content\n").expect("write extensionless file");
+        std::fs::write(&note_path, b"extensionless content\n")
+            .expect("write extensionless file");
 
         let output = show_text(
             &client
@@ -475,9 +521,13 @@ async fn show_probe_sweep_over_mixed_items() {
         add_note_with_type(&env, env.notebook(), "beta", "beta body", "txt");
         add_note_with_type(&env, env.notebook(), "gamma", "gamma body", "zip");
 
-        let ok = show_text(&client.show_note(alpha_path, None).await.expect("show .md"));
+        let ok = show_text(
+            &client.show_note(alpha_path, None).await.expect("show .md"),
+        );
         assert!(ok.contains("alpha body"));
-        let ok = show_text(&client.show_note("beta.txt", None).await.expect("show .txt"));
+        let ok = show_text(
+            &client.show_note("beta.txt", None).await.expect("show .txt"),
+        );
         assert!(ok.contains("beta body"));
 
         let err = client
@@ -487,7 +537,7 @@ async fn show_probe_sweep_over_mixed_items() {
         match err {
             NbError::UnsupportedShowTarget { actual_type, .. } => {
                 assert_eq!(actual_type, "zip");
-            }
+            },
             other => panic!("expected UnsupportedShowTarget, got: {other:?}"),
         }
     })
@@ -532,8 +582,10 @@ async fn show_note_missing_selector_notfound_carries_qualified_id_verbatim() {
                     "NotFound.selector must not contain a decorative \
                      verb suffix; got: {selector:?}"
                 );
-            }
-            other => panic!("expected NotFound for missing selector, got: {other:?}"),
+            },
+            other => panic!(
+                "expected NotFound for missing selector, got: {other:?}"
+            ),
         }
     })
     .await;
@@ -547,7 +599,8 @@ async fn show_note_missing_selector_notfound_carries_qualified_id_verbatim() {
 /// propagates the absence as `ValidationError` rather than
 /// attempting creation; the test pins that surfacing.
 #[tokio::test]
-async fn show_note_nonexistent_notebook_returns_validation_error_when_create_disabled() {
+async fn show_note_nonexistent_notebook_returns_validation_error_when_create_disabled()
+ {
     let env = NbTestEnv::new().expect("fixture initialization");
     with_isolated_env(&env, false, || async {
         let client = NbClient::new(&Config {
@@ -603,7 +656,8 @@ async fn show_note_nonexistent_notebook_returns_validation_error_when_create_dis
 /// qualified-selector boundary under the previous
 /// implementation, losing the variant distinction.
 #[tokio::test]
-async fn show_note_qualified_selector_nonexistent_notebook_propagates_typed_not_found() {
+async fn show_note_qualified_selector_nonexistent_notebook_propagates_typed_not_found()
+ {
     let env = NbTestEnv::new().expect("fixture initialization");
     with_isolated_env(&env, false, || async {
         let client = NbClient::new(&Config {
@@ -671,7 +725,8 @@ use crate::common::with_shim_nb_env;
 
 #[cfg(unix)]
 #[tokio::test]
-async fn show_notebook_path_successful_empty_output_command_field_is_actual_argv() {
+async fn show_notebook_path_successful_empty_output_command_field_is_actual_argv()
+ {
     let env = NbTestEnv::new().expect("fixture initialization");
     // The shim emits zero bytes for `nb notebooks show
     // {notebook} --path`. `show_notebook_path` interprets this

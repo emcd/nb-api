@@ -15,15 +15,18 @@ use nb_api::parser::{ParseContext, parse};
 
 #[test]
 fn round_trip_w1_1() {
-    let bytes: &[u8] = b"# Writer Note\n\n#alpha #beta\n\nWriter body\nsecond line\n\n";
-    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md"))).unwrap();
+    let bytes: &[u8] =
+        b"# Writer Note\n\n#alpha #beta\n\nWriter body\nsecond line\n\n";
+    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md")))
+        .unwrap();
     assert_eq!(doc.emit(), bytes);
 }
 
 #[test]
 fn round_trip_w1_2() {
     let bytes: &[u8] = b"#alpha #beta\n\nWriter titleless body\n\n";
-    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md"))).unwrap();
+    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md")))
+        .unwrap();
     assert_eq!(doc.emit(), bytes);
 }
 
@@ -31,7 +34,9 @@ fn round_trip_w1_2() {
 fn round_trip_w1_3() {
     let bytes: &[u8] =
         b"# [ ] Writer Todo\n\n## Description\n\nWriter description\n\n## Tags\n\n#alpha #beta\n\n";
-    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("todo.todo.md"))).unwrap();
+    let doc =
+        parse(bytes, ParseContext::FromPath(PathBuf::from("todo.todo.md")))
+            .unwrap();
     assert_eq!(doc.emit(), bytes);
 }
 
@@ -61,84 +66,97 @@ fn round_trip_w1_5() {
 #[test]
 fn round_trip_e1_1() {
     let bytes: &[u8] = b"# Title\n\nBody\n";
-    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md"))).unwrap();
+    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md")))
+        .unwrap();
     assert_eq!(doc.emit(), bytes);
 }
 
 #[test]
 fn round_trip_e1_2() {
     let bytes: &[u8] = b"Just content.\n";
-    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md"))).unwrap();
+    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md")))
+        .unwrap();
     assert_eq!(doc.emit(), bytes);
 }
 
 #[test]
 fn round_trip_e1_3() {
     let bytes: &[u8] = b"#Title\n\nBody\n";
-    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md"))).unwrap();
+    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md")))
+        .unwrap();
     assert_eq!(doc.emit(), bytes);
 }
 
 #[test]
 fn round_trip_e1_4() {
     let bytes: &[u8] = b"    # Title\n\nBody\n";
-    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md"))).unwrap();
+    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md")))
+        .unwrap();
     assert_eq!(doc.emit(), bytes);
 }
 
 #[test]
 fn round_trip_e1_5() {
     let bytes: &[u8] = b"Title\n=====\n\nBody\n";
-    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md"))).unwrap();
+    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md")))
+        .unwrap();
     assert_eq!(doc.emit(), bytes);
 }
 
 #[test]
 fn round_trip_e2() {
     let bytes: &[u8] = b"\n\n# Title\n\nBody\n";
-    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md"))).unwrap();
+    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md")))
+        .unwrap();
     assert_eq!(doc.emit(), bytes);
 }
 
 #[test]
 fn round_trip_e3_3() {
     let bytes: &[u8] = b"Text\n\n## Tags\n\n#alpha #beta\n";
-    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md"))).unwrap();
+    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md")))
+        .unwrap();
     assert_eq!(doc.emit(), bytes);
 }
 
 #[test]
 fn round_trip_e4_1_bom() {
     let bytes: &[u8] = b"\xef\xbb\xbf# Title\n\nBody\n";
-    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md"))).unwrap();
+    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md")))
+        .unwrap();
     assert_eq!(doc.emit(), bytes);
 }
 
 #[test]
 fn round_trip_e4_2_cr_only() {
     let bytes: &[u8] = b"# Title\r\rBody\rSecond\r";
-    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md"))).unwrap();
+    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md")))
+        .unwrap();
     assert_eq!(doc.emit(), bytes);
 }
 
 #[test]
 fn round_trip_e4_3_invalid_utf8() {
     let bytes: &[u8] = b"# Title\n\nBody \xff\xfe\n";
-    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md"))).unwrap();
+    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("note.md")))
+        .unwrap();
     assert_eq!(doc.emit(), bytes);
 }
 
 #[test]
 fn round_trip_e6() {
     let bytes: &[u8] = b"# Task\n\nBody\n";
-    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("x.todo.md"))).unwrap();
+    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("x.todo.md")))
+        .unwrap();
     assert_eq!(doc.emit(), bytes);
 }
 
 #[test]
 fn round_trip_e7_1() {
-    let bytes: &[u8] = b"# [ ] Task\n\n## Tags\n\n#alpha\n\n## Description\n\nBody\n";
-    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("x.todo.md"))).unwrap();
+    let bytes: &[u8] =
+        b"# [ ] Task\n\n## Tags\n\n#alpha\n\n## Description\n\nBody\n";
+    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("x.todo.md")))
+        .unwrap();
     assert_eq!(doc.emit(), bytes);
 }
 
@@ -146,7 +164,8 @@ fn round_trip_e7_1() {
 fn round_trip_e7_2() {
     let bytes: &[u8] =
         b"# [ ] Task\n\n## Tags\n\n#first\n\n## Description\n\nBody\n\n## Tags\n\n#last\n";
-    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("x.todo.md"))).unwrap();
+    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("x.todo.md")))
+        .unwrap();
     assert_eq!(doc.emit(), bytes);
 }
 
@@ -221,7 +240,8 @@ fn round_trip_e10_2() {
 #[test]
 fn round_trip_empty_note() {
     let bytes: &[u8] = b"";
-    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("x.md"))).unwrap();
+    let doc =
+        parse(bytes, ParseContext::FromPath(PathBuf::from("x.md"))).unwrap();
     assert_eq!(doc.emit(), bytes);
 }
 
@@ -236,10 +256,12 @@ fn round_trip_empty_note() {
 #[test]
 fn round_trip_eof_unterminated_note_title_only() {
     let bytes: &[u8] = b"# Title";
-    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("x.md"))).unwrap();
+    let doc =
+        parse(bytes, ParseContext::FromPath(PathBuf::from("x.md"))).unwrap();
     assert_eq!(doc.emit(), bytes);
     let title_str = doc.title_str().expect("title must be present");
-    let title_str = title_str.expect("EOF-unterminated title must be valid UTF-8");
+    let title_str =
+        title_str.expect("EOF-unterminated title must be valid UTF-8");
     assert_eq!(
         title_str, "# Title",
         "EOF-unterminated Note must still recognize the trailing line as a title"
@@ -249,10 +271,12 @@ fn round_trip_eof_unterminated_note_title_only() {
 #[test]
 fn round_trip_eof_unterminated_todo_title_only() {
     let bytes: &[u8] = b"# [ ] Task";
-    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("x.todo.md"))).unwrap();
+    let doc = parse(bytes, ParseContext::FromPath(PathBuf::from("x.todo.md")))
+        .unwrap();
     assert_eq!(doc.emit(), bytes);
     let title_str = doc.title_str().expect("title must be present");
-    let title_str = title_str.expect("EOF-unterminated title must be valid UTF-8");
+    let title_str =
+        title_str.expect("EOF-unterminated title must be valid UTF-8");
     assert_eq!(
         title_str, "# [ ] Task",
         "EOF-unterminated Todo must still recognize the trailing line as a title"
