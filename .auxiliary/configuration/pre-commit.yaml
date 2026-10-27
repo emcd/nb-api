@@ -1,11 +1,21 @@
 # See https://pre-commit.com for more information
 # See https://pre-commit.com/hooks.html for more hooks
 
+# Integrated 2026-10-23 from rust-project-common 0.3.1 with project
+# needs: pre-commit-hooks v6.0.0 and the template linecheck entry
+# adopted; our --all-features clippy/test kept (feature-gated code
+# warns without it); cargo test kept over template nextest (nextest
+# migration is a follow-up; suite is green under cargo test);
+# pre-push release build+test gates kept (caught real failures);
+# end-of-file-fixer and trailing-whitespace NOT adopted — they
+# conflict with the repo whitespace policy (see AGENTS.md Deviations
+# and the tests/integration/fixtures/*.md .gitattributes exceptions).
+
 default_install_hook_types: [ 'pre-commit', 'pre-push' ]
 
 repos:
 - repo: https://github.com/pre-commit/pre-commit-hooks
-  rev: v5.0.0
+  rev: v6.0.0
   hooks:
     - id: check-added-large-files
       name: 'Check: Large Files'
@@ -22,7 +32,7 @@ repos:
     - id: detect-private-key
       name: 'Check: Detect Private Keys'
     - id: mixed-line-ending
-      name: 'Check: Detect Mixed Line Endings'
+      name: 'Check: Mixed Line Endings'
       args: [ '--fix', 'no' ]
     - id: check-json
       name: 'Validate: JSON Files'
@@ -34,15 +44,6 @@ repos:
 - repo: local
   hooks:
 
-    - id: cargo-fmt
-      name: 'Check Style (Rust)'
-      language: system
-      entry: 'cargo fmt --all -- --check'
-      pass_filenames: false
-      require_serial: true
-      stages: [ 'pre-commit' ]
-      fail_fast: true
-
     - id: cargo-clippy
       name: 'Lint (Rust: Clippy)'
       language: system
@@ -52,10 +53,10 @@ repos:
       stages: [ 'pre-commit' ]
       fail_fast: true
 
-    - id: cargo-test
-      name: 'Test (Rust)'
+    - id: cargo-fmt
+      name: 'Check Style (Rust)'
       language: system
-      entry: 'cargo test --locked --all-features'
+      entry: 'cargo fmt --all -- --check'
       pass_filenames: false
       require_serial: true
       stages: [ 'pre-commit' ]
@@ -64,8 +65,18 @@ repos:
     - id: linecheck
       name: 'Check: Line Counts'
       language: system
-      entry: 'linecheck --config .auxiliary/configuration/linecheck.yaml'
-      types: [ rust ]
+      entry: 'linecheck --config .auxiliary/configuration/linecheck.yaml src tests'
+      pass_filenames: false
+      always_run: true
+      require_serial: true
+      stages: [ 'pre-commit' ]
+      fail_fast: true
+
+    - id: cargo-test
+      name: 'Test (Rust)'
+      language: system
+      entry: 'cargo test --locked --all-features'
+      pass_filenames: false
       require_serial: true
       stages: [ 'pre-commit' ]
       fail_fast: true
