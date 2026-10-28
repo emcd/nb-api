@@ -234,7 +234,7 @@ boundary).
 | `add_todo` | `todo` | |
 | `mark_task_done` | `do_task` | Renamed to `mark_…` / `unmark_…` for symmetric, unambiguous state-transition names. |
 | `unmark_task_done` | `undo_task` | See above. |
-| `list_tasks` | `tasks` | Renamed so the method name matches the underlying `nb` CLI invocation (`nb tasks`, which lists checklist items within todos). The future `list_todos` (todo container listing, `nb todos`) is tracked separately as deferred work. |
+| `list_tasks` | `tasks` → `todos tasks` | Lists checklist items within todos. Remapped from legacy `nb tasks` to `nb todos tasks` (0.4.2; outputs are identical, but notebook/folder scope resolves on the split verb). An empty scope returns the empty signal (`0 open tasks.`) instead of an error. The future `list_todos` (todo container listing, `nb todos`) is tracked separately as deferred work (`nb-api:todos/api/5`, 0.5.0). |
 
 #### Organization API
 

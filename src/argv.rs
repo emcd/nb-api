@@ -22,11 +22,14 @@ pub(crate) fn tasks_scope(notebook: &str, folder: Option<&str>) -> String {
     }
 }
 
-pub(crate) fn tasks_command_args(
+/// `nb todos tasks` argv for one scope: checklist items within todos
+/// (the `nb todos` split replaced legacy `nb tasks`; outputs are
+/// identical but notebook/folder scope resolves on the new verb).
+pub(crate) fn todos_tasks_command_args(
     scope: String,
     status: Option<TaskStatus>,
 ) -> Vec<String> {
-    let mut args = vec!["tasks".to_string(), scope];
+    let mut args = vec!["todos".to_string(), "tasks".to_string(), scope];
     if let Some(filter) = status {
         let status = match filter {
             TaskStatus::Open => "open",
@@ -74,12 +77,16 @@ pub(crate) fn is_empty_tasks_error(message: &str) -> bool {
     message.trim_start().starts_with("! 0 ") && message.contains(" tasks.")
 }
 
-pub(crate) fn empty_tasks_message(status: Option<TaskStatus>) -> String {
-    match status {
-        Some(TaskStatus::Open) => "! 0 open tasks.".to_string(),
-        Some(TaskStatus::Closed) => "! 0 closed tasks.".to_string(),
-        None => "! 0 tasks.".to_string(),
-    }
+/// Normalize nb's empty-tasks stderr (`! 0 open tasks.`) into the
+/// empty signal returned by `list_tasks` (`0 open tasks.`):
+/// strip the `!` error marker, keep the signal and terminator.
+pub(crate) fn empty_tasks_signal(message: &str) -> String {
+    let signal = message
+        .trim()
+        .strip_prefix('!')
+        .map(str::trim_start)
+        .unwrap_or_else(|| message.trim());
+    format!("{signal}\n")
 }
 
 pub(crate) fn child_folder_names(

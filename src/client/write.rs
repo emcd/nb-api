@@ -1,8 +1,8 @@
 use std::collections::VecDeque;
 
 use crate::argv::{
-    child_folder_names, empty_tasks_message, is_empty_tasks_error,
-    normalize_folder, tasks_command_args, tasks_scope,
+    child_folder_names, empty_tasks_signal, is_empty_tasks_error,
+    normalize_folder, tasks_scope, todos_tasks_command_args,
 };
 use crate::error::NbError;
 use crate::fingerprint::Fingerprint;
@@ -253,14 +253,14 @@ impl NbClient {
 
     /// Lists checklist items within todos.
     ///
-    /// Invokes the `nb tasks` subcommand. The method enumerates
+    /// Invokes `nb todos tasks` per scope. The method enumerates
     /// the checklist items within todos (and recursively into
     /// subfolders when `recursive = true`), filtered by
-    /// `status` if provided. The method name matches the
-    /// underlying `nb` CLI command (`nb tasks`); a future
+    /// `status` if provided. An empty scope returns the empty
+    /// signal (`0 open tasks.`) rather than an error. A future
     /// `list_todos` method for the todo **container** listing
     /// (invoking `nb todos`) is tracked at
-    /// `nb-api:todos/api/5` (deferred to `0.3.0+`).
+    /// `nb-api:todos/api/5` (deferred to `0.5.0`).
     pub async fn list_tasks(
         &self,
         folder: Option<&str>,
@@ -280,8 +280,10 @@ impl NbClient {
 
         let mut outputs: Vec<String> = Vec::new();
         let mut saw_empty = false;
+        let mut empty_signal: Option<String> = None;
         for scope in scopes {
-            match self.exec_vec(tasks_command_args(scope, status)).await {
+            match self.exec_vec(todos_tasks_command_args(scope, status)).await
+            {
                 Ok(output) => {
                     let output = output.trim();
                     if !output.is_empty() {
@@ -292,21 +294,17 @@ impl NbClient {
                     if is_empty_tasks_error(&stderr) =>
                 {
                     saw_empty = true;
+                    empty_signal = Some(empty_tasks_signal(&stderr));
                 },
                 Err(err) => return Err(err),
             }
         }
         if outputs.is_empty() && saw_empty {
-            // The `nb` subprocess actually succeeded (exit 0);
-            // it simply returned no tasks. This is a policy-level
-            // empty-result, not a command failure. Map to
-            // ValidationError rather than fabricate a
-            // CommandFailed with `exit_code: Some(0)` (which
-            // would be factually misleading).
-            return Err(NbError::ValidationError {
-                reason: empty_tasks_message(status),
-                location: None,
-            });
+            // An empty scope is an empty list, not a failure: return
+            // the normalized empty signal (`0 open tasks.`) so
+            // callers can enumerate todos notebook-wide without
+            // treating "no tasks here" as an error.
+            return Ok(empty_signal.unwrap_or_default());
         }
         Ok(outputs.join("\n"))
     }

@@ -66,9 +66,8 @@
 //!   etc.) — these return user content, not list output, and a
 //!   note whose first line is `0 items.` would be wrongly
 //!   truncated.
-//! - `NbClient::list_tasks` — single-line `! 0 ... tasks.`
-//!   signals handled separately by the existing
-//!   `is_empty_tasks_error` / `empty_tasks_message` logic.
+//! - `NbClient::list_tasks` (returns the normalized empty signal,
+//!   e.g. `0 open tasks.` plus its terminator, for empty scopes)
 //! - `NbClient::search_notes` no-match — `! Not found in
 //!   <notebook>: <query>` propagates as `CommandFailed`,
 //!   preserved as a distinct contract (not a helper

@@ -7,6 +7,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- `list_tasks` invokes `nb todos tasks` per scope instead of legacy
+  `nb tasks` (identical output; notebook/folder scope resolves on
+  the split verb), and an empty scope returns the normalized empty
+  signal (`0 open tasks.`) instead of a `ValidationError`. Recursive
+  notebook-scope listing now covers subfolder todos.
+- Shrinking Note tags to a single tag no longer orphans it into the
+  body: a single `#tag` line directly after the title is recognized
+  as the tags prefix (nb parity), so `show` tags and file bytes
+  agree. Titleless position keeps the two-token rule.
+
 ## [0.4.1] - 2026-09-17
 
 ### Fixed

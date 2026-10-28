@@ -6,6 +6,7 @@ use crate::tokenizer::{Line, Preamble};
 use super::document::{BookmarkPartition, NotePartition, TodoPartition};
 use super::helpers::{
     consume_leading_blank_intervals, is_exact_reserved_heading_text,
+    is_single_tag_line,
 };
 use super::types::{
     ByteRange, H2Section, HeadingRole, MarkdownToken, ParseFailure,
@@ -88,6 +89,21 @@ pub(crate) fn assemble_note(
             (Stage::AfterTitle, MarkdownToken::TagsPrefix(_)) => {
                 tags_prefix_range = Some(token_range);
                 stage = Stage::AfterTags;
+            },
+            (Stage::AfterTitle, MarkdownToken::Body(line_id)) => {
+                // Single `#tag` line directly after the title is a
+                // tags prefix (nb parity: nb writes single-tag notes
+                // and matches them via `list --tags`). Titleless
+                // position keeps the two-token rule (see
+                // `is_single_tag_line`).
+                if is_single_tag_line(lines[*line_id].content) {
+                    tags_prefix_range = Some(token_range);
+                    stage = Stage::AfterTags;
+                } else {
+                    body_start = Some(token_range.start);
+                    body_end = token_range.end;
+                    stage = Stage::InBody;
+                }
             },
             (Stage::AfterTitle, _) => {
                 body_start = Some(token_range.start);

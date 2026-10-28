@@ -29,6 +29,18 @@ fn resolution_w1_2_titleless_tagged_note_partition() {
 }
 
 #[test]
+fn resolution_w1_2b_titled_single_tag_note_partition() {
+    // nb parity (0.4.2): a single `#tag` line directly after the
+    // title is the tags prefix; without a title it stays body.
+    let bytes: &[u8] = b"# Writer Note\n\n#alpha\n\nWriter body\n\n";
+    let doc = check_partition(bytes, "note.md");
+    assert_eq!(doc.title().unwrap(), &bytes[0..14]);
+    assert_eq!(doc.tags_prefix().unwrap(), &bytes[15..22]);
+    let body: Vec<&[u8]> = doc.body().collect();
+    assert_eq!(body[0], &bytes[23..36]);
+}
+
+#[test]
 fn resolution_w1_3_tagged_todo_partition() {
     let bytes: &[u8] =
         b"# [ ] Writer Todo\n\n## Description\n\nWriter description\n\n## Tags\n\n#alpha #beta\n\n";

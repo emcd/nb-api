@@ -41,12 +41,21 @@ arbitrary text
 hint-block sanitization SHALL only apply to `list_notes` and
 `list_folders` outputs.
 
-#### Scenario: Tasks output is not sanitized
+#### Scenario: Empty tasks scope returns the empty signal
 
-- **WHEN** `NbClient::list_tasks` is called against an empty todos
-notebook
-- **THEN** the existing `is_empty_tasks_error` / `empty_tasks_message`
-handling SHALL apply. The hint-block sanitization SHALL NOT modify the output.
+- **WHEN** `NbClient::list_tasks` is called against a scope with no
+tasks
+- **THEN** the call SHALL succeed with the normalized empty signal
+(e.g., `0 open tasks.` plus its terminator), with the `!` error
+marker stripped. An empty scope is an empty list, not a failure
+(changed in 0.4.2; previously a `ValidationError`).
+
+#### Scenario: Non-empty tasks output is not sanitized
+
+- **WHEN** `NbClient::list_tasks` is called against a scope with
+tasks
+- **THEN** the output SHALL be returned unchanged. The hint-block
+sanitization SHALL NOT modify the output.
 
 #### Scenario: Search output is not sanitized
 

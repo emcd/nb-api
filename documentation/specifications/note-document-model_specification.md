@@ -557,8 +557,21 @@ prefix line SHALL appear:
 - At the start of a titleless Note (byte 0), if the first
   non-blank line is a tags-only line.
 
-A single `#Tag` (no space) is NOT a tags prefix line; it is
-body content (matches titleless body or non-H1 first line).
+A single `#Tag` (no space) directly after a title IS a tags
+prefix line (nb parity: `nb` writes single-tag notes in this
+shape and matches them via `list --tags`; 0.4.2). A single
+`#Tag` with NO preceding H1 title is body content, NOT a tags
+prefix line (titleless position keeps the two-token rule so a
+leading `#tag` line without an H1 does not shift the body
+selection); it matches titleless body or non-H1 first line.
+
+#### Scenario: Note with title and single tag
+
+GIVEN bytes `b"# Writer Note\n\n#alpha\n\nWriter body\n\n"` (nb's
+single-tag writer shape)
+
+THEN `title_range = Some(0..14)`, `tags_prefix_range =
+Some(15..22)`, and `body_ranges = [23..36]`.
 
 #### Scenario: Note with title and tags
 

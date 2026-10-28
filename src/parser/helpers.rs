@@ -120,6 +120,32 @@ pub(crate) fn is_tags_prefix_line(line: &[u8]) -> bool {
     }
 }
 
+/// Exactly one `#`-prefixed non-empty token with only trailing
+/// ASCII whitespace after it (`#alpha`, not `#alpha #beta`, not
+/// `#a#b`, not `#` alone). The Note assembler treats these as a
+/// tags prefix ONLY in AfterTitle position (mirroring `nb`, which
+/// writes single-tag notes and matches them via `list --tags`);
+/// titleless/BeforeHeader keeps the two-token rule so a leading
+/// `#tag` line without an H1 stays body content.
+pub(crate) fn is_single_tag_line(line: &[u8]) -> bool {
+    if line.first() != Some(&b'#') {
+        return false;
+    }
+    let rest = &line[1..];
+    let mut i = 0;
+    while i < rest.len()
+        && rest[i] != b' '
+        && rest[i] != b'\t'
+        && rest[i] != b'#'
+    {
+        i += 1;
+    }
+    if i == 0 {
+        return false;
+    }
+    rest[i..].iter().all(|b| *b == b' ' || *b == b'\t')
+}
+
 /// Permissive: any line matching `<URL>` followed by optional
 /// ASCII whitespace. Leading whitespace is not allowed. Used by
 /// the Bookmark classifier to recognize a URL line.

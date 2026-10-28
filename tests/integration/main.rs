@@ -17,6 +17,7 @@ mod git_env_scrub;
 mod note_identity;
 mod show_line_wrap;
 mod show_probe;
+mod tasks_tags;
 mod transaction;
 
 #[cfg(feature = "testing-tokio")]
