@@ -15,6 +15,7 @@ mod empty_result_hints;
 mod eol_model;
 mod git_env_scrub;
 mod note_identity;
+mod probe_tasks_win; // TEMPORARY Windows diagnostic; remove after use.
 mod show_line_wrap;
 mod show_probe;
 mod tasks_tags;
