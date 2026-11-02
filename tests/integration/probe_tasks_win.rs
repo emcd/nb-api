@@ -92,6 +92,10 @@ async fn dump_todos_verb_shapes() {
                 Err(e) => println!("DUMP index[{idx}] MISSING {e:?}"),
             }
         }
+        // Force stdout visibility on Windows CI (passing-test
+        // output is captured): fail after dumping. Temporary.
+        #[cfg(windows)]
+        panic!("diagnostic dump complete");
     })
     .await;
 }
