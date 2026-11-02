@@ -7,6 +7,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-11-02
+
 ### Fixed
 
 - `list_tasks` invokes `nb todos tasks` per scope instead of legacy
