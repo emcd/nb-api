@@ -17,6 +17,14 @@ fn config_for(env: &NbTestEnv) -> Config {
 }
 
 /// Notebook-scope recursive listing reaches nested-folder todos.
+///
+/// Unix-only: `nb todos tasks` (like legacy `nb tasks` before it)
+/// does not enumerate todos at all under Windows Git Bash — both
+/// verbs report `! 0 open tasks` despite present todos (dumped
+/// evidence, qa 41380846208), an nb-side enumeration failure, not
+/// an nb-api logic failure. The 0.5.0 native read path removes
+/// the nb dependency and covers Windows properly.
+#[cfg(unix)]
 #[tokio::test]
 async fn list_tasks_notebook_scope_covers_nested_folders() {
     let env = NbTestEnv::new().expect("fixture");

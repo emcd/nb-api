@@ -49,6 +49,10 @@ tasks
 (e.g., `0 open tasks.` plus its terminator), with the `!` error
 marker stripped. An empty scope is an empty list, not a failure
 (changed in 0.4.2; previously a `ValidationError`).
+- **AND** recursive notebook-scope coverage of subfolder todos is
+Unix-only in tests: `nb todos tasks` does not enumerate todos at
+all under Windows Git Bash (nb-side; 0.5.0 native reads remove
+the dependency).
 
 #### Scenario: Non-empty tasks output is not sanitized
 
