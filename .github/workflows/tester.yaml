@@ -92,7 +92,20 @@ jobs:
         with:
           version: '7.24.0'
 
+      - name: Install pre-commit
+        if: matrix.platform == 'ubuntu-latest'
+        run: pipx install pre-commit==4.6.2
+
+      - name: Install linecheck
+        if: matrix.platform == 'ubuntu-latest'
+        run: cargo install linecheck --version 1.2.1 --locked
+
+      - name: Install nextest
+        if: matrix.platform == 'ubuntu-latest'
+        run: cargo install cargo-nextest --version 0.9.146 --locked
+
       - name: Run pre-commit Stage
+        if: matrix.platform == 'ubuntu-latest'
         run: pre-commit run --hook-stage pre-commit --config .auxiliary/configuration/pre-commit.yaml --all-files --show-diff-on-failure
 
       - name: Build
