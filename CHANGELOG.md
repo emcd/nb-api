@@ -7,6 +7,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-11-10
+
 ### Added
 
 - `delete_folder` plan op + one-shot (`recursive` flag, no `force`):
