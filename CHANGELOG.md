@@ -7,6 +7,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-11-10
+
 ### Fixed
 
 - Subcommand-colliding selectors (`todos`, `notebooks`, `list`, ...)
