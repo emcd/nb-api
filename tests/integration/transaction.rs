@@ -749,18 +749,38 @@ async fn index_only_dirt_is_absorbed() {
         tx.add_note("after.md", None, "y\n", &[]).unwrap();
         let outcome = tx.commit().await.expect("absorbed");
         assert!(outcome.commit_created);
-        // Status annotation distinguishes the harmless case.
-        let mut tx = client.transaction(None).await.expect("tx3");
-        tx.add_note("probe.md", None, "z\n", &[]).unwrap();
+    })
+    .await;
+}
+
+/// Index-only dirt annotates show_notebook_status output.
+///
+/// Unix-only: `show_notebook_status` shells `nb <nb>: status`,
+/// which nb 7.24.0 cannot run under Git Bash on Windows
+/// (path-in-regex bug, see todos/api/9 and the git_env_scrub
+/// precedent).
+#[cfg(unix)]
+#[tokio::test]
+async fn index_only_status_annotates() {
+    let env = NbTestEnv::new().expect("fixture");
+    with_isolated_env(&env, false, || async {
+        let client = NbClient::new(&config_for(&env)).expect("client");
+        let root = env.nb_dir().join(env.notebook());
+        let mut tx = client.transaction(None).await.expect("tx");
+        tx.add_note("seed.md", None, "x\n", &[]).unwrap();
+        tx.add_note("foo/a.md", None, "x\n", &[]).unwrap();
+        tx.commit().await.expect("seed");
+        // Clean tree: no annotation.
+        let clean = client.show_notebook_status(None).await.expect("status");
+        assert!(!clean.contains("index reconciliation"), "{clean:?}");
         for rel in [".index", "foo/.index"] {
             let abs = root.join(rel);
-            let mut bytes = std::fs::read(&abs).unwrap_or_default();
+            let mut bytes = std::fs::read(&abs).expect("read index");
             bytes.push(b'\n');
-            std::fs::write(&abs, bytes).expect("dirty index again");
+            std::fs::write(&abs, bytes).expect("dirty index");
         }
         let status = client.show_notebook_status(None).await.expect("status");
         assert!(status.contains("index reconciliation"), "{status:?}");
-        tx.commit().await.expect("absorbed again");
     })
     .await;
 }
