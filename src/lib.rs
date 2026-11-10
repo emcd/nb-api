@@ -22,6 +22,7 @@ mod git;
 mod git_env;
 mod git_signing;
 mod lines;
+mod native;
 mod nb_program;
 mod output;
 pub mod parser;
@@ -70,6 +71,10 @@ pub struct Config {
     pub disable_git_signing: bool,
     /// Maximum time to wait on the process-shared gate queue.
     pub gate_timeout: Duration,
+    /// Serve structured reads from the notebook filesystem plus
+    /// `.index` without spawning `nb` (differential-tested native
+    /// read path). Default off through 0.5.x (opt-in).
+    pub native_reads: bool,
 }
 
 impl Default for Config {
@@ -80,6 +85,7 @@ impl Default for Config {
             allow_top_level_notes: false,
             disable_git_signing: false,
             gate_timeout: gate::DEFAULT_GATE_TIMEOUT,
+            native_reads: false,
         }
     }
 }
@@ -97,6 +103,8 @@ pub struct NbClient {
     allow_top_level_notes: bool,
     /// Gate queue timeout.
     gate_timeout: Duration,
+    /// Serve structured reads natively without spawning `nb`.
+    native_reads: bool,
 }
 
 /// Matching mode for `nb search` query terms.

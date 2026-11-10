@@ -99,6 +99,12 @@ impl NbClient {
         notebook: &str,
         selector: &str,
     ) -> Result<ShowNote, NbError> {
+        // Native read path: filesystem plus `.index` resolution and
+        // classification with zero `nb` spawns (flag-gated, default
+        // off through 0.5.x).
+        if self.native_reads {
+            return self.show_note_native(notebook, selector).await;
+        }
         // Fast path: existing directories resolve directly without
         // spawning `nb` (which misdispatches subcommand-colliding
         // names like `todos`, `notebooks`, `list`; see
@@ -137,9 +143,61 @@ impl NbClient {
             });
         }
         let root = self.show_notebook_path_unguarded(Some(notebook)).await?;
-        let rel = path_relative_to(&root, &path)?;
-        let source = std::fs::read(&path).map_err(|e| NbError::Io {
-            path: path.clone(),
+        self.show_note_from_path(notebook, selector, &root, &path)
+            .await
+    }
+
+    /// Native `show_note` resolution: qualifier-stripped selector via
+    /// the pinned precedence table, nb-free classification, then the
+    /// shared read-and-parse tail. Missing selectors surface the
+    /// qualified typed `NotFound`, matching the legacy shape.
+    async fn show_note_native(
+        &self,
+        notebook: &str,
+        selector: &str,
+    ) -> Result<ShowNote, NbError> {
+        let stripped = selector
+            .rsplit_once(':')
+            .map(|(_, rest)| rest)
+            .unwrap_or(selector);
+        let root = self.show_notebook_path_unguarded(Some(notebook)).await?;
+        let rel = crate::native::resolve_selector(&root, stripped).map_err(
+            |_| NbError::NotFound {
+                selector: selector.to_string(),
+            },
+        )?;
+        let abs = root.join(&rel);
+        match crate::native::classify_path(&abs) {
+            crate::native::NativeClass::Folder => {
+                return Err(NbError::UnsupportedShowTarget {
+                    selector: selector.to_string(),
+                    actual_type: "folder".to_string(),
+                });
+            },
+            crate::native::NativeClass::NonTextual { ext } => {
+                return Err(NbError::UnsupportedShowTarget {
+                    selector: selector.to_string(),
+                    actual_type: ext,
+                });
+            },
+            crate::native::NativeClass::Text => {},
+        }
+        self.show_note_from_path(notebook, selector, &root, &abs)
+            .await
+    }
+
+    /// Shared read-and-parse tail: canonical rel, source bytes,
+    /// document partition, and structured [`ShowNote`] assembly.
+    async fn show_note_from_path(
+        &self,
+        notebook: &str,
+        selector: &str,
+        root: &Path,
+        path: &Path,
+    ) -> Result<ShowNote, NbError> {
+        let rel = path_relative_to(root, path)?;
+        let source = std::fs::read(path).map_err(|e| NbError::Io {
+            path: path.to_path_buf(),
             source: e.into(),
         })?;
         let doc = match parse(
@@ -208,7 +266,7 @@ impl NbClient {
         });
         Ok(ShowNote {
             selector: numeric_selector_for_path(
-                notebook, &root, &rel, selector,
+                notebook, root, &rel, selector,
             ),
             path: rel.clone(),
             kind: doc.kind(),
@@ -221,7 +279,7 @@ impl NbClient {
             body,
             fingerprint: fingerprint::fingerprint(&doc),
             source: source_str,
-            numeric_id: numeric_id_for_path(&root, &rel),
+            numeric_id: numeric_id_for_path(root, &rel),
         })
     }
 
@@ -371,6 +429,25 @@ impl NbClient {
         &self,
         selector: &str,
     ) -> Result<PathBuf, NbError> {
+        // Native read path: full precedence-table resolution with
+        // zero `nb` spawns (flag-gated, default off through 0.5.x).
+        // Missing selectors surface the qualified typed `NotFound`,
+        // matching the legacy shape below. An unresolvable root
+        // falls through to legacy (which carries ensure semantics).
+        if self.native_reads
+            && let Ok(Some((notebook, rel))) =
+                crate::validate::parse_qualified_selector(selector)
+            && !rel.is_empty()
+            && let Ok(root) =
+                self.show_notebook_path_unguarded(Some(notebook)).await
+        {
+            return match crate::native::resolve_selector(&root, rel) {
+                Ok(resolved) => Ok(root.join(resolved)),
+                Err(_) => Err(NbError::NotFound {
+                    selector: selector.to_string(),
+                }),
+            };
+        }
         // Fast path: existing filesystem entries (files AND
         // directories) resolve directly without spawning `nb`, which
         // misdispatches selectors whose trailing component collides

@@ -14,6 +14,7 @@ mod edit_mode_required;
 mod empty_result_hints;
 mod eol_model;
 mod git_env_scrub;
+mod native_reads;
 mod note_identity;
 mod show_line_wrap;
 mod show_probe;

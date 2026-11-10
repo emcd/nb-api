@@ -72,6 +72,7 @@ impl NbClient {
             disable_git_signing: config.disable_git_signing,
             allow_top_level_notes: config.allow_top_level_notes,
             gate_timeout: config.gate_timeout,
+            native_reads: config.native_reads,
         })
     }
 
@@ -182,10 +183,25 @@ impl NbClient {
                 },
                 _ => embedded_notebook.to_string(),
             };
-            self.ensure_existing_notebook(&notebook).await?;
+            // Native reads skip the ensure round-trip when the
+            // notebook demonstrably exists on disk: existence is
+            // exactly what the check would confirm, and skipping
+            // removes the last `nb` spawn from the read path.
+            // Missing notebooks still fall through to ensure (and
+            // its create semantics) below.
+            if !(self.native_reads
+                && notebook_dir_from_env(&notebook).is_some())
+            {
+                self.ensure_existing_notebook(&notebook).await?;
+            }
             return Ok((notebook, format!("{}:{}", embedded_notebook, path)));
         }
-        let notebook = self.resolve_notebook(notebook).await?;
+        let notebook = self.resolve_notebook_name(notebook)?;
+        // Same native fast path as above: skip ensure (and its
+        // spawn) when the notebook demonstrably exists on disk.
+        if !(self.native_reads && notebook_dir_from_env(&notebook).is_some()) {
+            self.ensure_notebook(&notebook).await?;
+        }
         Ok((notebook.clone(), format!("{}:{}", notebook, id)))
     }
 
