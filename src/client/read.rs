@@ -40,7 +40,11 @@ impl NbClient {
         let name = self.resolve_notebook_name(notebook)?;
         // Classify first: an `nb` invocation below may background a
         // checkpoint that reconciles the dirt away mid-call.
+        // Discovery failures here must not fail the status read:
+        // fall back to verbatim output when the root is unresolvable.
         let index_only = notebook_dir_from_env(&name)
+            .ok()
+            .flatten()
             .map(|root| {
                 crate::git::notebook_status_porcelain(&root)
                     .map(|s| crate::git::status_is_index_only(&s))
@@ -86,6 +90,26 @@ impl NbClient {
         id: &str,
         notebook: Option<&str>,
     ) -> Result<ShowNote, NbError> {
+        // Native read path: validate-only qualifier resolution plus
+        // the pinned table, with zero `nb` spawns under `NB_DIR`
+        // (flag-gated, default off through 0.5.x). Plain string ids
+        // always carry selector semantics.
+        if self.native_reads {
+            let (notebook, display, input, exact) = self
+                .resolve_read_identity(&NoteTarget::selector(id), notebook)
+                .await?;
+            // No-ensure root BEFORE the gate: the legacy gate helper
+            // would ensure (and create) a missing notebook.
+            let root = self.native_notebook_root(&notebook).await?;
+            return self
+                .with_notebook_gate_native(&root, async {
+                    self.show_note_native_inside(
+                        &notebook, &display, &input, exact, &root,
+                    )
+                    .await
+                })
+                .await;
+        }
         let (notebook, selector) =
             self.resolve_target_selector(id, notebook).await?;
         self.with_notebook_gate(&notebook, async {
@@ -94,17 +118,126 @@ impl NbClient {
         .await
     }
 
+    /// Validate-only qualifier splitting for native reads: notebook
+    /// name, legacy-shaped qualified display, qualifier-stripped
+    /// input, and whether the target needs exact (path) or table
+    /// (selector) resolution. Performs zero I/O and spawns nothing,
+    /// so it runs before the gate; every filesystem touch below
+    /// happens inside one gate hold.
+    async fn resolve_read_identity(
+        &self,
+        target: &NoteTarget,
+        notebook: Option<&str>,
+    ) -> Result<(String, String, String, bool), NbError> {
+        // `input` borrows from `target` (which outlives the call)
+        // while `name` is owned: no borrow conflict.
+        let (name, input, exact): (String, &str, bool) = match target {
+            NoteTarget::Selector { value } => {
+                match crate::validate::parse_qualified_selector(value)? {
+                    Some((embedded, path)) => {
+                        if let Some(field) = notebook {
+                            crate::validate::validate_notebook_name(field)?;
+                            if field != embedded {
+                                return Err(NbError::ValidationError {
+                                    reason: format!(
+                                        "ambiguous selector: id targets notebook `{embedded}`, but notebook field is `{field}`"
+                                    ),
+                                    location: None,
+                                });
+                            }
+                        }
+                        (embedded.to_string(), path, false)
+                    },
+                    None => (
+                        self.resolve_notebook_name(notebook)?,
+                        value.as_str(),
+                        false,
+                    ),
+                }
+            },
+            NoteTarget::Path { value } => {
+                (self.resolve_notebook_name(notebook)?, value.as_str(), true)
+            },
+        };
+        let display = format!("{name}:{input}");
+        Ok((name, display, input.to_string(), exact))
+    }
+
+    /// Map only genuine misses to the display string; I/O failures
+    /// propagate unchanged (never degrade into `NotFound`).
+    fn map_native_miss(display: &str) -> impl Fn(NbError) -> NbError + '_ {
+        move |e| match e {
+            NbError::NotFound { .. } => NbError::NotFound {
+                selector: display.to_string(),
+            },
+            other => other,
+        }
+    }
+
+    /// Native root lookup: `NB_DIR` only, never creates and never
+    /// spawns. A missing notebook is the legacy-shaped qualified
+    /// `NotFound`: reads must not create notebooks as a side effect.
+    /// Genuine filesystem failures (permissions, I/O) propagate as
+    /// `Io` instead of collapsing into `NotFound`.
+    async fn native_notebook_root(
+        &self,
+        notebook: &str,
+    ) -> Result<PathBuf, NbError> {
+        match notebook_dir_from_env(notebook)? {
+            Some(path) => Ok(path),
+            None => Err(NbError::NotFound {
+                selector: format!("{notebook}:"),
+            }),
+        }
+    }
+
+    /// Native inside-gate read: variant-preserving resolution,
+    /// canonical containment, classification, then the native
+    /// read-and-parse tail. The caller resolves `root` (no-ensure,
+    /// no-spawn) before acquiring the no-ensure native gate;
+    /// everything filesystem-touching happens inside that one gate
+    /// hold: no interleaved commits can invalidate the lookup or
+    /// serve stale content.
+    async fn show_note_native_inside(
+        &self,
+        notebook: &str,
+        display: &str,
+        input: &str,
+        exact: bool,
+        root: &Path,
+    ) -> Result<ShowNote, NbError> {
+        let rel = if exact {
+            crate::native::resolve_exact(root, input)
+        } else {
+            crate::native::resolve_selector(root, input)
+        }
+        .map_err(Self::map_native_miss(display))?;
+        let abs = root.join(&rel);
+        let abs = crate::native::confine_canonical(root, &abs, display)?;
+        match crate::native::classify_path(&abs, &rel)? {
+            crate::native::NativeClass::Folder => {
+                return Err(NbError::UnsupportedShowTarget {
+                    selector: display.to_string(),
+                    actual_type: "folder".to_string(),
+                });
+            },
+            crate::native::NativeClass::NonTextual { ext } => {
+                return Err(NbError::UnsupportedShowTarget {
+                    selector: display.to_string(),
+                    actual_type: ext,
+                });
+            },
+            crate::native::NativeClass::Text => {},
+        }
+        self.show_note_from_path_native(notebook, display, root, &abs)
+            .await
+    }
+
     async fn show_note_inner(
         &self,
         notebook: &str,
         selector: &str,
     ) -> Result<ShowNote, NbError> {
-        // Native read path: filesystem plus `.index` resolution and
-        // classification with zero `nb` spawns (flag-gated, default
-        // off through 0.5.x).
-        if self.native_reads {
-            return self.show_note_native(notebook, selector).await;
-        }
         // Fast path: existing directories resolve directly without
         // spawning `nb` (which misdispatches subcommand-colliding
         // names like `todos`, `notebooks`, `list`; see
@@ -147,47 +280,12 @@ impl NbClient {
             .await
     }
 
-    /// Native `show_note` resolution: qualifier-stripped selector via
-    /// the pinned precedence table, nb-free classification, then the
-    /// shared read-and-parse tail. Missing selectors surface the
-    /// qualified typed `NotFound`, matching the legacy shape.
-    async fn show_note_native(
-        &self,
-        notebook: &str,
-        selector: &str,
-    ) -> Result<ShowNote, NbError> {
-        let stripped = selector
-            .rsplit_once(':')
-            .map(|(_, rest)| rest)
-            .unwrap_or(selector);
-        let root = self.show_notebook_path_unguarded(Some(notebook)).await?;
-        let rel = crate::native::resolve_selector(&root, stripped).map_err(
-            |_| NbError::NotFound {
-                selector: selector.to_string(),
-            },
-        )?;
-        let abs = root.join(&rel);
-        match crate::native::classify_path(&abs) {
-            crate::native::NativeClass::Folder => {
-                return Err(NbError::UnsupportedShowTarget {
-                    selector: selector.to_string(),
-                    actual_type: "folder".to_string(),
-                });
-            },
-            crate::native::NativeClass::NonTextual { ext } => {
-                return Err(NbError::UnsupportedShowTarget {
-                    selector: selector.to_string(),
-                    actual_type: ext,
-                });
-            },
-            crate::native::NativeClass::Text => {},
-        }
-        self.show_note_from_path(notebook, selector, &root, &abs)
-            .await
-    }
-
     /// Shared read-and-parse tail: canonical rel, source bytes,
     /// document partition, and structured [`ShowNote`] assembly.
+    /// Diagnostic errors (e.g. `NonUtf8`) carry the requested
+    /// selector; only a successful payload carries the numeric
+    /// canonical form. Native callers use
+    /// `show_note_from_path_native` instead.
     async fn show_note_from_path(
         &self,
         notebook: &str,
@@ -200,6 +298,46 @@ impl NbClient {
             path: path.to_path_buf(),
             source: e.into(),
         })?;
+        let canonical =
+            numeric_selector_for_path(notebook, root, &rel, selector);
+        let numeric_id = numeric_id_for_path(root, &rel);
+        Self::assemble_show_note(selector, &canonical, numeric_id, rel, source)
+    }
+
+    /// Native read-and-parse tail: same assembly, but the success
+    /// selector is the shadow-checked canonical form and the numeric
+    /// id comes from the confined fallible lookup (symlink-checked,
+    /// I/O propagating) instead of the shared legacy helper.
+    /// Diagnostics still carry the requested display selector.
+    async fn show_note_from_path_native(
+        &self,
+        notebook: &str,
+        display: &str,
+        root: &Path,
+        path: &Path,
+    ) -> Result<ShowNote, NbError> {
+        let rel = path_relative_to(root, path)?;
+        let source = std::fs::read(path).map_err(|e| NbError::Io {
+            path: path.to_path_buf(),
+            source: e.into(),
+        })?;
+        let canonical =
+            crate::native::canonical_selector(notebook, root, &rel)?;
+        let numeric_id = crate::native::numeric_id_for_rel(root, &rel)?;
+        Self::assemble_show_note(display, &canonical, numeric_id, rel, source)
+    }
+
+    /// Structured [`ShowNote`] assembly from resolved parts: document
+    /// partition, fragments, titles, and fingerprint. `diagnostic`
+    /// is the requested selector for error payloads; `canonical` is
+    /// the success-payload selector.
+    fn assemble_show_note(
+        diagnostic: &str,
+        canonical: &str,
+        numeric_id: Option<u32>,
+        rel: String,
+        source: Vec<u8>,
+    ) -> Result<ShowNote, NbError> {
         let doc = match parse(
             &source,
             ParseContext::FromPath(PathBuf::from(&rel)),
@@ -215,7 +353,7 @@ impl NbClient {
         };
         let kind_str = format!("{:?}", doc.kind()).to_lowercase();
         let non_utf8 = |path: String| NbError::NonUtf8 {
-            selector: selector.to_string(),
+            selector: diagnostic.to_string(),
             path,
             kind: kind_str.clone(),
             mime_hint: None,
@@ -265,9 +403,7 @@ impl NbClient {
                 .to_string()
         });
         Ok(ShowNote {
-            selector: numeric_selector_for_path(
-                notebook, root, &rel, selector,
-            ),
+            selector: canonical.to_string(),
             path: rel.clone(),
             kind: doc.kind(),
             todo_state: doc.todo_state(),
@@ -279,7 +415,7 @@ impl NbClient {
             body,
             fingerprint: fingerprint::fingerprint(&doc),
             source: source_str,
-            numeric_id: numeric_id_for_path(root, &rel),
+            numeric_id,
         })
     }
 
@@ -292,6 +428,35 @@ impl NbClient {
         target: NoteTarget,
         notebook: Option<&str>,
     ) -> Result<Vec<u8>, NbError> {
+        // Native read path: validate-only qualifier splitting, then
+        // variant-preserving resolution with canonical containment
+        // inside one gate hold (escapes read as `NotFound`, never
+        // foreign bytes), zero `nb` spawns.
+        if self.native_reads {
+            let (notebook, display, input, exact) =
+                self.resolve_read_identity(&target, notebook).await?;
+            // No-ensure root BEFORE the gate: the legacy gate helper
+            // would ensure (and create) a missing notebook.
+            let root = self.native_notebook_root(&notebook).await?;
+            return self
+                .with_notebook_gate_native(&root, async {
+                    let rel = if exact {
+                        crate::native::resolve_exact(&root, &input)
+                    } else {
+                        crate::native::resolve_selector(&root, &input)
+                    }
+                    .map_err(Self::map_native_miss(&display))?;
+                    let abs = root.join(&rel);
+                    let abs = crate::native::confine_canonical(
+                        &root, &abs, &display,
+                    )?;
+                    std::fs::read(&abs).map_err(|e| NbError::Io {
+                        path: abs.clone(),
+                        source: e.into(),
+                    })
+                })
+                .await;
+        }
         let (notebook, selector) =
             self.resolve_note_target(&target, notebook).await?;
         self.with_notebook_gate(&notebook, async {
@@ -312,88 +477,118 @@ impl NbClient {
         limit: Option<u32>,
         notebook: Option<&str>,
     ) -> Result<ShowNoteLines, NbError> {
+        // Native read path: validate-only qualifier splitting, then
+        // variant-preserving resolution plus the shared native show
+        // tail inside one gate hold, zero `nb` spawns.
+        if self.native_reads {
+            let (notebook, display, input, exact) =
+                self.resolve_read_identity(&target, notebook).await?;
+            // No-ensure root BEFORE the gate: the legacy gate helper
+            // would ensure (and create) a missing notebook.
+            let root = self.native_notebook_root(&notebook).await?;
+            return self
+                .with_notebook_gate_native(&root, async {
+                    let shown = self
+                        .show_note_native_inside(
+                            &notebook, &display, &input, exact, &root,
+                        )
+                        .await?;
+                    Self::show_lines_window(shown, offset, limit)
+                })
+                .await;
+        }
         let (notebook, selector) =
             self.resolve_note_target(&target, notebook).await?;
         self.with_notebook_gate(&notebook, async {
             let shown = self.show_note_inner(&notebook, &selector).await?;
-            let source = shown.source.as_bytes().to_vec();
-            let doc = parse(
-                &source,
-                ParseContext::FromPath(PathBuf::from(&shown.path)),
-            )?;
-            let body = require_contiguous_body(&doc)?;
-            let (eol, has_final_eol, lines) = document_lines(&body);
-            let total_lines = lines.len() as u32;
-            let offset = offset.unwrap_or(1);
-            let limit = limit.unwrap_or(100);
-            if offset == 0 {
+            Self::show_lines_window(shown, offset, limit)
+        })
+        .await
+    }
+
+    /// Window one contiguous body into [`ShowNoteLines`].
+    /// Pure projection over an already-read [`ShowNote`].
+    fn show_lines_window(
+        shown: ShowNote,
+        offset: Option<u32>,
+        limit: Option<u32>,
+    ) -> Result<ShowNoteLines, NbError> {
+        let source = shown.source.as_bytes().to_vec();
+        let doc = parse(
+            &source,
+            ParseContext::FromPath(PathBuf::from(&shown.path)),
+        )?;
+        let body = require_contiguous_body(&doc)?;
+        let (eol, has_final_eol, lines) = document_lines(&body);
+        let total_lines = lines.len() as u32;
+        let offset = offset.unwrap_or(1);
+        let limit = limit.unwrap_or(100);
+        if offset == 0 {
+            return Err(NbError::InvalidLineWindow {
+                offset,
+                limit,
+                total_lines,
+            });
+        }
+        if total_lines == 0 {
+            if offset != 1 {
                 return Err(NbError::InvalidLineWindow {
                     offset,
                     limit,
                     total_lines,
                 });
             }
-            if total_lines == 0 {
-                if offset != 1 {
-                    return Err(NbError::InvalidLineWindow {
-                        offset,
-                        limit,
-                        total_lines,
-                    });
-                }
-                return Ok(ShowNoteLines {
-                    selector: shown.selector,
-                    path: shown.path,
-                    kind: shown.kind,
-                    total_lines: 0,
-                    offset,
-                    limit,
-                    next_offset: None,
-                    lines: Vec::new(),
-                    title: shown.title,
-                    tags: shown.tags,
-                    body_fingerprint: shown.fingerprint,
-                    eol: None,
-                    has_final_eol: false,
-                    numeric_id: shown.numeric_id,
-                });
-            }
-            if offset > total_lines + 1 {
-                return Err(NbError::InvalidLineWindow {
-                    offset,
-                    limit,
-                    total_lines,
-                });
-            }
-            let start_idx = (offset - 1) as usize;
-            let end_idx = (start_idx + limit as usize).min(lines.len());
-            let window: Vec<_> = lines[start_idx..end_idx]
-                .iter()
-                .map(|l| note_line_from_body_line(l, &body))
-                .collect();
-            let next_offset = if end_idx < lines.len() {
-                Some(offset + window.len() as u32)
-            } else {
-                None
-            };
-            Ok(ShowNoteLines {
+            return Ok(ShowNoteLines {
                 selector: shown.selector,
                 path: shown.path,
                 kind: shown.kind,
-                total_lines,
+                total_lines: 0,
                 offset,
                 limit,
-                next_offset,
-                lines: window,
+                next_offset: None,
+                lines: Vec::new(),
                 title: shown.title,
                 tags: shown.tags,
                 body_fingerprint: shown.fingerprint,
-                eol,
-                has_final_eol,
+                eol: None,
+                has_final_eol: false,
                 numeric_id: shown.numeric_id,
-            })
+            });
+        }
+        if offset > total_lines + 1 {
+            return Err(NbError::InvalidLineWindow {
+                offset,
+                limit,
+                total_lines,
+            });
+        }
+        let start_idx = (offset - 1) as usize;
+        let end_idx = (start_idx + limit as usize).min(lines.len());
+        let window: Vec<_> = lines[start_idx..end_idx]
+            .iter()
+            .map(|l| note_line_from_body_line(l, &body))
+            .collect();
+        let next_offset = if end_idx < lines.len() {
+            Some(offset + window.len() as u32)
+        } else {
+            None
+        };
+        Ok(ShowNoteLines {
+            selector: shown.selector,
+            path: shown.path,
+            kind: shown.kind,
+            total_lines,
+            offset,
+            limit,
+            next_offset,
+            lines: window,
+            title: shown.title,
+            tags: shown.tags,
+            body_fingerprint: shown.fingerprint,
+            eol,
+            has_final_eol,
+            numeric_id: shown.numeric_id,
         })
-        .await
     }
 
     /// Search body line texts for a pattern (contiguous body only).
@@ -403,51 +598,62 @@ impl NbClient {
         pattern: &str,
         notebook: Option<&str>,
     ) -> Result<SearchNoteLines, NbError> {
+        // Native read path: see `show_note_lines`.
+        if self.native_reads {
+            let (notebook, display, input, exact) =
+                self.resolve_read_identity(&target, notebook).await?;
+            // No-ensure root BEFORE the gate: the legacy gate helper
+            // would ensure (and create) a missing notebook.
+            let root = self.native_notebook_root(&notebook).await?;
+            // `pattern` is borrowed across the gate future; copy the
+            // small query string so the future owns its inputs.
+            let pattern = pattern.to_string();
+            return self
+                .with_notebook_gate_native(&root, async {
+                    let shown = self
+                        .show_note_native_inside(
+                            &notebook, &display, &input, exact, &root,
+                        )
+                        .await?;
+                    Self::search_lines_hits(shown, &pattern)
+                })
+                .await;
+        }
         let (notebook, selector) =
             self.resolve_note_target(&target, notebook).await?;
         self.with_notebook_gate(&notebook, async {
             let shown = self.show_note_inner(&notebook, &selector).await?;
-            let source = shown.source.as_bytes().to_vec();
-            let doc = parse(
-                &source,
-                ParseContext::FromPath(PathBuf::from(&shown.path)),
-            )?;
-            let body = require_contiguous_body(&doc)?;
-            let hits = search_lines(&body, pattern.as_bytes())?;
-            Ok(SearchNoteLines {
-                selector: shown.selector,
-                path: shown.path,
-                kind: shown.kind,
-                hits,
-                body_fingerprint: shown.fingerprint,
-            })
+            Self::search_lines_hits(shown, pattern)
         })
         .await
+    }
+
+    /// Search one contiguous body for a pattern.
+    /// Pure projection over an already-read [`ShowNote`].
+    fn search_lines_hits(
+        shown: ShowNote,
+        pattern: &str,
+    ) -> Result<SearchNoteLines, NbError> {
+        let source = shown.source.as_bytes().to_vec();
+        let doc = parse(
+            &source,
+            ParseContext::FromPath(PathBuf::from(&shown.path)),
+        )?;
+        let body = require_contiguous_body(&doc)?;
+        let hits = search_lines(&body, pattern.as_bytes())?;
+        Ok(SearchNoteLines {
+            selector: shown.selector,
+            path: shown.path,
+            kind: shown.kind,
+            hits,
+            body_fingerprint: shown.fingerprint,
+        })
     }
 
     pub(super) async fn resolve_item_path(
         &self,
         selector: &str,
     ) -> Result<PathBuf, NbError> {
-        // Native read path: full precedence-table resolution with
-        // zero `nb` spawns (flag-gated, default off through 0.5.x).
-        // Missing selectors surface the qualified typed `NotFound`,
-        // matching the legacy shape below. An unresolvable root
-        // falls through to legacy (which carries ensure semantics).
-        if self.native_reads
-            && let Ok(Some((notebook, rel))) =
-                crate::validate::parse_qualified_selector(selector)
-            && !rel.is_empty()
-            && let Ok(root) =
-                self.show_notebook_path_unguarded(Some(notebook)).await
-        {
-            return match crate::native::resolve_selector(&root, rel) {
-                Ok(resolved) => Ok(root.join(resolved)),
-                Err(_) => Err(NbError::NotFound {
-                    selector: selector.to_string(),
-                }),
-            };
-        }
         // Fast path: existing filesystem entries (files AND
         // directories) resolve directly without spawning `nb`, which
         // misdispatches selectors whose trailing component collides
@@ -666,13 +872,32 @@ fn numeric_selector_for_path(
     }
 }
 
-pub(super) fn notebook_dir_from_env(notebook: &str) -> Option<PathBuf> {
-    let nb_dir = std::env::var_os("NB_DIR")?;
+pub(super) fn notebook_dir_from_env(
+    notebook: &str,
+) -> Result<Option<PathBuf>, NbError> {
+    let Some(nb_dir) = std::env::var_os("NB_DIR") else {
+        return Ok(None);
+    };
     let path = PathBuf::from(nb_dir).join(notebook);
-    if path.is_dir() && path.join(".git").exists() {
-        Some(path)
-    } else {
-        None
+    // `metadata` follows symlinks exactly like the previous
+    // `is_dir` check; only genuine misses map to `None` while
+    // permission and I/O failures propagate instead of collapsing
+    // into `NotFound`.
+    match std::fs::metadata(&path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(NbError::Io {
+            path: path.clone(),
+            source: e.into(),
+        }),
+        Ok(m) if !m.is_dir() => Ok(None),
+        Ok(_) => match std::fs::metadata(path.join(".git")) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(NbError::Io {
+                path: path.join(".git"),
+                source: e.into(),
+            }),
+            Ok(_) => Ok(Some(path)),
+        },
     }
 }
 
@@ -698,5 +923,16 @@ pub(super) fn path_relative_to(
                 ),
                 location: None,
             })?;
-    Ok(rel.to_string_lossy().replace('\\', "/"))
+    // On Windows the canonical form uses `\` separators, which
+    // are normalized here. On Unix a backslash is an ordinary
+    // filename character (e.g. a literal `a\b` file) and must be
+    // preserved verbatim.
+    #[cfg(windows)]
+    {
+        Ok(rel.to_string_lossy().replace('\\', "/"))
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(rel.to_string_lossy().into_owned())
+    }
 }
