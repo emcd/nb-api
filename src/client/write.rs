@@ -138,7 +138,7 @@ impl NbClient {
             .map(|(_, rest)| rest)
             .unwrap_or(selector);
         let direct = root.join(stripped);
-        if direct.is_file() {
+        if direct.is_file() || direct.is_dir() {
             return Ok(NoteTarget::path(stripped));
         }
         // Fall back to `nb show --path` for numeric ids / titles.

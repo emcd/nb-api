@@ -7,6 +7,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- Subcommand-colliding selectors (`todos`, `notebooks`, `list`, ...)
+  resolve existing filesystem entries directly instead of shelling to
+  `nb show <sel> --path` (which misdispatches into tasks/notebooks/list
+  listings). `note_target_for_selector` and `resolve_item_path` now
+  fast-path existing files and directories, falling back to `nb` only
+  for numeric ids/titles; `show_note` on a folder is a typed
+  `UnsupportedShowTarget` without spawning. Removes reconciling CLI
+  reads from the hot path.
+
 ## [0.4.3] - 2026-11-10
 
 ### Added

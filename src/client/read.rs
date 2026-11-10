@@ -99,6 +99,26 @@ impl NbClient {
         notebook: &str,
         selector: &str,
     ) -> Result<ShowNote, NbError> {
+        // Fast path: existing directories resolve directly without
+        // spawning `nb` (which misdispatches subcommand-colliding
+        // names like `todos`, `notebooks`, `list`; see
+        // nb-mcp-server:todos/mcp/62). Bypass also skips the probe's
+        // reconciling CLI reads. Falls back to the probe + `nb show
+        // --path` path for numeric ids/titles when the filesystem
+        // entry is absent.
+        if let Some(rel) = selector
+            .rsplit_once(':')
+            .map(|(_, rest)| rest)
+            .filter(|rest| !rest.is_empty())
+            && let Ok(root) =
+                self.show_notebook_path_unguarded(Some(notebook)).await
+            && root.join(rel).is_dir()
+        {
+            return Err(NbError::UnsupportedShowTarget {
+                selector: selector.to_string(),
+                actual_type: "folder".to_string(),
+            });
+        }
         match self.probe_show_classification(selector).await {
             ShowClassification::NonTextual { actual_type } => {
                 return Err(NbError::UnsupportedShowTarget {
@@ -110,6 +130,12 @@ impl NbClient {
             },
         }
         let path = self.resolve_item_path(selector).await?;
+        if path.is_dir() {
+            return Err(NbError::UnsupportedShowTarget {
+                selector: selector.to_string(),
+                actual_type: "folder".to_string(),
+            });
+        }
         let root = self.show_notebook_path_unguarded(Some(notebook)).await?;
         let rel = path_relative_to(&root, &path)?;
         let source = std::fs::read(&path).map_err(|e| NbError::Io {
@@ -345,6 +371,24 @@ impl NbClient {
         &self,
         selector: &str,
     ) -> Result<PathBuf, NbError> {
+        // Fast path: existing filesystem entries (files AND
+        // directories) resolve directly without spawning `nb`, which
+        // misdispatches selectors whose trailing component collides
+        // with subcommand vocabulary (`todos` -> tasks listing,
+        // `notebooks` -> notebook root, `list` -> folder listing;
+        // nb-mcp-server:todos/mcp/62). Falls back to `nb show --path`
+        // for numeric ids/titles that have no direct filesystem form.
+        if let Ok(Some((notebook, rel))) =
+            crate::validate::parse_qualified_selector(selector)
+            && !rel.is_empty()
+            && let Ok(root) =
+                self.show_notebook_path_unguarded(Some(notebook)).await
+        {
+            let direct = root.join(rel);
+            if direct.is_file() || direct.is_dir() {
+                return Ok(direct);
+            }
+        }
         let output = self
             .exec_vec(vec![
                 "show".to_string(),

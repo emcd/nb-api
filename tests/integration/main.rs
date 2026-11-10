@@ -17,6 +17,7 @@ mod git_env_scrub;
 mod note_identity;
 mod show_line_wrap;
 mod show_probe;
+mod subcommand_collision;
 mod tasks_tags;
 mod transaction;
 
