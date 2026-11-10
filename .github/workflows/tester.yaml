@@ -21,16 +21,17 @@ jobs:
   initialize:
     uses: ./.github/workflows/core--initializer.yaml
 
-  lint:
+  gates:
     needs: [initialize]
     runs-on: ubuntu-latest
     steps:
 
-      - name: Checkout
-        uses: actions/checkout@v6
+      - name: Check Out
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
-
+        # fetch-depth 0: the whitespace gate dispatches on commit
+        # ranges and needs full history.
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -68,7 +69,7 @@ jobs:
         run: cargo clippy --all-targets --all-features -- -D warnings
 
   test:
-    needs: [initialize, lint]
+    needs: [initialize, gates]
     strategy:
       fail-fast: false
       matrix:
@@ -91,6 +92,9 @@ jobs:
         with:
           version: '7.24.0'
 
+      - name: Run pre-commit Stage
+        run: pre-commit run --hook-stage pre-commit --config .auxiliary/configuration/pre-commit.yaml --all-files --show-diff-on-failure
+
       - name: Build
         run: cargo build --release
         env:
@@ -102,12 +106,12 @@ jobs:
           NB_API_TEST_NB: ${{ steps.setup-nb.outputs.nb-exec }}
 
   package:
-    needs: [initialize, lint, test]
+    needs: [initialize, gates, test]
     runs-on: ubuntu-latest
     steps:
 
-      - name: Checkout
-        uses: actions/checkout@v6
+      - name: Check Out
+        uses: actions/checkout@v7
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
