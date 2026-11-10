@@ -158,7 +158,54 @@ pub fn notebook_is_dirty(notebook_root: &Path) -> Result<bool, NbError> {
     }
 }
 
+/// True when `git status --porcelain` output shows dirt consisting
+/// solely of tracked `.index` modifications (root or nested).
+///
+/// Reviewer-confirmed safety case, stated verbatim: with porcelain
+/// `-uall --ignored=no` plus the `diff-index` belt-and-suspenders in
+/// `notebook_is_dirty`, index-only dirt implies no uncommitted note
+/// bytes and no untracked files — and the transaction's own
+/// `git add -A` checkpoint absorbs the reconciliation. Tolerated
+/// forms are `M `/` M`/`MM` on paths whose basename is `.index`.
+/// Never tolerated: untracked files (including a live
+/// `.nb-api-index.lock`, whose presence means a concurrent writer
+/// holds the notebook — tolerating it would break mutual
+/// exclusion), deletions, renames, or anything else.
+pub(crate) fn status_is_index_only(status: &str) -> bool {
+    let mut saw_any = false;
+    for line in status.lines() {
+        saw_any = true;
+        // Porcelain v1: two XY columns, a space, then the path.
+        // The three-byte ASCII prefix guarantees index 3 is a
+        // char boundary for the path slice.
+        if line.len() < 4 || line.as_bytes()[2] != b' ' {
+            return false;
+        }
+        let (xy, path) = (&line[..2], line[3..].trim());
+        if xy != "M " && xy != " M" && xy != "MM" {
+            return false;
+        }
+        let path = path.trim();
+        let path = path
+            .strip_prefix('"')
+            .and_then(|p| p.strip_suffix('"'))
+            .unwrap_or(path);
+        if path.is_empty() {
+            return false;
+        }
+        let base = path.rsplit('/').next().unwrap_or(path);
+        if base != ".index" {
+            return false;
+        }
+    }
+    saw_any
+}
+
 /// Concise porcelain status for recovery errors.
+///
+/// Only trailing whitespace is trimmed: leading XY columns are
+/// significant (a leading space marks an unstaged-only entry),
+/// so callers that classify dirt must see them intact.
 pub fn notebook_status_porcelain(
     notebook_root: &Path,
 ) -> Result<String, NbError> {
@@ -166,7 +213,7 @@ pub fn notebook_status_porcelain(
         notebook_root,
         &["status".into(), "--porcelain".into(), "-uall".into()],
     )
-    .map(|s| s.trim().to_string())
+    .map(|s| s.trim_end().to_string())
 }
 
 /// Stage paths and create one commit. Returns `Ok(true)` if a commit was

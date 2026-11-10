@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use crate::error::NbError;
 use crate::fingerprint::{self, Fingerprint};
+use crate::git;
 use crate::lines::{
     apply_line_edits, apply_substring, require_contiguous_body, splice_body,
     splice_title,
@@ -15,7 +16,7 @@ use super::index::{
 };
 use super::plan::PlanOp;
 use super::virtual_tree::{
-    VirtualTree, outcome_selector, refuse_create_collision,
+    VirtualNode, VirtualTree, outcome_selector, refuse_create_collision,
     resolve_move_destination, resolve_target_path,
 };
 
@@ -181,6 +182,14 @@ pub(super) fn validate_and_apply_virtual(
                     selector: target.value().to_string(),
                 });
             }
+            if matches!(tree.nodes.get(&path), Some(VirtualNode::Folder)) {
+                return Err(NbError::ValidationError {
+                    reason: format!(
+                        "`{path}` is a folder; use delete_folder instead of delete_note"
+                    ),
+                    location: None,
+                });
+            }
             tree.remove(&path);
             effects.removed.push(path.clone());
             Ok(OpMeta {
@@ -191,12 +200,116 @@ pub(super) fn validate_and_apply_virtual(
                 index_edits: vec![blank_index_edit(&path)],
             })
         },
+        PlanOp::DeleteFolder { target, recursive } => {
+            let path = resolve_target_path(tree, ignored_existing, target)?;
+            if path.is_empty() {
+                return Err(NbError::ValidationError {
+                    reason: "refusing to delete the notebook root".into(),
+                    location: None,
+                });
+            }
+            if !tree.exists(&path) {
+                return Err(NbError::NotFound {
+                    selector: target.value().to_string(),
+                });
+            }
+            if !matches!(tree.nodes.get(&path), Some(VirtualNode::Folder)) {
+                return Err(NbError::ValidationError {
+                    reason: format!(
+                        "`{path}` is not a folder; use delete_note instead of delete_folder"
+                    ),
+                    location: None,
+                });
+            }
+            // Contents are descendant keys excluding our own markers:
+            // `.gitkeep` placeholders and `.index` files alone do not
+            // make a folder non-empty.
+            let prefix = format!("{path}/");
+            let mut contents: Vec<String> = tree
+                .nodes
+                .keys()
+                .filter(|k| k.starts_with(&prefix))
+                .filter(|k| {
+                    let base = k.rsplit('/').next().unwrap_or(k);
+                    base != ".gitkeep" && base != ".index"
+                })
+                .map(|k| k.strip_prefix(&prefix).unwrap_or(k).to_string())
+                .collect();
+            contents.sort();
+            if !contents.is_empty() && !recursive {
+                const LIST_LIMIT: usize = 25;
+                let mut listed =
+                    contents[..contents.len().min(LIST_LIMIT)].join(", ");
+                if contents.len() > LIST_LIMIT {
+                    listed.push_str(&format!(
+                        " (and {} more)",
+                        contents.len() - LIST_LIMIT
+                    ));
+                }
+                return Err(NbError::ValidationError {
+                    reason: format!(
+                        "cannot delete non-empty folder `{path}` without recursive=true; contents: {listed}"
+                    ),
+                    location: None,
+                });
+            }
+            let subtree: Vec<String> = tree
+                .nodes
+                .keys()
+                .filter(|k| *k == &path || k.starts_with(&prefix))
+                .cloned()
+                .collect();
+            for key in &subtree {
+                tree.remove(key);
+            }
+            effects.removed.push(path.clone());
+            Ok(OpMeta {
+                path: Some(path.clone()),
+                selector: Some(outcome_selector(notebook, target, &path)),
+                noop: false,
+                fingerprint: None,
+                index_edits: vec![blank_index_edit(&path)],
+            })
+        },
+        PlanOp::AssertRevision { expected } => {
+            // Optimistic-concurrency precondition on the notebook
+            // revision: evaluated here, before any materialization,
+            // so a mismatch refuses cleanly with nothing deleted.
+            // Residual only: an external commit landing between this
+            // check and our checkpoint (cross-process commit locking
+            // is 0.5.0 work).
+            let current = git::notebook_head(notebook_root)?;
+            if &current != expected {
+                return Err(NbError::PlanValidation {
+                    kind: "revision_mismatch".into(),
+                    message: format!(
+                        "notebook revision changed since capture: expected {expected}, observed {current}"
+                    ),
+                    plan_index: None,
+                });
+            }
+            Ok(OpMeta {
+                path: None,
+                selector: None,
+                noop: true,
+                fingerprint: None,
+                index_edits: Vec::new(),
+            })
+        },
         PlanOp::MoveNote {
             target,
             destination,
         } => {
             let from = resolve_target_path(tree, ignored_existing, target)?;
             let to = resolve_move_destination(&from, destination);
+            if matches!(tree.nodes.get(&from), Some(VirtualNode::Folder)) {
+                return Err(NbError::ValidationError {
+                    reason: format!(
+                        "`{from}` is a folder; folder moves are not supported (delete and recreate instead)"
+                    ),
+                    location: None,
+                });
+            }
             refuse_create_collision(
                 notebook_root,
                 tree,

@@ -220,6 +220,109 @@ async fn move_across_folders_blanks_source_and_appends_dest() {
 }
 
 #[tokio::test]
+async fn delete_folder_empty_without_recursive() {
+    let env = NbTestEnv::new().expect("fixture");
+    with_isolated_env(&env, false, || async {
+        let client = NbClient::new(&config_for(&env)).expect("client");
+        let mut tx = client.transaction(None).await.expect("tx");
+        tx.add_note("top.md", None, "x\n", &[]).unwrap();
+        tx.add_folder("foo").unwrap();
+        tx.commit().await.expect("seed");
+        let outcome = client
+            .delete_folder("foo", false, None)
+            .await
+            .expect("delete empty folder");
+        assert_eq!(outcome.ops[0].path.as_deref(), Some("foo"));
+        let root = client.show_notebook_path(None).await.expect("path");
+        assert!(!root.join("foo").exists(), "folder dir removed");
+        assert_eq!(
+            index_lines(&root, ""),
+            vec!["top.md".to_string(), String::new()]
+        );
+    })
+    .await;
+}
+
+/// Non-empty folder without recursive refuses, listing contents.
+#[tokio::test]
+async fn delete_folder_non_empty_without_recursive_refuses() {
+    let env = NbTestEnv::new().expect("fixture");
+    with_isolated_env(&env, false, || async {
+        let client = NbClient::new(&config_for(&env)).expect("client");
+        let mut tx = client.transaction(None).await.expect("tx");
+        tx.add_note("foo/a.md", None, "x\n", &[]).unwrap();
+        tx.add_note("foo/sub/b.md", None, "y\n", &[]).unwrap();
+        tx.commit().await.expect("seed");
+        let err = client
+            .delete_folder("foo", false, None)
+            .await
+            .expect_err("must refuse");
+        let msg = format!("{err:?}");
+        assert!(msg.contains("recursive"), "{msg:?}");
+        assert!(msg.contains("a.md"), "{msg:?}");
+        assert!(msg.contains("sub"), "{msg:?}");
+        // Refusal leaves everything in place.
+        let root = client.show_notebook_path(None).await.expect("path");
+        assert!(root.join("foo/a.md").is_file());
+    })
+    .await;
+}
+
+/// Recursive delete removes the subtree and blanks the parent line.
+#[tokio::test]
+async fn delete_folder_recursive_removes_subtree() {
+    let env = NbTestEnv::new().expect("fixture");
+    with_isolated_env(&env, false, || async {
+        let client = NbClient::new(&config_for(&env)).expect("client");
+        let mut tx = client.transaction(None).await.expect("tx");
+        tx.add_note("top.md", None, "x\n", &[]).unwrap();
+        tx.add_note("foo/a.md", None, "x\n", &[]).unwrap();
+        tx.add_note("foo/sub/b.md", None, "y\n", &[]).unwrap();
+        tx.commit().await.expect("seed");
+        let outcome = client
+            .delete_folder("foo", true, None)
+            .await
+            .expect("recursive delete");
+        assert_eq!(outcome.ops[0].path.as_deref(), Some("foo"));
+        let root = client.show_notebook_path(None).await.expect("path");
+        assert!(!root.join("foo").exists(), "subtree removed");
+        assert!(root.join("top.md").is_file(), "sibling kept");
+        // "foo" was created implicitly via note paths (not add_folder),
+        // so it never occupied a parent .index line: nothing to blank.
+        assert_eq!(index_lines(&root, ""), vec!["top.md".to_string()]);
+    })
+    .await;
+}
+
+/// Folder/file kind mismatches point at the right op.
+#[tokio::test]
+async fn delete_kind_mismatch_directs_to_other_op() {
+    let env = NbTestEnv::new().expect("fixture");
+    with_isolated_env(&env, false, || async {
+        let client = NbClient::new(&config_for(&env)).expect("client");
+        let mut tx = client.transaction(None).await.expect("tx");
+        tx.add_note("n.md", None, "x\n", &[]).unwrap();
+        tx.add_folder("foo").unwrap();
+        tx.commit().await.expect("seed");
+        let err = client
+            .delete_folder("n.md", true, None)
+            .await
+            .expect_err("folder op on a note");
+        assert!(format!("{err:?}").contains("delete_note"), "{err:?}");
+        let err = client
+            .delete_note("foo", None)
+            .await
+            .expect_err("note op on a folder");
+        assert!(format!("{err:?}").contains("delete_folder"), "{err:?}");
+        let mut tx = client.transaction(None).await.expect("tx2");
+        tx.move_note(NoteTarget::path("foo"), "bar/").unwrap();
+        let err = tx.commit().await.expect_err("folder move");
+        assert!(format!("{err:?}").contains("folder moves"), "{err:?}");
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn concurrent_commits_get_distinct_ids() {
     let env = NbTestEnv::new().expect("fixture");
     with_isolated_env(&env, false, || async {

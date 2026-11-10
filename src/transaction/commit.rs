@@ -39,10 +39,17 @@ impl Transaction {
         reap_stale_index_lock(&notebook_root, self.gate_timeout);
 
         if git::notebook_is_dirty(&notebook_root)? {
-            return Err(NbError::DirtyBaseline {
-                guidance: "commit or clean the notebook worktree/index before Transaction::commit"
-                    .into(),
-            });
+            // Index-only reconciliation droppings (e.g. an external
+            // `nb` background checkpoint racing our gate) are
+            // absorbed by our own checkpoint below; anything else
+            // still refuses. See `git::status_is_index_only`.
+            let status = git::notebook_status_porcelain(&notebook_root)?;
+            if !git::status_is_index_only(&status) {
+                return Err(NbError::DirtyBaseline {
+                    guidance: "commit or clean the notebook worktree/index before Transaction::commit"
+                        .into(),
+                });
+            }
         }
 
         let pre_revision = git::notebook_head(&notebook_root)?;
@@ -584,6 +591,16 @@ fn materialize_tree(
                     "refusing to materialize through symlink `{key}`"
                 ),
             });
+        }
+        if meta.is_dir() {
+            // Plan folder-delete source: remove the whole subtree.
+            // (Move sources are always files; folder moves are
+            // refused at plan validation.)
+            std::fs::remove_dir_all(&abs).map_err(|e| NbError::Io {
+                path: abs,
+                source: e.into(),
+            })?;
+            continue;
         }
         if meta.is_file()
             && !matches!(tree.nodes.get(&key), Some(VirtualNode::File(_)))

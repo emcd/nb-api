@@ -22,13 +22,41 @@ use super::core::ShowClassification;
 
 impl NbClient {
     /// Returns status information about the resolved notebook.
+    ///
+    /// When the only notebook dirt is harmless `.index`
+    /// reconciliation (see `git::status_is_index_only`), an
+    /// explanatory note is appended; the raw `nb` output is
+    /// otherwise returned verbatim. The dirt classification runs
+    /// BEFORE any `nb` subprocess in this call: `nb` fires
+    /// fire-and-forget background checkpoints that could otherwise
+    /// commit the very dirt being described between the check and
+    /// the read. Root resolution prefers `NB_DIR` and never shells
+    /// out when it is set; if the root cannot be resolved, the
+    /// verbatim output is returned.
     pub async fn show_notebook_status(
         &self,
         notebook: Option<&str>,
     ) -> Result<String, NbError> {
-        let notebook = self.resolve_notebook(notebook).await?;
-        self.exec_vec(vec![format!("{}:", notebook), "status".to_string()])
-            .await
+        let name = self.resolve_notebook_name(notebook)?;
+        // Classify first: an `nb` invocation below may background a
+        // checkpoint that reconciles the dirt away mid-call.
+        let index_only = notebook_dir_from_env(&name)
+            .map(|root| {
+                crate::git::notebook_status_porcelain(&root)
+                    .map(|s| crate::git::status_is_index_only(&s))
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false);
+        let notebook = self.resolve_notebook(Some(&name)).await?;
+        let output = self
+            .exec_vec(vec![format!("{}:", notebook), "status".to_string()])
+            .await?;
+        if index_only {
+            return Ok(format!(
+                "{output}\n(note: only .index reconciliation is pending; safe to proceed — no note content affected)"
+            ));
+        }
+        Ok(output)
     }
 
     /// Lists available notebooks.

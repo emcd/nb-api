@@ -7,6 +7,20 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- `delete_folder` plan op + one-shot (`recursive` flag, no `force`):
+  removes a folder subtree, blanks the parent `.index` line, and
+  refuses non-empty folders without `recursive` (contents listed).
+  `delete_note` and `move_note` now refuse folder targets.
+- `Transaction::assert_revision` optimistic-concurrency
+  precondition on notebook HEAD: mismatch refuses cleanly with
+  `revision_mismatch` and deletes nothing.
+- Index-wedge guard relaxation: `commit` absorbs tracked-only
+  `.index` dirt instead of `DirtyBaseline`-refusing; live
+  `.nb-api-index.lock`, untracked files, and note-content dirt
+  still refuse. `show_notebook_status` annotates the harmless case.
+
 ## [0.4.2] - 2026-11-02
 
 ### Fixed

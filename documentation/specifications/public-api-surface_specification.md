@@ -244,6 +244,7 @@ boundary).
 | `import_note` | `import` |
 | `list_folders` | `folders` |
 | `add_folder` | `mkdir` |
+| `delete_folder` | `delete` on folders (new in 0.4.3; `delete_note` stays file-only) |
 | `list_notebooks` | `notebooks` |
 | `show_notebook_status` | `status` |
 | `show_notebook_path` | `notebook_path` |

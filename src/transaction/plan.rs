@@ -45,6 +45,10 @@ pub(super) enum PlanOp {
     DeleteNote {
         target: NoteTarget,
     },
+    DeleteFolder {
+        target: NoteTarget,
+        recursive: bool,
+    },
     MoveNote {
         target: NoteTarget,
         destination: String,
@@ -82,6 +86,9 @@ pub(super) enum PlanOp {
         target: NoteTarget,
         add: Vec<String>,
         remove: Vec<String>,
+    },
+    AssertRevision {
+        expected: String,
     },
 }
 impl Transaction {
@@ -183,6 +190,20 @@ impl Transaction {
     pub fn delete_note(&mut self, target: NoteTarget) -> Result<(), NbError> {
         validate_target(&target)?;
         self.plan.push(PlanOp::DeleteNote { target });
+        Ok(())
+    }
+
+    /// Delete a folder. `recursive = false` refuses non-empty folders,
+    /// listing their contents; `recursive = true` removes the whole
+    /// subtree. Marker files (`.gitkeep`) and `.index` files alone do
+    /// not count as contents.
+    pub fn delete_folder(
+        &mut self,
+        target: NoteTarget,
+        recursive: bool,
+    ) -> Result<(), NbError> {
+        validate_target(&target)?;
+        self.plan.push(PlanOp::DeleteFolder { target, recursive });
         Ok(())
     }
 
@@ -333,6 +354,29 @@ impl Transaction {
             target,
             add: add.to_vec(),
             remove: remove.to_vec(),
+        });
+        Ok(())
+    }
+
+    /// Assert the notebook revision is unchanged since capture.
+    ///
+    /// Composable optimistic-concurrency precondition: evaluated at
+    /// commit time, before any materialization, so a mismatch
+    /// refuses cleanly with nothing applied. Capture the expected
+    /// revision with [`crate::git::git_rev_parse_in`]
+    /// (`&["HEAD"]`) at the moment the plan's assumptions are
+    /// taken, and push this op into the same [`Transaction`].
+    pub fn assert_revision(&mut self, expected: &str) -> Result<(), NbError> {
+        if expected.trim().is_empty() {
+            return Err(NbError::ValidationError {
+                reason:
+                    "assert_revision requires a non-empty expected revision"
+                        .into(),
+                location: None,
+            });
+        }
+        self.plan.push(PlanOp::AssertRevision {
+            expected: expected.to_string(),
         });
         Ok(())
     }

@@ -92,6 +92,25 @@ impl NbClient {
         tx.commit().await
     }
 
+    /// Deletes a folder (one-shot transaction).
+    ///
+    /// `recursive = false` refuses non-empty folders, listing their
+    /// contents; `recursive = true` removes the whole subtree. There
+    /// is no `force` flag: deletion is explicit by call.
+    pub async fn delete_folder(
+        &self,
+        id: &str,
+        recursive: bool,
+        notebook: Option<&str>,
+    ) -> Result<CommitOutcome, NbError> {
+        let (nb, selector) =
+            self.resolve_target_selector(id, notebook).await?;
+        let target = self.note_target_for_selector(&nb, &selector).await?;
+        let mut tx = self.transaction(Some(&nb)).await?;
+        tx.delete_folder(target, recursive)?;
+        tx.commit().await
+    }
+
     /// Moves or renames a note (one-shot transaction).
     pub async fn move_note(
         &self,
@@ -407,6 +426,15 @@ impl NbClient {
     ///
     /// One-shot only under the process-shared notebook gate. Not a
     /// [`Transaction`] plan op in 0.3.0.
+    ///
+    /// NOTE (0.4.3, evaluated): `nb import` accepts no `--wait`
+    /// flag — an unknown flag would be misparsed as an import
+    /// path — and a standalone `nb git checkpoint --wait` cannot
+    /// join the import's already-backgrounded checkpoint job, so
+    /// there is no `--wait` containment for the import race window.
+    /// Containment waits on 0.5.0 (native import with proper
+    /// locking); meanwhile the commit guard absorbs index-only
+    /// droppings and note-content leftovers still refuse loudly.
     pub async fn import_note(
         &self,
         source: &str,

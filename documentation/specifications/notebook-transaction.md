@@ -39,7 +39,9 @@ SHALL be claimed as a plan op in 0.3.0.
 | `add_todo` | `NbClient::add_todo` | Explicit final relative path required on `Transaction` |
 | `add_bookmark` | `NbClient::add_bookmark` | Explicit final relative path required on `Transaction` |
 | `add_folder` | `NbClient::add_folder` | Explicit notebook-relative folder path |
-| `delete_note` | `NbClient::delete_note` | |
+| `delete_note` | `NbClient::delete_note` | Files only; folders are refused (use `delete_folder`) |
+| `delete_folder` | `NbClient::delete_folder` | New in 0.4.3; recursive flag; blanks the parent `.index` line |
+| `assert_revision` | — (plan-only) | New in 0.4.3; optimistic-concurrency precondition on HEAD |
 | `move_note` | `NbClient::move_note` | Path/basename only; not retitle |
 | `mark_task_done` | `NbClient::mark_task_done` | |
 | `unmark_task_done` | `NbClient::unmark_task_done` | |
@@ -168,18 +170,23 @@ selector actually written.
 - **THEN** exactly one new Git commit SHALL exist
 - **AND** all three paths SHALL be present with caller-supplied names
 
-### Requirement: commit baseline is a clean notebook worktree and index
+### Requirement: commit baseline is a clean notebook worktree and index, modulo index-only reconciliation droppings
 
 After acquiring gates and before any apply, `commit` SHALL inspect
 the notebook Git worktree and index. If there is any staged change,
 unstaged tracked change, or untracked file that Git would include in
-status for that repository (v1: **any** dirty state, not only
-paths the plan would touch), `commit` SHALL refuse with a typed
-**dirty-baseline** error, apply nothing, and create no checkpoint.
+status for that repository, `commit` SHALL refuse with a typed
+**dirty-baseline** error, apply nothing, and create no checkpoint —
+EXCEPT when every dirty line is a tracked `.index` modification
+(root or nested), which the transaction's own checkpoint absorbs
+(0.4.3 index-wedge). Never tolerated: untracked files (including a
+live `.nb-api-index.lock`, whose presence means a concurrent writer
+holds the notebook), deletions, renames, or anything else.
 
 v1 does **not** attempt to preserve or merge with caller dirty
-state. Callers MUST commit or clean the notebook before
-`Transaction::commit`.
+state beyond the index-only exception. Callers MUST commit or clean
+note-content dirt before `Transaction::commit`; index-only dirt
+needs no action.
 
 #### Scenario: Dirty worktree refuses before apply
 
@@ -189,11 +196,61 @@ state. Callers MUST commit or clean the notebook before
 - **THEN** `commit` SHALL fail with dirty-baseline
 - **AND** HEAD and the worktree SHALL be unchanged by that call
 
+#### Scenario: Index-only dirt is absorbed
+
+- **WHEN** the only notebook dirt is modified tracked `.index`
+  files and the plan is valid
+- **THEN** `commit` SHALL proceed, absorbing the droppings into
+  its own checkpoint
+
 #### Scenario: Clean baseline allows commit
 
 - **WHEN** `git status` is clean for the notebook repository
 - **AND** the plan is valid
 - **THEN** `commit` MAY proceed to validate and apply
+
+### Requirement: DeleteFolder removes a subtree with parent index blanking
+
+`DeleteFolder { target, recursive }` SHALL resolve `target` to a
+folder path (a note path is refused with direction to
+`delete_note`; the notebook root is refused outright). When the
+folder subtree contains any descendant other than `.gitkeep`
+placeholders and `.index` files, `recursive = false` SHALL refuse
+with a `ValidationError` listing the contents (capped); `recursive
+= true` SHALL remove the whole subtree. The folder's basename
+SHALL be blanked in the parent `.index` (stable ids, never
+reused). Like all ops it is validated before any materialization,
+so refusal deletes nothing.
+
+#### Scenario: Non-empty folder without recursive refuses
+
+- **WHEN** the plan deletes a folder containing notes with
+  `recursive = false`
+- **THEN** `commit` SHALL fail with a validation error naming the
+  folder and listing contents
+- **AND** the folder SHALL remain on disk and in `.index`
+
+### Requirement: AssertRevision preconditions the commit on HEAD
+
+`AssertRevision { expected }` SHALL compare the current notebook
+`HEAD` against `expected` during validation, before any
+materialization. On mismatch `commit` SHALL fail with a
+`PlanValidation` `revision_mismatch` error with expected/observed
+revisions; nothing SHALL be deleted or written, so the caller may
+re-capture state and retry. Capture the expected value with
+`git_rev_parse_in(notebook_root, &["HEAD"])` (public) at the moment
+the plan's assumptions are taken. Residual only: an external
+commit landing between this check and the checkpoint (cross-process
+commit locking is 0.5.0 work).
+
+#### Scenario: Stale revision refuses cleanly
+
+- **WHEN** the plan carries an `AssertRevision` whose expected
+  revision differs from current `HEAD`
+- **AND** the plan also deletes a folder
+- **THEN** `commit` SHALL fail with `revision_mismatch`
+- **AND** the folder SHALL remain on disk and the worktree SHALL
+  otherwise be unchanged
 
 ### Requirement: commit SHALL validate all then apply all then checkpoint once
 

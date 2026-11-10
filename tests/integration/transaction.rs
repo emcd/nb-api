@@ -719,3 +719,139 @@ fn git_capture(root: &std::path::Path, args: &[&str]) -> String {
     assert!(out.status.success(), "git {:?} failed: {:?}", args, out);
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
+
+/// Index-only dirt (e.g. an external `nb` background checkpoint racing
+/// our gate) is absorbed by the commit instead of refusing.
+#[tokio::test]
+async fn index_only_dirt_is_absorbed() {
+    let env = NbTestEnv::new().expect("fixture");
+    with_isolated_env(&env, false, || async {
+        let client = NbClient::new(&config_for(&env)).expect("client");
+        // Resolve the root WITHOUT show_notebook_path: that method
+        // shells `nb` (ensure_notebook), whose fire-and-forget
+        // background checkpoint can land mid-test and stage files
+        // between our dirt setup and the commit under test.
+        let root = env.nb_dir().join(env.notebook());
+        let mut tx = client.transaction(None).await.expect("tx");
+        tx.add_note("seed.md", None, "x\n", &[]).unwrap();
+        tx.add_note("foo/a.md", None, "x\n", &[]).unwrap();
+        tx.commit().await.expect("seed");
+        // Simulate external .index reconciliation droppings: dirty the
+        // root and nested indexes (both tracked) without touching notes.
+        for rel in [".index", "foo/.index"] {
+            let abs = root.join(rel);
+            assert!(abs.is_file(), "tracked index exists: {rel}");
+            let mut bytes = std::fs::read(&abs).expect("read index");
+            bytes.push(b'\n');
+            std::fs::write(&abs, bytes).expect("dirty index");
+        }
+        let mut tx = client.transaction(None).await.expect("tx2");
+        tx.add_note("after.md", None, "y\n", &[]).unwrap();
+        let outcome = tx.commit().await.expect("absorbed");
+        assert!(outcome.commit_created);
+        // Status annotation distinguishes the harmless case.
+        let mut tx = client.transaction(None).await.expect("tx3");
+        tx.add_note("probe.md", None, "z\n", &[]).unwrap();
+        for rel in [".index", "foo/.index"] {
+            let abs = root.join(rel);
+            let mut bytes = std::fs::read(&abs).unwrap_or_default();
+            bytes.push(b'\n');
+            std::fs::write(&abs, bytes).expect("dirty index again");
+        }
+        let status = client.show_notebook_status(None).await.expect("status");
+        assert!(status.contains("index reconciliation"), "{status:?}");
+        tx.commit().await.expect("absorbed again");
+    })
+    .await;
+}
+
+/// A live `.nb-api-index.lock` still refuses: it is untracked, never
+/// index-only dirt, and means a concurrent writer holds the notebook.
+#[tokio::test]
+async fn live_index_lock_still_refuses() {
+    let env = NbTestEnv::new().expect("fixture");
+    with_isolated_env(&env, false, || async {
+        let client = NbClient::new(&config_for(&env)).expect("client");
+        // Direct root: show_notebook_path shells `nb`, whose
+        // background checkpoint could commit the planted lock file
+        // before the commit under test runs.
+        let root = env.nb_dir().join(env.notebook());
+        let mut tx = client.transaction(None).await.expect("tx");
+        tx.add_note("seed.md", None, "x\n", &[]).unwrap();
+        tx.commit().await.expect("seed");
+        std::fs::write(
+            root.join(".nb-api-index.lock"),
+            "pid=1 nonce=foreign ns=1\n",
+        )
+        .expect("plant lock");
+        let mut tx = client.transaction(None).await.expect("tx2");
+        tx.add_note("ok.md", None, "y\n", &[]).unwrap();
+        let err = tx.commit().await.expect_err("locked");
+        assert!(
+            matches!(err, nb_api::NbError::DirtyBaseline { .. }),
+            "{err:?}"
+        );
+        std::fs::remove_file(root.join(".nb-api-index.lock"))
+            .expect("remove lock");
+    })
+    .await;
+}
+
+/// Revision assert passes when nothing changed since capture.
+#[tokio::test]
+async fn assert_revision_match_proceeds() {
+    let env = NbTestEnv::new().expect("fixture");
+    with_isolated_env(&env, false, || async {
+        let client = NbClient::new(&config_for(&env)).expect("client");
+        let root = env.nb_dir().join(env.notebook());
+        let mut tx = client.transaction(None).await.expect("tx");
+        tx.add_note("seed.md", None, "x\n", &[]).unwrap();
+        tx.commit().await.expect("seed");
+        let captured = git_capture(&root, &["rev-parse", "HEAD"])
+            .trim()
+            .to_string();
+        let mut tx = client.transaction(None).await.expect("tx2");
+        tx.assert_revision(&captured).unwrap();
+        tx.add_note("after.md", None, "y\n", &[]).unwrap();
+        let outcome = tx.commit().await.expect("commit");
+        assert!(outcome.commit_created);
+    })
+    .await;
+}
+
+/// Revision assert refuses cleanly on HEAD advance: nothing committed.
+#[tokio::test]
+async fn assert_revision_mismatch_refuses_cleanly() {
+    let env = NbTestEnv::new().expect("fixture");
+    with_isolated_env(&env, false, || async {
+        let client = NbClient::new(&config_for(&env)).expect("client");
+        let root = env.nb_dir().join(env.notebook());
+        let mut tx = client.transaction(None).await.expect("tx");
+        tx.add_note("seed.md", None, "x\n", &[]).unwrap();
+        tx.commit().await.expect("seed");
+        let pre = git_capture(&root, &["rev-parse", "HEAD"]).trim().to_string();
+        // External writer advances HEAD after capture (simulating an
+        // nb-side add that completed its own checkpoint).
+        git_capture(&root, &["commit", "--allow-empty", "-m", "external", "--no-gpg-sign"]);
+        let external =
+            git_capture(&root, &["rev-parse", "HEAD"]).trim().to_string();
+        let mut tx = client.transaction(None).await.expect("tx2");
+        tx.assert_revision(&pre).unwrap();
+        tx.add_note("unarchived.md", None, "z\n", &[]).unwrap();
+        let err = tx.commit().await.expect_err("must refuse");
+        assert!(
+            matches!(
+                err,
+                nb_api::NbError::PlanValidation { ref kind, .. } if kind == "revision_mismatch"
+            ),
+            "{err:?}"
+        );
+        assert!(!root.join("unarchived.md").exists(), "nothing materialized");
+        assert_eq!(
+            git_capture(&root, &["rev-parse", "HEAD"]).trim(),
+            external,
+            "no commit created by the refused plan"
+        );
+    })
+    .await;
+}
