@@ -14,6 +14,7 @@ mod edit_mode_required;
 mod empty_result_hints;
 mod eol_model;
 mod git_env_scrub;
+mod native_lists;
 mod native_reads;
 mod native_reads_guard;
 mod native_reads_support;

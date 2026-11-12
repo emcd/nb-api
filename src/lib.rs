@@ -26,6 +26,7 @@ mod native;
 mod nb_program;
 mod output;
 pub mod parser;
+pub(crate) mod scope;
 pub(crate) mod tokenizer;
 mod transaction;
 mod types;

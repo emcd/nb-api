@@ -26,6 +26,13 @@ surface; BLAKE3 fingerprints; `.index` numeric identity.
   (Operator directive 2026-11-12; recorded so the stance is not
   re-litigated per change. A reviewer who disagrees escalates to
   the operator in person instead of blocking on compat grounds.)
+- Probing `nb` CLI semantics MUST go through the integration test
+  harness (`NbTestEnv` plus `with_isolated_env`), never shell
+  one-liners. One-liners inevitably miss Git environment isolation
+  or fixture setup (`GIT_*` scrubbing, init checkpoints, author
+  identity) and burn effort on false signals; the harness exists
+  precisely because of those holes. (Operator directive
+  2026-11-12.)
 - Release rule: CI must be green before tagging. (Bundle-wide,
   operator-endorsed 2026-11-10; closes `todos/api/11`.)
 - Rolling handoff and team organization:

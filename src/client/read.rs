@@ -18,46 +18,28 @@ use crate::validate::validate_folder_option;
 use crate::{NbClient, SearchMode};
 
 impl NbClient {
-    /// Returns status information about the resolved notebook.
-    ///
-    /// When the only notebook dirt is harmless `.index`
-    /// reconciliation (see `git::status_is_index_only`), an
-    /// explanatory note is appended; the raw `nb` output is
-    /// otherwise returned verbatim. The dirt classification runs
-    /// BEFORE any `nb` subprocess in this call: `nb` fires
-    /// fire-and-forget background checkpoints that could otherwise
-    /// commit the very dirt being described between the check and
-    /// the read. Root resolution prefers `NB_DIR` and never shells
-    /// out when it is set; if the root cannot be resolved, the
-    /// verbatim output is returned.
+    /// Notebook status from git state, without spawning `nb`:
+    /// porcelain output for the notebook worktree, plus the
+    /// index-only reconciliation note when no note content is
+    /// affected. A missing notebook is terminal `NotFound`, never
+    /// created. (Pre-1.0 break: replaces the verbatim `nb status`
+    /// rendering.)
     pub async fn show_notebook_status(
         &self,
         notebook: Option<&str>,
     ) -> Result<String, NbError> {
         let name = self.resolve_notebook_name(notebook)?;
-        // Classify first: an `nb` invocation below may background a
-        // checkpoint that reconciles the dirt away mid-call.
-        // Discovery failures here must not fail the status read:
-        // fall back to verbatim output when the root is unresolvable.
-        let index_only = notebook_dir_from_env(&name)
-            .ok()
-            .flatten()
-            .map(|root| {
-                crate::git::notebook_status_porcelain(&root)
-                    .map(|s| crate::git::status_is_index_only(&s))
-                    .unwrap_or(false)
-            })
-            .unwrap_or(false);
-        let notebook = self.resolve_notebook(Some(&name)).await?;
-        let output = self
-            .exec_vec(vec![format!("{}:", notebook), "status".to_string()])
-            .await?;
-        if index_only {
-            return Ok(format!(
-                "{output}\n(note: only .index reconciliation is pending; safe to proceed — no note content affected)"
-            ));
-        }
-        Ok(output)
+        let root = self.native_notebook_root(&name).await?;
+        self.with_notebook_gate_native(&root, async {
+            let status = crate::git::notebook_status_porcelain(&root)?;
+            if crate::git::status_is_index_only(&status) {
+                return Ok(format!(
+                    "{status}\n(note: only .index reconciliation is pending; safe to proceed — no note content affected)"
+                ));
+            }
+            Ok(status)
+        })
+        .await
     }
 
     /// Lists available notebooks.
@@ -167,7 +149,7 @@ impl NbClient {
     /// `NotFound`: reads must not create notebooks as a side effect.
     /// Genuine filesystem failures (permissions, I/O) propagate as
     /// `Io` instead of collapsing into `NotFound`.
-    async fn native_notebook_root(
+    pub(super) async fn native_notebook_root(
         &self,
         notebook: &str,
     ) -> Result<PathBuf, NbError> {
@@ -700,6 +682,178 @@ impl NbClient {
         };
         let args = search_command_args(scope, queries, mode, tags);
         self.exec_vec(args).await
+    }
+
+    /// Searches notes natively: recursive text-file walk under the
+    /// scope, case-insensitive substring match of the queries
+    /// against title plus body text (`Any`/`All` across queries),
+    /// tag-filtered like the typed list. Returns lexical
+    /// [`crate::ListEntry`] values. Empty queries are
+    /// `ValidationError`. Zero `nb` spawns.
+    pub async fn search_notes_typed(
+        &self,
+        queries: &[String],
+        mode: SearchMode,
+        tags: &[String],
+        folder: Option<&str>,
+        notebook: Option<&str>,
+    ) -> Result<Vec<crate::ListEntry>, NbError> {
+        validate_folder_option(folder)?;
+        if queries.is_empty() {
+            return Err(NbError::ValidationError {
+                reason: "at least one search query is required".to_string(),
+                location: None,
+            });
+        }
+        let notebook = self.resolve_notebook_name(notebook)?;
+        let root = self.native_notebook_root(&notebook).await?;
+        let scope = folder
+            .map(|f| f.trim_matches('/').to_string())
+            .filter(|f| !f.is_empty())
+            .unwrap_or_default();
+        let lowered: Vec<String> =
+            queries.iter().map(|q| q.to_lowercase()).collect();
+        self.with_notebook_gate_native(&root, async {
+            let mut out = Vec::new();
+            for rel in crate::scope::scope_files_recursive(&root, &scope)? {
+                let abs = root.join(&rel);
+                let bytes = std::fs::read(&abs).map_err(|e| NbError::Io {
+                    path: abs.clone(),
+                    source: e.into(),
+                })?;
+                // Textual files only; unparseable content never
+                // matches.
+                if !matches!(
+                    crate::native::classify_path(&abs, &rel)?,
+                    crate::native::NativeClass::Text
+                ) {
+                    continue;
+                }
+                if !Self::tags_match(&bytes, &rel, tags) {
+                    continue;
+                }
+                let doc = match parse(
+                    &bytes,
+                    ParseContext::FromPath(rel.clone().into()),
+                ) {
+                    Ok(doc) => doc,
+                    Err(_) => continue,
+                };
+                let mut haystack = String::new();
+                if let Some(title) = doc.title() {
+                    haystack.push_str(&String::from_utf8_lossy(title));
+                    haystack.push('\n');
+                }
+                haystack.push_str(&String::from_utf8_lossy(&doc.body_bytes()));
+                let haystack = haystack.to_lowercase();
+                let matched = match mode {
+                    SearchMode::Any => {
+                        lowered.iter().any(|q| haystack.contains(q))
+                    },
+                    SearchMode::All => {
+                        lowered.iter().all(|q| haystack.contains(q))
+                    },
+                };
+                if !matched {
+                    continue;
+                }
+                out.push(self.list_entry_for(&notebook, &root, &rel).await?);
+            }
+            Ok(out)
+        })
+        .await
+    }
+
+    /// Assemble one typed list entry for an in-scope relative
+    /// path: shadow-aware canonical selector plus confined
+    /// numeric id. The caller holds the gate and the path comes
+    /// from a symlink-free scope enumeration.
+    pub(super) async fn list_entry_for(
+        &self,
+        notebook: &str,
+        root: &Path,
+        rel: &str,
+    ) -> Result<crate::ListEntry, NbError> {
+        let abs = root.join(rel);
+        let display = format!("{notebook}:{rel}");
+        let abs = crate::native::confine_canonical(root, &abs, &display)?;
+        let class = crate::native::classify_path(&abs, rel)?;
+        let kind = crate::native::entity_kind_for_rel(rel, &class);
+        let selector = crate::native::canonical_selector(notebook, root, rel)?;
+        let numeric_id = crate::native::numeric_id_for_rel(root, rel)?;
+        Ok(crate::ListEntry {
+            selector,
+            path: rel.to_string(),
+            kind,
+            numeric_id,
+        })
+    }
+
+    /// Whether file bytes carry all requested tags. Unparseable
+    /// content never matches a non-empty filter.
+    fn tags_match(bytes: &[u8], rel: &str, tags: &[String]) -> bool {
+        if tags.is_empty() {
+            return true;
+        }
+        let doc = match parse(bytes, ParseContext::FromPath(rel.into())) {
+            Ok(doc) => doc,
+            Err(_) => return false,
+        };
+        let have: Vec<String> = doc
+            .tags()
+            .map(|t| {
+                String::from_utf8_lossy(t)
+                    .trim_start_matches('#')
+                    .to_string()
+            })
+            .collect();
+        tags.iter().all(|wanted| {
+            let want = wanted.trim_start_matches('#');
+            have.iter().any(|got| got == want)
+        })
+    }
+
+    /// Lists notes in a notebook or folder as typed entries:
+    /// one [`crate::ListEntry`] per file directly under the scope
+    /// (non-recursive), excluding dotfiles and symlinks, ordered
+    /// lexically by relative path. Tags filter by parsed document
+    /// tags (all must match); `limit` takes the first N. A missing
+    /// scope is terminal `NotFound`. Zero `nb` spawns.
+    pub async fn list_notes_typed(
+        &self,
+        folder: Option<&str>,
+        tags: &[String],
+        limit: Option<u32>,
+        notebook: Option<&str>,
+    ) -> Result<Vec<crate::ListEntry>, NbError> {
+        validate_folder_option(folder)?;
+        let notebook = self.resolve_notebook_name(notebook)?;
+        let root = self.native_notebook_root(&notebook).await?;
+        let scope = folder
+            .map(|f| f.trim_matches('/').to_string())
+            .filter(|f| !f.is_empty())
+            .unwrap_or_default();
+        self.with_notebook_gate_native(&root, async {
+            let mut out = Vec::new();
+            for rel in crate::scope::scope_files(&root, &scope)? {
+                if let Some(n) = limit
+                    && out.len() >= n as usize
+                {
+                    break;
+                }
+                let abs = root.join(&rel);
+                let bytes = std::fs::read(&abs).map_err(|e| NbError::Io {
+                    path: abs.clone(),
+                    source: e.into(),
+                })?;
+                if !Self::tags_match(&bytes, &rel, tags) {
+                    continue;
+                }
+                out.push(self.list_entry_for(&notebook, &root, &rel).await?);
+            }
+            Ok(out)
+        })
+        .await
     }
 }
 

@@ -386,7 +386,7 @@ fn is_symlinked(notebook_root: &Path, rel: &str) -> Result<bool, NbError> {
 /// (`NotFound`); genuine I/O failures propagate. Missing prefixes
 /// are skipped: a path through a missing directory is a genuine
 /// miss, reported by the final existence check.
-fn ensure_no_symlink_prefix(
+pub(crate) fn ensure_no_symlink_prefix(
     notebook_root: &Path,
     folder: &str,
 ) -> Result<(), NbError> {
@@ -425,7 +425,7 @@ fn ensure_no_symlink_prefix(
 /// lexical checks; otherwise `sub\..\..\foreign` would pass the
 /// slash-only validation as one opaque component and then escape
 /// through the OS path join.
-fn confine(input: &str) -> Option<String> {
+pub(crate) fn confine(input: &str) -> Option<String> {
     // Absolute forms: POSIX root, Windows drive (with or without
     // separator), and UNC or lone-backslash roots.
     if input.starts_with(['/', '\\']) {

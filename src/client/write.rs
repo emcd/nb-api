@@ -328,6 +328,161 @@ impl NbClient {
         Ok(outputs.join("\n"))
     }
 
+    /// Lists todo checklist items natively: one [`crate::ListEntry`]
+    /// per `- [ ]` / `- [x]` / `- [X]` item in `.todo.md` files
+    /// under the scope (recursive iff set), in file order with
+    /// 1-based task positions. Selectors append `#task-<n>` to the
+    /// shadow-aware canonical file selector; kind is `Todo` and
+    /// `numeric_id` rides along from the file. `status` filters by
+    /// item state (`None` keeps all). Scopes skip dotfiles and
+    /// symlinks; a missing scope is terminal `NotFound`. Zero `nb`
+    /// spawns.
+    pub async fn list_tasks_typed(
+        &self,
+        folder: Option<&str>,
+        status: Option<TaskStatus>,
+        recursive: bool,
+        notebook: Option<&str>,
+    ) -> Result<Vec<crate::ListEntry>, NbError> {
+        validate_folder_option(folder)?;
+        let notebook = self.resolve_notebook_name(notebook)?;
+        let root = self.native_notebook_root(&notebook).await?;
+        let scope = folder
+            .map(|f| f.trim_matches('/').to_string())
+            .filter(|f| !f.is_empty())
+            .unwrap_or_default();
+        let want_closed = status.map(|s| matches!(s, TaskStatus::Closed));
+        self.with_notebook_gate_native(&root, async {
+            let rels = if recursive {
+                crate::scope::scope_files_recursive(&root, &scope)?
+            } else {
+                crate::scope::scope_files(&root, &scope)?
+            };
+            let mut out = Vec::new();
+            for rel in rels {
+                if crate::native::document_kind_for_rel(&rel)
+                    != crate::DocumentKind::Todo
+                {
+                    continue;
+                }
+                let abs = root.join(&rel);
+                let bytes = std::fs::read(&abs).map_err(|e| NbError::Io {
+                    path: abs.clone(),
+                    source: e.into(),
+                })?;
+                let file = self.list_entry_for(&notebook, &root, &rel).await?;
+                for (i, closed) in
+                    crate::scope::todo_items(&bytes).into_iter().enumerate()
+                {
+                    if let Some(want) = want_closed
+                        && want != closed
+                    {
+                        continue;
+                    }
+                    out.push(crate::ListEntry {
+                        selector: format!("{}#task-{}", file.selector, i + 1),
+                        path: file.path.clone(),
+                        kind: crate::EntityKind::Todo,
+                        numeric_id: file.numeric_id,
+                    });
+                }
+            }
+            Ok(out)
+        })
+        .await
+    }
+
+    /// Lists todo files as summaries: one [`crate::TodoSummary`] per
+    /// `.todo.md` file under the scope (recursive iff set) with task
+    /// counts and derived state (`Done` iff at least one item exists
+    /// and all are completed, else `Open`). `state` filters files
+    /// (`None` keeps all). Titles are checkbox-stripped and trimmed,
+    /// falling back to the filename. Zero `nb` spawns.
+    pub async fn list_todos(
+        &self,
+        folder: Option<&str>,
+        state: Option<TaskStatus>,
+        recursive: bool,
+        notebook: Option<&str>,
+    ) -> Result<Vec<crate::TodoSummary>, NbError> {
+        use crate::parser::{ParseContext, parse};
+
+        validate_folder_option(folder)?;
+        let notebook = self.resolve_notebook_name(notebook)?;
+        let root = self.native_notebook_root(&notebook).await?;
+        let scope = folder
+            .map(|f| f.trim_matches('/').to_string())
+            .filter(|f| !f.is_empty())
+            .unwrap_or_default();
+        self.with_notebook_gate_native(&root, async {
+            let rels = if recursive {
+                crate::scope::scope_files_recursive(&root, &scope)?
+            } else {
+                crate::scope::scope_files(&root, &scope)?
+            };
+            let mut out = Vec::new();
+            for rel in rels {
+                if crate::native::document_kind_for_rel(&rel)
+                    != crate::DocumentKind::Todo
+                {
+                    continue;
+                }
+                let abs = root.join(&rel);
+                let bytes = std::fs::read(&abs).map_err(|e| NbError::Io {
+                    path: abs.clone(),
+                    source: e.into(),
+                })?;
+                let items = crate::scope::todo_items(&bytes);
+                let completed = items.iter().filter(|&&c| c).count() as u32;
+                let total = items.len() as u32;
+                let file_state = if total > 0 && completed == total {
+                    crate::TodoState::Done
+                } else {
+                    crate::TodoState::Open
+                };
+                let is_open = file_state == crate::TodoState::Open;
+                match state {
+                    Some(TaskStatus::Closed) if is_open => continue,
+                    Some(TaskStatus::Open) if !is_open => continue,
+                    _ => {},
+                }
+                let title =
+                    parse(&bytes, ParseContext::FromPath(rel.clone().into()))
+                        .ok()
+                        .and_then(|doc| {
+                            doc.title().map(|t| {
+                                let s = String::from_utf8_lossy(t);
+                                let s = s
+                                    .trim_end_matches('\n')
+                                    .trim_start_matches('#')
+                                    .trim();
+                                let s = s
+                                    .strip_prefix("[ ]")
+                                    .or_else(|| s.strip_prefix("[x]"))
+                                    .or_else(|| s.strip_prefix("[X]"))
+                                    .unwrap_or(s);
+                                s.trim().to_string()
+                            })
+                        })
+                        .filter(|t| !t.is_empty())
+                        .unwrap_or_else(|| {
+                            rel.rsplit('/').next().unwrap_or(&rel).to_string()
+                        });
+                let file = self.list_entry_for(&notebook, &root, &rel).await?;
+                out.push(crate::TodoSummary {
+                    id: file.selector,
+                    title,
+                    path: rel,
+                    task_count: total,
+                    completed_count: completed,
+                    state: file_state,
+                });
+            }
+            Ok(out)
+        })
+        .await
+    }
+
     async fn tasks_scopes_recursive(
         &self,
         notebook: &str,
@@ -408,6 +563,34 @@ impl NbClient {
         self.exec_vec(args)
             .await
             .map(|output| strip_empty_result_hint(&output))
+    }
+
+    /// Lists folders in a notebook as typed entries: one
+    /// [`crate::ListEntry`] per direct child directory of the
+    /// scope (non-recursive), excluding dot-directories, ordered
+    /// lexically by relative path. Each entry is kind `Folder`
+    /// with the exact-path selector and no numeric id. A missing
+    /// scope is terminal `NotFound`. Zero `nb` spawns.
+    pub async fn list_folders_typed(
+        &self,
+        parent: Option<&str>,
+        notebook: Option<&str>,
+    ) -> Result<Vec<crate::ListEntry>, NbError> {
+        validate_folder_option(parent)?;
+        let notebook = self.resolve_notebook_name(notebook)?;
+        let root = self.native_notebook_root(&notebook).await?;
+        let scope = parent
+            .map(|f| f.trim_matches('/').to_string())
+            .filter(|f| !f.is_empty())
+            .unwrap_or_default();
+        self.with_notebook_gate_native(&root, async {
+            let mut out = Vec::new();
+            for rel in crate::scope::scope_dirs(&root, &scope)? {
+                out.push(self.list_entry_for(&notebook, &root, &rel).await?);
+            }
+            Ok(out)
+        })
+        .await
     }
 
     /// Creates a folder (one-shot transaction).
