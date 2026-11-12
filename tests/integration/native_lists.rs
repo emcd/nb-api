@@ -418,3 +418,100 @@ async fn native_task_surfaces_enumerate_todos() {
     })
     .await;
 }
+
+/// Read-side audit: non-UTF8 names never surface (they cannot be
+/// named through the `str` API and are skipped, never mangled);
+/// `.gitkeep` placeholders are never listed as notes; unindexed
+/// folders (no `.index`) still search, list, and summarize with
+/// filesystem-derived metadata.
+#[tokio::test]
+async fn native_read_side_audit_pins_edge_posture() {
+    let env = NbTestEnv::new().expect("fixture");
+    with_isolated_env(&env, false, || async {
+        let native = NbClient::new(&config_for(&env)).expect("native");
+        let root = env.nb_dir().join(env.notebook());
+        seed(&native, &root).await;
+
+        // Unindexed folder: raw directory, no `.index` entries.
+        std::fs::create_dir(root.join("rawdir")).expect("rawdir");
+        std::fs::write(
+            root.join("rawdir/note.md"),
+            "# Raw\nraw body searchable\n",
+        )
+        .expect("raw note");
+        std::fs::write(
+            root.join("rawdir/work.todo.md"),
+            "# [ ] Raw task\n\n- [ ] one\n- [x] two\n",
+        )
+        .expect("raw todo");
+        // `.gitkeep`-only directory.
+        std::fs::create_dir(root.join("emptydir")).expect("emptydir");
+        std::fs::write(root.join("emptydir/.gitkeep"), "").expect("gitkeep");
+
+        // `.gitkeep` is never listed as a note.
+        let listed = native
+            .list_notes_typed(None, &[], None, None)
+            .await
+            .expect("root listing");
+        assert!(
+            listed.iter().all(|e| !e.path.ends_with(".gitkeep")),
+            ".gitkeep must never list as a note"
+        );
+        // `.gitkeep`-only dirs still list as folders.
+        let folders = native
+            .list_folders_typed(None, None)
+            .await
+            .expect("folders");
+        let paths: Vec<&str> =
+            folders.iter().map(|e| e.path.as_str()).collect();
+        assert!(paths.contains(&"emptydir"), "{paths:?}");
+        assert!(paths.contains(&"rawdir"), "{paths:?}");
+
+        // Unindexed content searches without an index.
+        let hits = native
+            .search_notes_typed(
+                &["searchable".to_string()],
+                nb_api::SearchMode::Any,
+                &[],
+                Some("rawdir"),
+                None,
+            )
+            .await
+            .expect("search rawdir");
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert_eq!(hits[0].path, "rawdir/note.md".to_string());
+
+        // Unindexed todos enumerate with filesystem metadata.
+        let todos = native
+            .list_todos(Some("rawdir"), None, false, None)
+            .await
+            .expect("rawdir todos");
+        assert_eq!(todos.len(), 1, "{todos:?}");
+        assert_eq!(todos[0].path, "rawdir/work.todo.md".to_string());
+        assert_eq!(todos[0].task_count, 2, "{todos:?}");
+        assert_eq!(todos[0].completed_count, 1, "{todos:?}");
+        assert_eq!(todos[0].title, "Raw task".to_string());
+        let tasks = native
+            .list_tasks_typed(Some("rawdir"), None, false, None)
+            .await
+            .expect("rawdir tasks");
+        assert_eq!(tasks.len(), 2, "{tasks:?}");
+
+        // Non-UTF8 names are skipped, never mangled or fatal.
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            let bad = std::ffi::OsStr::from_bytes(b"bad\xffname.md");
+            std::fs::write(root.join(bad), b"body\n").expect("bad name");
+            let listed = native
+                .list_notes_typed(None, &[], None, None)
+                .await
+                .expect("listing skips bad names");
+            assert!(
+                listed.iter().all(|e| e.path.is_ascii()),
+                "non-UTF8 names must not surface"
+            );
+        }
+    })
+    .await;
+}
