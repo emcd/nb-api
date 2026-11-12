@@ -659,3 +659,144 @@ async fn virtual_tree_resolves_selector_table_natively() {
     })
     .await;
 }
+
+/// Backslash collision: a literal `a\b.md` file and a nested
+/// `a/b.md` file coexist. Path, Selector, and one-shot deletes of
+/// the literal name must remove only the literal file, and absolute
+/// Path inputs must fail closed without touching anything.
+/// Unix-only: on Windows the backslash is a native separator.
+#[cfg(unix)]
+#[tokio::test]
+async fn path_resolution_never_collapses_backslash() {
+    let env = NbTestEnv::new().expect("fixture");
+    with_isolated_env(&env, false, || async {
+        let client = NbClient::new(&config_for(&env)).expect("client");
+        let root = env.nb_dir().join(env.notebook());
+        let mut tx = client.transaction(None).await.expect("tx");
+        tx.add_note("victim.md", Some("Victim"), "victim\n", &[])
+            .unwrap();
+        tx.add_note("a/b.md", Some("Nested"), "nested\n", &[])
+            .unwrap();
+        tx.commit().await.expect("seed");
+
+        // Raw literal fixture: transactions refuse backslash creates,
+        // so commit directly like the other binary fixtures.
+        let commit_raw = |message: &str| {
+            let added = std::process::Command::new("git")
+                .current_dir(&root)
+                .args(["add", "-A"])
+                .status()
+                .expect("git add runs")
+                .success();
+            assert!(added, "git add must succeed");
+            let committed = std::process::Command::new("git")
+                .current_dir(&root)
+                .args(["commit", "-m", message, "--quiet"])
+                .status()
+                .expect("git commit runs")
+                .success();
+            assert!(committed, "raw fixture must commit");
+        };
+        std::fs::write(root.join("a\\b.md"), "# Literal\n\nliteral\n")
+            .expect("literal backslash file");
+        commit_raw("literal backslash fixture");
+
+        // Exact Path targets only the literal file.
+        let mut tx = client.transaction(None).await.expect("tx");
+        tx.delete_note(NoteTarget::path("a\\b.md")).unwrap();
+        tx.commit().await.expect("delete literal by path");
+        assert!(!root.join("a\\b.md").exists(), "literal deleted");
+        assert!(root.join("a/b.md").exists(), "nested untouched");
+        assert!(root.join("victim.md").exists(), "victim untouched");
+
+        // Selector form resolves the same literal, not the nesting.
+        std::fs::write(root.join("a\\b.md"), "# Literal\n\nliteral\n")
+            .expect("literal backslash file");
+        commit_raw("literal backslash fixture");
+        let mut tx = client.transaction(None).await.expect("tx");
+        tx.delete_note(NoteTarget::selector("a\\b.md")).unwrap();
+        tx.commit().await.expect("delete literal by selector");
+        assert!(!root.join("a\\b.md").exists(), "literal deleted");
+        assert!(root.join("a/b.md").exists(), "nested untouched");
+
+        // One-shot resolution mutates only the intended entity.
+        std::fs::write(root.join("a\\b.md"), "# Literal\n\nliteral\n")
+            .expect("literal backslash file");
+        commit_raw("literal backslash fixture");
+        client
+            .delete_note("a\\b.md", None)
+            .await
+            .expect("one-shot deletes the literal");
+        assert!(!root.join("a\\b.md").exists(), "literal deleted");
+        assert!(root.join("a/b.md").exists(), "nested untouched");
+        assert!(root.join("victim.md").exists(), "victim untouched");
+
+        // Absolute Path never retargets: `/victim.md` is NotFound and
+        // the relative file survives, on every write surface.
+        let mut tx = client.transaction(None).await.expect("tx");
+        tx.delete_note(NoteTarget::path("/victim.md")).unwrap();
+        let err = format!("{:?}", tx.commit().await.expect_err("absolute"));
+        assert!(err.contains("NotFound"), "{err:?}");
+        assert!(root.join("victim.md").exists(), "victim untouched");
+        let err = format!(
+            "{:?}",
+            client
+                .delete_note("/victim.md", None)
+                .await
+                .expect_err("absolute one-shot")
+        );
+        assert!(err.contains("NotFound"), "{err:?}");
+        assert!(root.join("victim.md").exists(), "victim untouched");
+    })
+    .await;
+}
+
+/// Todo state ops on textual-but-unsupported extensions (e.g.
+/// `.tex`, rejected by the parser) are a typed kind mismatch —
+/// Todo expected, Note observed — never a leaked parse failure.
+#[tokio::test]
+async fn wrong_kind_covers_unsupported_textual_note() {
+    let env = NbTestEnv::new().expect("fixture");
+    with_isolated_env(&env, false, || async {
+        let client = NbClient::new(&config_for(&env)).expect("client");
+        let root = env.nb_dir().join(env.notebook());
+        let mut tx = client.transaction(None).await.expect("tx");
+        tx.add_note("hello.md", Some("Hello"), "body\n", &[])
+            .unwrap();
+        tx.commit().await.expect("seed");
+        // Transactions only carry supported notes, so the `.tex`
+        // fixture is committed with git directly.
+        std::fs::write(root.join("paper.tex"), "\\section{Paper}\nbody\n")
+            .expect("tex fixture");
+        let committed = std::process::Command::new("git")
+            .current_dir(&root)
+            .args(["add", "paper.tex"])
+            .status()
+            .expect("git add runs")
+            .success()
+            && std::process::Command::new("git")
+                .current_dir(&root)
+                .args(["commit", "-m", "tex fixture", "--quiet"])
+                .status()
+                .expect("git commit runs")
+                .success();
+        assert!(committed, "tex fixture must commit");
+        let err = client
+            .mark_task_done("paper.tex", None, None)
+            .await
+            .expect_err("todo state on a .tex note");
+        match err {
+            NbError::WrongKind {
+                expected, actual, ..
+            } => {
+                assert_eq!(expected, nb_api::KindSet::Todo);
+                assert!(
+                    matches!(actual, nb_api::EntityKind::Note),
+                    "{actual:?}"
+                );
+            },
+            other => panic!("expected WrongKind, got: {other:?}"),
+        }
+    })
+    .await;
+}

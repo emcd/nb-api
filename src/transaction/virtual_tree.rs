@@ -23,7 +23,10 @@ impl VirtualTree {
         let mut nodes = HashMap::new();
         let paths = git::list_notebook_paths(root)?;
         for rel in paths {
-            let key = normalize_rel(&rel);
+            // Git already yields canonical `/`-separated relative
+            // paths: keep them verbatim so a literal backslash name
+            // never collapses onto a nested path.
+            let key = rel.clone();
             let abs = root.join(&rel);
             let meta =
                 std::fs::symlink_metadata(&abs).map_err(|e| NbError::Io {
@@ -229,7 +232,13 @@ pub(super) fn resolve_target_path(
 ) -> Result<String, NbError> {
     match target {
         NoteTarget::Path { value } => {
-            let path = normalize_rel(value);
+            let Some(path) =
+                crate::native::confine(value).filter(|r| !r.is_empty())
+            else {
+                return Err(NbError::NotFound {
+                    selector: value.clone(),
+                });
+            };
             refuse_existing_ignored(ignored_existing, &path)?;
             if tree.exists(&path) {
                 return Ok(path);
@@ -464,12 +473,12 @@ pub(super) fn normalize_rel(path: &str) -> String {
         .replace('\\', "/")
 }
 
+/// Parent directory of a canonical tree key, split on `/` only:
+/// a literal backslash stays inside its own component instead of
+/// being rewritten into a separator.
 pub(super) fn parent_path(path: &str) -> Option<String> {
-    let p = Path::new(path).parent()?;
-    let s = p.to_string_lossy().replace('\\', "/");
-    if s.is_empty() || s == "." {
-        None
-    } else {
-        Some(s)
+    match path.rfind('/') {
+        Some(i) if i > 0 => Some(path[..i].to_string()),
+        _ => None,
     }
 }

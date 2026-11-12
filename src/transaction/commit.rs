@@ -65,7 +65,6 @@ impl Transaction {
         let ignored_existing: HashSet<String> =
             git::list_ignored_paths(&notebook_root)?
                 .into_iter()
-                .map(|p| normalize_rel(&p))
                 .collect();
         let mut tree = VirtualTree::from_disk(&notebook_root)?;
         let mut op_meta: Vec<OpMeta> = Vec::with_capacity(self.plan.len());
@@ -106,7 +105,6 @@ impl Transaction {
             let mut s: HashSet<String> =
                 git::list_notebook_paths(&notebook_root)?
                     .into_iter()
-                    .map(|p| normalize_rel(&p))
                     .collect();
             s.extend(ignored_existing.iter().cloned());
             s
@@ -573,7 +571,10 @@ fn materialize_tree(
     removed.sort();
     removed.dedup();
     for rel in removed {
-        let key = normalize_rel(rel);
+        // Tree keys are already canonical relative paths; use them
+        // verbatim so a literal backslash name never collapses onto
+        // a nested path.
+        let key: String = rel.clone();
         let abs = root.join(&key);
         let meta = match std::fs::symlink_metadata(&abs) {
             Ok(m) => m,
@@ -616,7 +617,7 @@ fn materialize_tree(
     mkdirs.sort();
     mkdirs.dedup();
     for rel in mkdirs {
-        let key = normalize_rel(rel);
+        let key: String = rel.clone();
         let abs = root.join(&key);
         refuse_symlink_ancestors(root, &key)?;
         std::fs::create_dir_all(&abs).map_err(|e| NbError::Io {
@@ -634,7 +635,7 @@ fn materialize_tree(
     written.dedup();
     let created: HashSet<&String> = effects.created.iter().collect();
     for rel in written {
-        let key = normalize_rel(rel);
+        let key: String = rel.clone();
         let created_contains = created.contains(rel);
         let Some(VirtualNode::File(bytes)) = tree.nodes.get(&key) else {
             return Err(NbError::ValidationError {

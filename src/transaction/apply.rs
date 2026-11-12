@@ -794,20 +794,30 @@ fn set_todo_state(
             });
         },
     }
-    let doc = parse_doc(bytes, path)?;
-    if doc.kind() != DocumentKind::Todo {
-        let actual = match doc.kind() {
-            DocumentKind::Note => crate::EntityKind::Note,
-            DocumentKind::Todo => crate::EntityKind::Todo,
-            DocumentKind::Bookmark => crate::EntityKind::Bookmark,
-        };
-        return Err(NbError::WrongKind {
-            expected: crate::KindSet::Todo,
-            actual,
-            selector: selector.to_string(),
-            path: path.to_string(),
-        });
+    // Entity kind before parsing: textual-but-unsupported
+    // extensions (e.g. `.tex`, rejected by the parser) must report
+    // WrongKind, never leak a parse failure.
+    match crate::native::document_kind_for_rel(path) {
+        DocumentKind::Todo => {},
+        DocumentKind::Note => {
+            return Err(NbError::WrongKind {
+                expected: crate::KindSet::Todo,
+                actual: crate::EntityKind::Note,
+                selector: selector.to_string(),
+                path: path.to_string(),
+            });
+        },
+        DocumentKind::Bookmark => {
+            return Err(NbError::WrongKind {
+                expected: crate::KindSet::Todo,
+                actual: crate::EntityKind::Bookmark,
+                selector: selector.to_string(),
+                path: path.to_string(),
+            });
+        },
     }
+    let doc = parse_doc(bytes, path)?;
+    debug_assert_eq!(doc.kind(), DocumentKind::Todo);
     let mut out = bytes.to_vec();
     if let Some(n) = task_number {
         // Flip Nth `- [ ]` / `- [x]` checklist item (1-based).
