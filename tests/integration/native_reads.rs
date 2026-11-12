@@ -1,24 +1,27 @@
-//! Native read path: differential equivalence vs legacy `nb`
-//! subprocess reads, plus a no-spawn proof under the flag.
+//! Native read path: parity against the live `nb` CLI oracle,
+//! plus a no-spawn proof and confinement coverage.
 //!
-//! The differential battery covers paths, numeric ids (root and
+//! The battery covers paths, numeric ids (root and
 //! folder-qualified), exact titles, basenames, colliding folders,
-//! missing selectors, and the line-level/source-bytes surfaces.
+//! missing selectors, canonical selectors, and the
+//! line-level/source-bytes surfaces.
 
 use nb_api::testing::NbTestEnv;
-use nb_api::{NbClient, NoteTarget};
+use nb_api::{NbClient, NbError, NoteTarget};
 
 use crate::common::with_isolated_env;
 use crate::native_reads_support::{config_for, quiesce, seed, tree_listing};
 
 #[tokio::test]
-async fn native_show_matches_legacy() {
+async fn native_show_matches_oracle() {
+    use crate::native_reads_support::NbOracle;
+
     let env = NbTestEnv::new().expect("fixture");
     with_isolated_env(&env, false, || async {
-        let legacy = NbClient::new(&config_for(&env, false)).expect("legacy");
-        let native = NbClient::new(&config_for(&env, true)).expect("native");
+        let client = NbClient::new(&config_for(&env)).expect("client");
+        let oracle = NbOracle::new(&env);
         let root = env.nb_dir().join(env.notebook());
-        seed(&legacy, &root).await;
+        seed(&client, &root).await;
         let nb = env.notebook();
 
         // Frozen oracle: per-attempt quiesce plus snapshot, with
@@ -71,68 +74,134 @@ async fn native_show_matches_legacy() {
             "onebyte.xyz".to_string(),
             "latin1.xyz".to_string(),
         ];
-        // Attempts: quiesce, then run both batteries on a frozen
-        // tree. A background `nb` checkpoint moving the tree
-        // mid-battery invalidates the run (fail loudly after
-        // retries), so a passing run always compared identical
-        // frozen states.
         for _ in 0..3u32 {
-            // One legacy read as warmup: it triggers any pending
+            // One oracle read as warmup: it triggers any pending
             // one-time `nb` reconciliation before the window opens.
-            let _ = legacy.show_note("hello_title.md", None).await;
+            let _ = oracle.resolve_path("hello_title.md");
             let frozen = quiesce(&root);
-            let mut legacy_outs = Vec::with_capacity(cases.len());
+            let mut outs = Vec::with_capacity(cases.len());
             for id in &cases {
-                legacy_outs.push(legacy.show_note(id, None).await);
+                outs.push(client.show_note(id, None).await);
             }
             if tree_listing(&root).expect("oracle must read") != frozen {
                 continue;
             }
-            let mut native_outs = Vec::with_capacity(cases.len());
-            for id in &cases {
-                native_outs.push(native.show_note(id, None).await);
+            for (id, out) in cases.iter().zip(outs) {
+                match out {
+                    Ok(shown) => {
+                        assert_eq!(
+                            oracle.resolve_path(id),
+                            Some(shown.path.clone()),
+                            "oracle target mismatch for {id:?}"
+                        );
+                        assert!(
+                            oracle.is_textual(id),
+                            "oracle calls {id:?} non-text"
+                        );
+                        assert_eq!(
+                            shown.source.as_bytes(),
+                            std::fs::read(root.join(&shown.path))
+                                .expect("read resolved file")
+                                .as_slice(),
+                            "source bytes mismatch for {id:?}"
+                        );
+                    },
+                    Err(NbError::NotFound { .. }) => {
+                        assert_eq!(
+                            oracle.resolve_path(id),
+                            None,
+                            "oracle resolves {id:?}, native is NotFound"
+                        );
+                    },
+                    Err(NbError::UnsupportedShowTarget {
+                        actual_type,
+                        ..
+                    }) => {
+                        // Folders: the input names a directory on
+                        // disk (`nb --path`/`--type` disagree on
+                        // folders, so the filesystem is the oracle).
+                        // Non-text files: `nb` refuses the text type.
+                        if actual_type == "folder" {
+                            assert!(
+                                root.join(id).is_dir(),
+                                "{id:?} is not a directory"
+                            );
+                        } else {
+                            assert!(
+                                root.join(id).is_file(),
+                                "{id:?} is not a file"
+                            );
+                            assert!(
+                                !oracle.is_textual(id),
+                                "oracle calls {id:?} text"
+                            );
+                        }
+                    },
+                    Err(NbError::NonUtf8 { .. }) => {
+                        assert!(
+                            oracle.resolve_path(id).is_some(),
+                            "oracle misses {id:?}, native is NonUtf8"
+                        );
+                    },
+                    Err(other) => {
+                        panic!("unexpected variant for {id:?}: {other:?}")
+                    },
+                }
             }
-            if tree_listing(&root).expect("oracle must read") != frozen {
-                continue;
-            }
-            for (id, (legacy_out, native_out)) in
-                cases.iter().zip(legacy_outs.into_iter().zip(native_outs))
-            {
-                assert_eq!(
-                    native_out, legacy_out,
-                    "native/legacy mismatch for {id:?}"
-                );
+
+            // Canonical selectors on representative cases: numeric
+            // when the slot round-trips, exact path otherwise.
+            // Canonical selectors on slot-stable cases (transaction
+            // order fixes root slots 1-7 and work slots 1-2; raw
+            // files gain background-`nb` slots, so only these
+            // inputs have deterministic expectations): numeric when
+            // the slot round-trips, exact path otherwise.
+            for (id, expected) in [
+                ("hello_title.md", format!("{nb}:1")),
+                ("Hello Title", format!("{nb}:1")),
+                ("Root Todo", format!("{nb}:3")),
+                ("Setext Title", format!("{nb}:4")),
+                ("Front Matter", format!("{nb}:5")),
+                ("Mark Down", format!("{nb}:6")),
+                ("Upper", format!("{nb}:7")),
+                ("notes.txt", format!("{nb}:2")),
+                ("work/a.md", format!("{nb}:work/1")),
+                (format!("{nb}:work/1").as_str(), format!("{nb}:work/1")),
+                ("work/do_the_thing.todo.md", format!("{nb}:work/2")),
+            ] {
+                let shown = client
+                    .show_note(id, None)
+                    .await
+                    .unwrap_or_else(|e| panic!("{id}: {e:?}"));
+                assert_eq!(shown.selector, expected, "selector for {id:?}");
             }
 
             // Line-level and raw-bytes surfaces ride the same path.
             let target = NoteTarget::path("work/a.md");
+            let lines = client
+                .show_note_lines(target.clone(), None, None, None)
+                .await
+                .expect("lines surface");
+            assert_eq!(lines.total_lines, 1, "{lines:?}");
+            assert_eq!(lines.lines.len(), 1, "{lines:?}");
+            assert!(lines.lines[0].text.contains("work body"), "{lines:?}");
+            let hits = client
+                .search_note_lines(target.clone(), "work", None)
+                .await
+                .expect("search surface");
+            assert!(!hits.hits.is_empty(), "{hits:?}");
             assert_eq!(
-                native
-                    .show_note_lines(target.clone(), None, None, None)
-                    .await,
-                legacy
-                    .show_note_lines(target.clone(), None, None, None)
-                    .await,
-                "show_note_lines mismatch"
-            );
-            assert_eq!(
-                native.search_note_lines(target.clone(), "work", None).await,
-                legacy.search_note_lines(target, "work", None).await,
-                "search_note_lines mismatch"
-            );
-            assert_eq!(
-                native
+                client
                     .read_note_source_bytes(
                         NoteTarget::path("work/a.md"),
                         None
                     )
-                    .await,
-                legacy
-                    .read_note_source_bytes(
-                        NoteTarget::path("work/a.md"),
-                        None
-                    )
-                    .await,
+                    .await
+                    .expect("bytes surface")
+                    .as_slice(),
+                std::fs::read(root.join("work/a.md"))
+                    .expect("read work note")
+                    .as_slice(),
                 "source bytes mismatch"
             );
             assert_eq!(
@@ -162,11 +231,11 @@ async fn native_show_spawns_no_nb() {
     use crate::common::{EnvSnapshot, lock_env};
 
     let env = NbTestEnv::new().expect("fixture");
-    // Seed with the real `nb` before poisoning `PATH`.
+    // Seed before poisoning `PATH` (transactions never spawn `nb`).
     with_isolated_env(&env, false, || async {
-        let legacy = NbClient::new(&config_for(&env, false)).expect("legacy");
+        let client = NbClient::new(&config_for(&env)).expect("client");
         let root = env.nb_dir().join(env.notebook());
-        seed(&legacy, &root).await;
+        seed(&client, &root).await;
     })
     .await;
 
@@ -200,7 +269,7 @@ async fn native_show_spawns_no_nb() {
     unsafe { std::env::set_var("NB_DIR", env.nb_dir()) };
     unsafe { std::env::set_var("HOME", env.home_dir()) };
 
-    let native = NbClient::new(&config_for(&env, true)).expect("native");
+    let native = NbClient::new(&config_for(&env)).expect("native");
     let nb = env.notebook();
     let root_one = format!("{nb}:1");
     // All four read surfaces, Selector and Path targets: every
@@ -269,18 +338,20 @@ async fn native_show_spawns_no_nb() {
     );
 }
 
-/// Intended native divergences from legacy `nb` behavior (each is a
+/// Intended native divergences from `nb` behavior (each is a
 /// specified migration, not a differential case): Path targets are
 /// exact-only, lookups never escape the notebook, and crafted
 /// `.index` lines are dead slots.
 #[tokio::test]
 async fn native_path_exactness_and_confinement() {
     let env = NbTestEnv::new().expect("fixture");
+    use crate::native_reads_support::NbOracle;
+
     with_isolated_env(&env, false, || async {
-        let legacy = NbClient::new(&config_for(&env, false)).expect("legacy");
-        let native = NbClient::new(&config_for(&env, true)).expect("native");
+        let native = NbClient::new(&config_for(&env)).expect("native");
+        let oracle = NbOracle::new(&env);
         let root = env.nb_dir().join(env.notebook());
-        seed(&legacy, &root).await;
+        seed(&native, &root).await;
 
         // A literal file named `7` beats numeric slot 7 (step 0).
         std::fs::write(root.join("7"), "lucky\n").expect("literal 7");
@@ -291,8 +362,8 @@ async fn native_path_exactness_and_confinement() {
         assert_eq!(shown.path, "7".to_string(), "{shown:?}");
 
         // `Path` never falls back to the numeric table: no file
-        // named `1` exists, even though slot 1 is occupied. Legacy
-        // resolves the slot (paired divergence, documented).
+        // named `1` exists, even though slot 1 is occupied. The
+        // oracle resolves the slot (paired divergence, documented).
         let err = format!(
             "{:?}",
             native
@@ -301,10 +372,11 @@ async fn native_path_exactness_and_confinement() {
                 .expect_err("path must be exact")
         );
         assert!(err.contains("NotFound"), "{err:?}");
-        legacy
-            .read_note_source_bytes(NoteTarget::path("1"), None)
-            .await
-            .expect("legacy resolves numeric-looking paths");
+        assert_eq!(
+            oracle.resolve_path("1"),
+            Some("hello_title.md".to_string()),
+            "oracle resolves the numeric-looking path"
+        );
 
         // `..` escapes are terminal `NotFound`, never resolved.
         // Absolute, drive-letter, and UNC forms are rejected the
@@ -354,11 +426,8 @@ async fn native_path_exactness_and_confinement() {
         );
         assert!(err.contains("NotFound"), "{err:?}");
         assert!(
-            legacy
-                .show_note(&format!("{}:{slot}", env.notebook()), None)
-                .await
-                .is_err(),
-            "legacy must not resolve the escaping slot cleanly"
+            !oracle.show_ok(&format!("{}:{slot}", env.notebook())),
+            "nb must not resolve the escaping slot cleanly"
         );
 
         // A missing notebook is `NotFound` without creating it.
@@ -374,13 +443,6 @@ async fn native_path_exactness_and_confinement() {
             !env.nb_dir().join("no-such-notebook").exists(),
             "native reads must not create notebooks"
         );
-        assert!(
-            legacy
-                .show_note("whatever", Some("no-such-notebook"))
-                .await
-                .is_err(),
-            "legacy must also refuse the missing notebook"
-        );
     })
     .await;
 }
@@ -393,14 +455,16 @@ async fn native_divergence_pairs_are_explicit() {
     use std::os::unix::fs::symlink;
 
     let env = NbTestEnv::new().expect("fixture");
+    use crate::native_reads_support::NbOracle;
+
     with_isolated_env(&env, false, || async {
-        let legacy = NbClient::new(&config_for(&env, false)).expect("legacy");
-        let native = NbClient::new(&config_for(&env, true)).expect("native");
+        let native = NbClient::new(&config_for(&env)).expect("native");
+        let oracle = NbOracle::new(&env);
         let root = env.nb_dir().join(env.notebook());
-        seed(&legacy, &root).await;
+        seed(&native, &root).await;
 
         // Duplicate root titles: native is ambiguous `NotFound`
-        // while legacy resolves mtime-first (paired divergence).
+        // while `nb` resolves one of them (paired divergence).
         std::fs::write(root.join("dup1.md"), "# Dup\none\n").expect("dup1");
         std::fs::write(root.join("dup2.md"), "# Dup\ntwo\n").expect("dup2");
         let err = format!(
@@ -408,12 +472,12 @@ async fn native_divergence_pairs_are_explicit() {
             native.show_note("Dup", None).await.expect_err("ambiguous")
         );
         assert!(err.contains("NotFound"), "{err:?}");
-        legacy
-            .show_note("Dup", None)
-            .await
-            .expect("legacy resolves duplicates mtime-first");
+        assert!(
+            oracle.resolve_path("Dup").is_some(),
+            "nb resolves one of the duplicates"
+        );
 
-        // Symlinks are never followed by native resolution (legacy
+        // Symlinks are never followed by native resolution (`nb`
         // follows them: paired divergence).
         symlink("hello_title.md", root.join("link.md")).expect("link file");
         std::fs::create_dir(root.join("realdir")).expect("realdir");
@@ -425,16 +489,18 @@ async fn native_divergence_pairs_are_explicit() {
             );
             assert!(err.contains("NotFound"), "{id}: {err:?}");
         }
-        // Paired oracle: legacy follows the file symlink into the
-        // note, and classifies the directory symlink as a folder.
-        legacy
-            .show_note("link.md", None)
-            .await
-            .expect("legacy follows file symlinks");
+        // Paired oracle: `nb` follows the file symlink into the
+        // note, exposes the symlinked dir, and renders it (while
+        // native refuses symlinks outright).
         assert!(
-            legacy.show_note("linkdir", None).await.is_err(),
-            "legacy must not resolve the dir symlink as a note"
+            oracle.resolve_path("link.md").is_some(),
+            "nb follows file symlinks"
         );
+        assert!(
+            oracle.resolve_path("linkdir").is_some(),
+            "nb exposes the symlinked dir"
+        );
+        assert!(oracle.show_ok("linkdir"), "nb renders the symlinked dir");
 
         // Ancestor symlinks never resolve: `linkdir/note.md`
         // through the symlinked `linkdir` is `NotFound` without
@@ -449,14 +515,14 @@ async fn native_divergence_pairs_are_explicit() {
             );
             assert!(err.contains("NotFound"), "{id}: {err:?}");
         }
-        // Paired oracle: legacy follows the ancestor link.
-        legacy
-            .show_note("linkdir/note.md", None)
-            .await
-            .expect("legacy follows ancestor symlinks");
+        // Paired oracle: `nb` follows the ancestor link.
+        assert!(
+            oracle.resolve_path("linkdir/note.md").is_some(),
+            "nb follows ancestor symlinks"
+        );
 
         // A symlinked `.index` blinds numeric resolution only:
-        // exact paths still resolve, and legacy (which reads through
+        // exact paths still resolve, and `nb` (which reads through
         // the link) is the paired divergence.
         let index = root.join(".index");
         let staged = root.join(".index.real");
@@ -471,10 +537,11 @@ async fn native_divergence_pairs_are_explicit() {
             .show_note("hello_title.md", None)
             .await
             .expect("exact paths do not need the index");
-        legacy
-            .show_note("1", None)
-            .await
-            .expect("legacy reads through the linked index");
+        assert_eq!(
+            oracle.resolve_path("1"),
+            Some("hello_title.md".to_string()),
+            "nb reads through the linked index"
+        );
         std::fs::remove_file(&index).expect("unlink index");
         std::fs::rename(&staged, &index).expect("restore index");
 
@@ -497,8 +564,8 @@ async fn native_divergence_pairs_are_explicit() {
             .expect("dead slot falls through to title");
         assert_eq!(shown.path, "seven.md".to_string(), "{shown:?}");
         assert!(
-            legacy.show_note(&slot, None).await.is_err(),
-            "legacy must not resolve the dead slot cleanly"
+            !oracle.show_ok(&slot),
+            "nb must not resolve the dead slot cleanly"
         );
 
         // A literal backslash is a normal filename character, never

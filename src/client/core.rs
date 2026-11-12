@@ -33,25 +33,6 @@ fn strip_ansi(text: &str) -> String {
     ANSI_REGEX.replace_all(text, "").into_owned()
 }
 
-/// Result of probing a selector's textual classification via
-/// `nb show <selector> --type text`. Used by
-/// [`NbClient::show_note`](crate::NbClient::show_note) to decide whether
-/// the content-read path is safe.
-pub(super) enum ShowClassification {
-    /// `nb` classified the type as text. Caller proceeds to
-    /// the content-read path.
-    Textual,
-    /// `nb` classified the type as non-text (folder, archive,
-    /// image, audio, video, etc.). `actual_type` carries the
-    /// `nb`-reported type string (file extension or `folder`).
-    NonTextual { actual_type: String },
-    /// The probe could not classify the selector (selector not
-    /// found, internal error). Caller falls through to the
-    /// original show path so existing missing-selector
-    /// diagnostics are preserved.
-    ProbeFailure,
-}
-
 const FOLDER_REQUIRED_MESSAGE: &str = "This server is configured to require `folder` for new notes. Use the `nb.mkdir` tool to create new folders and the `nb.folders` tool to list existing folders.";
 
 impl NbClient {
@@ -72,7 +53,6 @@ impl NbClient {
             disable_git_signing: config.disable_git_signing,
             allow_top_level_notes: config.allow_top_level_notes,
             gate_timeout: config.gate_timeout,
-            native_reads: config.native_reads,
         })
     }
 
@@ -649,7 +629,6 @@ mod native_gate_tests {
             create_notebook: false,
             allow_top_level_notes: true,
             disable_git_signing: true,
-            native_reads: true,
             ..Default::default()
         })
         .expect("client");

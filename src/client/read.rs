@@ -11,14 +11,11 @@ use crate::lines::{
 };
 use crate::output::strip_empty_result_hint;
 use crate::parser::{ParseContext, parse};
-use crate::transaction;
 use crate::types::{
     BodyFragment, NoteTarget, SearchNoteLines, ShowNote, ShowNoteLines,
 };
 use crate::validate::validate_folder_option;
 use crate::{NbClient, SearchMode};
-
-use super::core::ShowClassification;
 
 impl NbClient {
     /// Returns status information about the resolved notebook.
@@ -85,35 +82,26 @@ impl NbClient {
     }
 
     /// Shows a note as a structured [`ShowNote`] (gate-held).
+    /// Reads resolve via the notebook filesystem plus `.index`
+    /// under one no-ensure gate hold, spawning zero `nb`
+    /// subprocesses. Plain string ids always carry selector
+    /// semantics.
     pub async fn show_note(
         &self,
         id: &str,
         notebook: Option<&str>,
     ) -> Result<ShowNote, NbError> {
-        // Native read path: validate-only qualifier resolution plus
-        // the pinned table, with zero `nb` spawns under `NB_DIR`
-        // (flag-gated, default off through 0.5.x). Plain string ids
-        // always carry selector semantics.
-        if self.native_reads {
-            let (notebook, display, input, exact) = self
-                .resolve_read_identity(&NoteTarget::selector(id), notebook)
-                .await?;
-            // No-ensure root BEFORE the gate: the legacy gate helper
-            // would ensure (and create) a missing notebook.
-            let root = self.native_notebook_root(&notebook).await?;
-            return self
-                .with_notebook_gate_native(&root, async {
-                    self.show_note_native_inside(
-                        &notebook, &display, &input, exact, &root,
-                    )
-                    .await
-                })
-                .await;
-        }
-        let (notebook, selector) =
-            self.resolve_target_selector(id, notebook).await?;
-        self.with_notebook_gate(&notebook, async {
-            self.show_note_inner(&notebook, &selector).await
+        let (notebook, display, input, exact) = self
+            .resolve_read_identity(&NoteTarget::selector(id), notebook)
+            .await?;
+        // No-ensure root BEFORE the gate: the ensuring gate helper
+        // would ensure (and create) a missing notebook.
+        let root = self.native_notebook_root(&notebook).await?;
+        self.with_notebook_gate_native(&root, async {
+            self.show_note_native_inside(
+                &notebook, &display, &input, exact, &root,
+            )
+            .await
         })
         .await
     }
@@ -191,6 +179,61 @@ impl NbClient {
         }
     }
 
+    /// Resolve a write one-shot selector to an absolute path: direct
+    /// filesystem hit first, else `nb show --path`. Write one-shots
+    /// keep legacy resolution until the unconditional migration
+    /// slice; reads never call this.
+    pub(super) async fn resolve_item_path(
+        &self,
+        selector: &str,
+    ) -> Result<PathBuf, NbError> {
+        // Fast path: existing filesystem entries (files AND
+        // directories) resolve directly without spawning `nb`, which
+        // misdispatches selectors whose trailing component collides
+        // with subcommand vocabulary (`todos` -> tasks listing,
+        // `notebooks` -> notebook root, `list` -> folder listing;
+        // nb-mcp-server:todos/mcp/62). Falls back to `nb show --path`
+        // for numeric ids/titles that have no direct filesystem form.
+        if let Ok(Some((notebook, rel))) =
+            crate::validate::parse_qualified_selector(selector)
+            && !rel.is_empty()
+            && let Ok(root) =
+                self.show_notebook_path_unguarded(Some(notebook)).await
+        {
+            let direct = root.join(rel);
+            if direct.is_file() || direct.is_dir() {
+                return Ok(direct);
+            }
+        }
+        let output = self
+            .exec_vec(vec![
+                "show".to_string(),
+                selector.to_string(),
+                "--path".to_string(),
+                "--no-color".to_string(),
+            ])
+            .await
+            .map_err(|err| match err {
+                NbError::CommandFailed { stderr, .. }
+                    if is_selector_not_found(&stderr, selector) =>
+                {
+                    NbError::NotFound {
+                        selector: selector.to_string(),
+                    }
+                },
+                other => other,
+            })?;
+        let path = output.trim();
+        if path.is_empty() {
+            return Err(NbError::CommandFailed {
+                command: format!("nb show {selector} --path"),
+                stderr: "empty path".into(),
+                exit_code: None,
+            });
+        }
+        Ok(PathBuf::from(path))
+    }
+
     /// Native inside-gate read: variant-preserving resolution,
     /// canonical containment, classification, then the native
     /// read-and-parse tail. The caller resolves `root` (no-ensure,
@@ -229,87 +272,17 @@ impl NbClient {
             },
             crate::native::NativeClass::Text => {},
         }
-        self.show_note_from_path_native(notebook, display, root, &abs)
+        self.show_note_from_path(notebook, display, root, &abs)
             .await
     }
 
-    async fn show_note_inner(
-        &self,
-        notebook: &str,
-        selector: &str,
-    ) -> Result<ShowNote, NbError> {
-        // Fast path: existing directories resolve directly without
-        // spawning `nb` (which misdispatches subcommand-colliding
-        // names like `todos`, `notebooks`, `list`; see
-        // nb-mcp-server:todos/mcp/62). Bypass also skips the probe's
-        // reconciling CLI reads. Falls back to the probe + `nb show
-        // --path` path for numeric ids/titles when the filesystem
-        // entry is absent.
-        if let Some(rel) = selector
-            .rsplit_once(':')
-            .map(|(_, rest)| rest)
-            .filter(|rest| !rest.is_empty())
-            && let Ok(root) =
-                self.show_notebook_path_unguarded(Some(notebook)).await
-            && root.join(rel).is_dir()
-        {
-            return Err(NbError::UnsupportedShowTarget {
-                selector: selector.to_string(),
-                actual_type: "folder".to_string(),
-            });
-        }
-        match self.probe_show_classification(selector).await {
-            ShowClassification::NonTextual { actual_type } => {
-                return Err(NbError::UnsupportedShowTarget {
-                    selector: selector.to_string(),
-                    actual_type,
-                });
-            },
-            ShowClassification::Textual | ShowClassification::ProbeFailure => {
-            },
-        }
-        let path = self.resolve_item_path(selector).await?;
-        if path.is_dir() {
-            return Err(NbError::UnsupportedShowTarget {
-                selector: selector.to_string(),
-                actual_type: "folder".to_string(),
-            });
-        }
-        let root = self.show_notebook_path_unguarded(Some(notebook)).await?;
-        self.show_note_from_path(notebook, selector, &root, &path)
-            .await
-    }
-
-    /// Shared read-and-parse tail: canonical rel, source bytes,
-    /// document partition, and structured [`ShowNote`] assembly.
+    /// Read-and-parse tail: canonical rel, source bytes, document
+    /// partition, and structured [`ShowNote`] assembly.
     /// Diagnostic errors (e.g. `NonUtf8`) carry the requested
-    /// selector; only a successful payload carries the numeric
-    /// canonical form. Native callers use
-    /// `show_note_from_path_native` instead.
+    /// display selector; only a successful payload carries the
+    /// shadow-checked canonical form, with the numeric id from the
+    /// confined fallible lookup.
     async fn show_note_from_path(
-        &self,
-        notebook: &str,
-        selector: &str,
-        root: &Path,
-        path: &Path,
-    ) -> Result<ShowNote, NbError> {
-        let rel = path_relative_to(root, path)?;
-        let source = std::fs::read(path).map_err(|e| NbError::Io {
-            path: path.to_path_buf(),
-            source: e.into(),
-        })?;
-        let canonical =
-            numeric_selector_for_path(notebook, root, &rel, selector);
-        let numeric_id = numeric_id_for_path(root, &rel);
-        Self::assemble_show_note(selector, &canonical, numeric_id, rel, source)
-    }
-
-    /// Native read-and-parse tail: same assembly, but the success
-    /// selector is the shadow-checked canonical form and the numeric
-    /// id comes from the confined fallible lookup (symlink-checked,
-    /// I/O propagating) instead of the shared legacy helper.
-    /// Diagnostics still carry the requested display selector.
-    async fn show_note_from_path_native(
         &self,
         notebook: &str,
         display: &str,
@@ -326,7 +299,6 @@ impl NbClient {
         let numeric_id = crate::native::numeric_id_for_rel(root, &rel)?;
         Self::assemble_show_note(display, &canonical, numeric_id, rel, source)
     }
-
     /// Structured [`ShowNote`] assembly from resolved parts: document
     /// partition, fragments, titles, and fingerprint. `diagnostic`
     /// is the requested selector for error payloads; `canonical` is
@@ -428,41 +400,25 @@ impl NbClient {
         target: NoteTarget,
         notebook: Option<&str>,
     ) -> Result<Vec<u8>, NbError> {
-        // Native read path: validate-only qualifier splitting, then
-        // variant-preserving resolution with canonical containment
-        // inside one gate hold (escapes read as `NotFound`, never
-        // foreign bytes), zero `nb` spawns.
-        if self.native_reads {
-            let (notebook, display, input, exact) =
-                self.resolve_read_identity(&target, notebook).await?;
-            // No-ensure root BEFORE the gate: the legacy gate helper
-            // would ensure (and create) a missing notebook.
-            let root = self.native_notebook_root(&notebook).await?;
-            return self
-                .with_notebook_gate_native(&root, async {
-                    let rel = if exact {
-                        crate::native::resolve_exact(&root, &input)
-                    } else {
-                        crate::native::resolve_selector(&root, &input)
-                    }
-                    .map_err(Self::map_native_miss(&display))?;
-                    let abs = root.join(&rel);
-                    let abs = crate::native::confine_canonical(
-                        &root, &abs, &display,
-                    )?;
-                    std::fs::read(&abs).map_err(|e| NbError::Io {
-                        path: abs.clone(),
-                        source: e.into(),
-                    })
-                })
-                .await;
-        }
-        let (notebook, selector) =
-            self.resolve_note_target(&target, notebook).await?;
-        self.with_notebook_gate(&notebook, async {
-            let path = self.resolve_item_path(&selector).await?;
-            std::fs::read(&path).map_err(|e| NbError::Io {
-                path: path.clone(),
+        // Reads resolve via the notebook filesystem plus `.index`
+        // with canonical containment inside one gate hold (escapes
+        // read as `NotFound`, never foreign bytes), zero `nb` spawns.
+        let (notebook, display, input, exact) =
+            self.resolve_read_identity(&target, notebook).await?;
+        // No-ensure root BEFORE the gate: the ensuring gate helper
+        // would ensure (and create) a missing notebook.
+        let root = self.native_notebook_root(&notebook).await?;
+        self.with_notebook_gate_native(&root, async {
+            let rel = if exact {
+                crate::native::resolve_exact(&root, &input)
+            } else {
+                crate::native::resolve_selector(&root, &input)
+            }
+            .map_err(Self::map_native_miss(&display))?;
+            let abs = root.join(&rel);
+            let abs = crate::native::confine_canonical(&root, &abs, &display)?;
+            std::fs::read(&abs).map_err(|e| NbError::Io {
+                path: abs.clone(),
                 source: e.into(),
             })
         })
@@ -477,30 +433,19 @@ impl NbClient {
         limit: Option<u32>,
         notebook: Option<&str>,
     ) -> Result<ShowNoteLines, NbError> {
-        // Native read path: validate-only qualifier splitting, then
-        // variant-preserving resolution plus the shared native show
-        // tail inside one gate hold, zero `nb` spawns.
-        if self.native_reads {
-            let (notebook, display, input, exact) =
-                self.resolve_read_identity(&target, notebook).await?;
-            // No-ensure root BEFORE the gate: the legacy gate helper
-            // would ensure (and create) a missing notebook.
-            let root = self.native_notebook_root(&notebook).await?;
-            return self
-                .with_notebook_gate_native(&root, async {
-                    let shown = self
-                        .show_note_native_inside(
-                            &notebook, &display, &input, exact, &root,
-                        )
-                        .await?;
-                    Self::show_lines_window(shown, offset, limit)
-                })
-                .await;
-        }
-        let (notebook, selector) =
-            self.resolve_note_target(&target, notebook).await?;
-        self.with_notebook_gate(&notebook, async {
-            let shown = self.show_note_inner(&notebook, &selector).await?;
+        // Reads resolve via the filesystem plus `.index` with the
+        // native show tail inside one gate hold, zero `nb` spawns.
+        let (notebook, display, input, exact) =
+            self.resolve_read_identity(&target, notebook).await?;
+        // No-ensure root BEFORE the gate: the ensuring gate helper
+        // would ensure (and create) a missing notebook.
+        let root = self.native_notebook_root(&notebook).await?;
+        self.with_notebook_gate_native(&root, async {
+            let shown = self
+                .show_note_native_inside(
+                    &notebook, &display, &input, exact, &root,
+                )
+                .await?;
             Self::show_lines_window(shown, offset, limit)
         })
         .await
@@ -598,32 +543,23 @@ impl NbClient {
         pattern: &str,
         notebook: Option<&str>,
     ) -> Result<SearchNoteLines, NbError> {
-        // Native read path: see `show_note_lines`.
-        if self.native_reads {
-            let (notebook, display, input, exact) =
-                self.resolve_read_identity(&target, notebook).await?;
-            // No-ensure root BEFORE the gate: the legacy gate helper
-            // would ensure (and create) a missing notebook.
-            let root = self.native_notebook_root(&notebook).await?;
-            // `pattern` is borrowed across the gate future; copy the
-            // small query string so the future owns its inputs.
-            let pattern = pattern.to_string();
-            return self
-                .with_notebook_gate_native(&root, async {
-                    let shown = self
-                        .show_note_native_inside(
-                            &notebook, &display, &input, exact, &root,
-                        )
-                        .await?;
-                    Self::search_lines_hits(shown, &pattern)
-                })
-                .await;
-        }
-        let (notebook, selector) =
-            self.resolve_note_target(&target, notebook).await?;
-        self.with_notebook_gate(&notebook, async {
-            let shown = self.show_note_inner(&notebook, &selector).await?;
-            Self::search_lines_hits(shown, pattern)
+        // Reads resolve via the filesystem plus `.index`; see
+        // `show_note_lines`.
+        let (notebook, display, input, exact) =
+            self.resolve_read_identity(&target, notebook).await?;
+        // No-ensure root BEFORE the gate: the ensuring gate helper
+        // would ensure (and create) a missing notebook.
+        let root = self.native_notebook_root(&notebook).await?;
+        // `pattern` is borrowed across the gate future; copy the
+        // small query string so the future owns its inputs.
+        let pattern = pattern.to_string();
+        self.with_notebook_gate_native(&root, async {
+            let shown = self
+                .show_note_native_inside(
+                    &notebook, &display, &input, exact, &root,
+                )
+                .await?;
+            Self::search_lines_hits(shown, &pattern)
         })
         .await
     }
@@ -648,123 +584,6 @@ impl NbClient {
             hits,
             body_fingerprint: shown.fingerprint,
         })
-    }
-
-    pub(super) async fn resolve_item_path(
-        &self,
-        selector: &str,
-    ) -> Result<PathBuf, NbError> {
-        // Fast path: existing filesystem entries (files AND
-        // directories) resolve directly without spawning `nb`, which
-        // misdispatches selectors whose trailing component collides
-        // with subcommand vocabulary (`todos` -> tasks listing,
-        // `notebooks` -> notebook root, `list` -> folder listing;
-        // nb-mcp-server:todos/mcp/62). Falls back to `nb show --path`
-        // for numeric ids/titles that have no direct filesystem form.
-        if let Ok(Some((notebook, rel))) =
-            crate::validate::parse_qualified_selector(selector)
-            && !rel.is_empty()
-            && let Ok(root) =
-                self.show_notebook_path_unguarded(Some(notebook)).await
-        {
-            let direct = root.join(rel);
-            if direct.is_file() || direct.is_dir() {
-                return Ok(direct);
-            }
-        }
-        let output = self
-            .exec_vec(vec![
-                "show".to_string(),
-                selector.to_string(),
-                "--path".to_string(),
-                "--no-color".to_string(),
-            ])
-            .await
-            .map_err(|err| match err {
-                NbError::CommandFailed { stderr, .. }
-                    if is_selector_not_found(&stderr, selector) =>
-                {
-                    NbError::NotFound {
-                        selector: selector.to_string(),
-                    }
-                },
-                other => other,
-            })?;
-        let path = output.trim();
-        if path.is_empty() {
-            return Err(NbError::CommandFailed {
-                command: format!("nb show {selector} --path"),
-                stderr: "empty path".into(),
-                exit_code: None,
-            });
-        }
-        Ok(PathBuf::from(path))
-    }
-
-    async fn resolve_note_target(
-        &self,
-        target: &NoteTarget,
-        notebook: Option<&str>,
-    ) -> Result<(String, String), NbError> {
-        match target {
-            NoteTarget::Selector { value } => {
-                self.resolve_target_selector(value, notebook).await
-            },
-            NoteTarget::Path { value } => {
-                let notebook = self.resolve_notebook(notebook).await?;
-                Ok((notebook.clone(), format!("{notebook}:{value}")))
-            },
-        }
-    }
-
-    /// Probe the textual classification of a selector via `nb`'s
-    /// native `--type` mechanism.
-    ///
-    /// Two-step probe: first `nb show <selector> --type text` to
-    /// ask `nb` whether the type is text. If yes, return
-    /// [`ShowClassification::Textual`]. If no, follow up with
-    /// `nb show <selector> --type` to recover the `actual_type`
-    /// for the error diagnostic. If the follow-up also fails
-    /// (selector not found, internal error), return
-    /// [`ShowClassification::ProbeFailure`] so the caller can
-    /// fall through to the original show path.
-    async fn probe_show_classification(
-        &self,
-        selector: &str,
-    ) -> ShowClassification {
-        let textual = self
-            .exec_vec(vec![
-                "show".to_string(),
-                selector.to_string(),
-                "--type".to_string(),
-                "text".to_string(),
-                "--no-color".to_string(),
-            ])
-            .await;
-        if textual.is_ok() {
-            return ShowClassification::Textual;
-        }
-        match self
-            .exec_vec(vec![
-                "show".to_string(),
-                selector.to_string(),
-                "--type".to_string(),
-                "--no-color".to_string(),
-            ])
-            .await
-        {
-            Ok(stdout) => {
-                let trimmed = stdout.trim();
-                if trimmed.is_empty() {
-                    ShowClassification::ProbeFailure
-                } else {
-                    ShowClassification::NonTextual {
-                        actual_type: trimmed.to_string(),
-                    }
-                }
-            },
-            Err(_) => ShowClassification::ProbeFailure,
-        }
     }
 
     /// Lists notes in a notebook or folder.
@@ -845,33 +664,9 @@ impl NbClient {
     }
 }
 
-/// Numeric `.index` id for a notebook-relative path, if the basename is
-/// listed in its folder `.index` (blank/deleted lines never match).
-fn numeric_id_for_path(notebook_root: &Path, rel: &str) -> Option<u32> {
-    let (folder, basename) = match rel.rfind('/') {
-        Some(i) => (rel[..i].to_string(), rel[i + 1..].to_string()),
-        None => (String::new(), rel.to_string()),
-    };
-    transaction::index_id_in_folder(notebook_root, &folder, &basename)
-}
-
-/// `ShowNote`/`ShowNoteLines` selector: numeric `<folder>/<id>` form when the
-/// path resolves via `.index`, else the qualified selector that was read.
-fn numeric_selector_for_path(
-    notebook: &str,
-    notebook_root: &Path,
-    rel: &str,
-    fallback: &str,
-) -> String {
-    match numeric_id_for_path(notebook_root, rel) {
-        Some(id) => match rel.rfind('/') {
-            Some(i) => format!("{notebook}:{}/{}", &rel[..i], id),
-            None => format!("{notebook}:{id}"),
-        },
-        None => fallback.to_string(),
-    }
-}
-
+/// Notebook dir from the environment: `$NB_DIR/<notebook>` when
+/// present, without creating, ensuring, or spawning. Genuine
+/// filesystem failures propagate; only true absence maps to `None`.
 pub(super) fn notebook_dir_from_env(
     notebook: &str,
 ) -> Result<Option<PathBuf>, NbError> {

@@ -71,16 +71,6 @@ pub struct Config {
     pub disable_git_signing: bool,
     /// Maximum time to wait on the process-shared gate queue.
     pub gate_timeout: Duration,
-    /// Serve structured reads from the notebook filesystem plus
-    /// `.index` without spawning `nb` (differential-tested native
-    /// read path). Default off through 0.5.x (opt-in). When enabled,
-    /// notebook discovery is `NB_DIR`-only and side-effect-free:
-    /// a missing notebook reads as `NotFound` (never ensured or
-    /// created, regardless of `create_notebook`), discovery I/O
-    /// failures surface as `Io`, root and gate-key discovery runs
-    /// before gate acquisition, and note/index/content reads happen
-    /// inside one no-ensure gate hold over the pre-resolved root.
-    pub native_reads: bool,
 }
 
 impl Default for Config {
@@ -91,7 +81,6 @@ impl Default for Config {
             allow_top_level_notes: false,
             disable_git_signing: false,
             gate_timeout: gate::DEFAULT_GATE_TIMEOUT,
-            native_reads: false,
         }
     }
 }
@@ -109,8 +98,6 @@ pub struct NbClient {
     allow_top_level_notes: bool,
     /// Gate queue timeout.
     gate_timeout: Duration,
-    /// Serve structured reads natively without spawning `nb`.
-    native_reads: bool,
 }
 
 /// Matching mode for `nb search` query terms.

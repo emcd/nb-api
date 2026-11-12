@@ -592,14 +592,11 @@ async fn show_note_missing_selector_notfound_carries_qualified_id_verbatim() {
 }
 
 /// When `show_note` is called with an explicit notebook that
-/// does not exist, the inner `check_notebook` must surface the
-/// genuine notebook-absence diagnostic as a typed error rather
-/// than swallow it via a broad case-insensitive substring match
-/// or skip past it. With `create_notebook: false`, `ensure_notebook`
-/// propagates the absence as `ValidationError` rather than
-/// attempting creation; the test pins that surfacing.
+/// does not exist, reads never create notebooks: the missing
+/// notebook is terminal `NotFound` carrying the qualified
+/// selector, regardless of `create_notebook`.
 #[tokio::test]
-async fn show_note_nonexistent_notebook_returns_validation_error_when_create_disabled()
+async fn show_note_nonexistent_notebook_returns_not_found_when_create_disabled()
  {
     let env = NbTestEnv::new().expect("fixture initialization");
     with_isolated_env(&env, false, || async {
@@ -612,38 +609,27 @@ async fn show_note_nonexistent_notebook_returns_validation_error_when_create_dis
         .expect("client construction");
 
         // Pass an explicit notebook name that is not registered
-        // with the test fixture; nb emits its pinned
-        // "Notebook not found: <name>" diagnostic.
+        // with the test fixture.
         let result = client
             .show_note("anything", Some("nonexistent-notebook-for-absence-mapping"))
             .await;
         match result {
-            Err(NbError::ValidationError { reason, .. }) => {
-                assert!(
-                    reason.contains("not found"),
-                    "expected validation error to mention absence; got: {reason:?}"
-                );
-                assert!(
-                    reason.contains("nonexistent-notebook-for-absence-mapping"),
-                    "expected validation error to mention the missing \
-                     notebook name; got: {reason:?}"
+            Err(NbError::NotFound { selector }) => {
+                assert_eq!(
+                    selector,
+                    "nonexistent-notebook-for-absence-mapping:",
+                    "unexpected selector: {selector:?}"
                 );
             }
-            // Critical anti-regression assertions: under the
-            // previous broad-substring classifier the path
-            // could reach NotFound when the failure was a real
-            // permission-denied; pin that we surface the typed
-            // validation error instead.
-            Err(NbError::NotFound { selector }) => panic!(
-                "expected ValidationError for missing notebook, \
-                 got NotFound with selector {selector:?}"
-            ),
-            Err(other) => panic!("expected ValidationError for missing notebook, got: {other:?}"),
+            Err(other) => panic!("expected NotFound for missing notebook, got: {other:?}"),
             Ok(s) => panic!(
-                "expected ValidationError for missing notebook, \
-                 got Ok with content: {s:?}"
+                "expected NotFound for missing notebook, got Ok with content: {s:?}"
             ),
         }
+        assert!(
+            !env.nb_dir().join("nonexistent-notebook-for-absence-mapping").exists(),
+            "reads must not create notebooks"
+        );
     })
     .await;
 }

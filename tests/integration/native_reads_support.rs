@@ -1,17 +1,100 @@
 //! Shared helpers for the native read-path integration tests:
-//! client config, frozen-oracle tree hashing, and corpus seeding.
+//! client config, frozen-oracle tree hashing, corpus seeding, and
+//! a thin live-`nb` oracle for resolution parity.
 
 use nb_api::testing::NbTestEnv;
 use nb_api::{Config, NbClient};
 
-pub(crate) fn config_for(env: &NbTestEnv, native_reads: bool) -> Config {
+pub(crate) fn config_for(env: &NbTestEnv) -> Config {
     Config {
         notebook: Some(env.notebook().to_string()),
         create_notebook: false,
         allow_top_level_notes: true,
         disable_git_signing: true,
-        native_reads,
         ..Config::default()
+    }
+}
+
+/// Thin live-`nb` oracle: shells the real CLI for resolution target
+/// and textual classification only. Native assertions compare path,
+/// bytes, and error shape against this oracle; structured fields
+/// carry explicit native expectations.
+pub(crate) struct NbOracle {
+    nb_dir: std::path::PathBuf,
+    home: std::path::PathBuf,
+    notebook: String,
+}
+
+impl NbOracle {
+    pub(crate) fn new(env: &NbTestEnv) -> Self {
+        Self {
+            nb_dir: env.nb_dir().to_path_buf(),
+            home: env.home_dir().to_path_buf(),
+            notebook: env.notebook().to_string(),
+        }
+    }
+
+    fn nb(&self, args: &[&str]) -> Result<String, String> {
+        let mut cmd = std::process::Command::new("nb");
+        cmd.env("NB_DIR", &self.nb_dir);
+        cmd.env("HOME", &self.home);
+        // Mirror `git_env` scrubbing: no `GIT_*` redirect may leak
+        // into the oracle child.
+        for (key, _) in std::env::vars_os() {
+            if key.to_string_lossy().starts_with("GIT_") {
+                cmd.env_remove(key);
+            }
+        }
+        let out = cmd.args(args).output().map_err(|e| e.to_string())?;
+        if !out.status.success() {
+            return Err(String::from_utf8_lossy(&out.stderr).into_owned());
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    }
+
+    /// Notebook-relative resolution target, like the removed
+    /// `nb show --path` fallback returned it, relativized. `None`
+    /// when `nb` fails or prints nothing.
+    pub(crate) fn resolve_path(&self, selector: &str) -> Option<String> {
+        let qualified = if selector.contains(':') {
+            selector.to_string()
+        } else {
+            format!("{}:{selector}", self.notebook)
+        };
+        let out = self
+            .nb(&["show", &qualified, "--path", "--no-color"])
+            .ok()?;
+        let path = out.trim();
+        if path.is_empty() {
+            return None;
+        }
+        std::path::Path::new(path)
+            .strip_prefix(self.nb_dir.join(&self.notebook))
+            .ok()
+            .map(|p| p.to_string_lossy().replace('\\', "/"))
+    }
+
+    /// Whether plain `nb show` succeeds for the selector (used
+    /// for paired failure evidence: the oracle fails where the
+    /// native path fails).
+    pub(crate) fn show_ok(&self, selector: &str) -> bool {
+        let qualified = if selector.contains(':') {
+            selector.to_string()
+        } else {
+            format!("{}:{selector}", self.notebook)
+        };
+        self.nb(&["show", &qualified, "--no-color"]).is_ok()
+    }
+
+    /// Whether `nb` classifies the selector textual.
+    pub(crate) fn is_textual(&self, selector: &str) -> bool {
+        let qualified = if selector.contains(':') {
+            selector.to_string()
+        } else {
+            format!("{}:{selector}", self.notebook)
+        };
+        self.nb(&["show", &qualified, "--type", "text", "--no-color"])
+            .is_ok()
     }
 }
 

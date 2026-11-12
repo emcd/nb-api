@@ -5,21 +5,21 @@ use nb_api::testing::NbTestEnv;
 use nb_api::{Config, NbClient, NoteTarget};
 
 use crate::common::with_isolated_env;
-use crate::native_reads_support::{config_for, quiesce, seed};
+use crate::native_reads_support::{NbOracle, config_for, quiesce, seed};
 
 /// Shadowed numeric ids fall back to the exact-path selector: when
 /// a literal file occupies the numeric form, emitting `nb:<id>`
 /// would point at the wrong entity. Root and folder cases, each
-/// with an explicit legacy pair (legacy emits the shadowed numeric
-/// form; native emits the exact path).
+/// with an explicit `nb` pair (`nb` resolves the shadowed file;
+/// native emits the exact path).
 #[tokio::test]
 async fn native_shadowed_numeric_ids_fall_back_to_exact_path() {
     let env = NbTestEnv::new().expect("fixture");
     with_isolated_env(&env, false, || async {
-        let legacy = NbClient::new(&config_for(&env, false)).expect("legacy");
-        let native = NbClient::new(&config_for(&env, true)).expect("native");
+        let native = NbClient::new(&config_for(&env)).expect("native");
+        let oracle = NbOracle::new(&env);
         let root = env.nb_dir().join(env.notebook());
-        seed(&legacy, &root).await;
+        seed(&native, &root).await;
         let nb = env.notebook();
 
         // Root: slot 1 holds the seed's first note; a literal `1`
@@ -46,16 +46,18 @@ async fn native_shadowed_numeric_ids_fall_back_to_exact_path() {
             native.show_note("1", None).await.expect("literal").path,
             "1".to_string()
         );
-        // Paired oracle: legacy emits the shadowed numeric form.
-        let legacy_shown = legacy
-            .show_note(&first, None)
-            .await
-            .expect("legacy resolves the seed note");
-        assert_eq!(legacy_shown.path, first, "{legacy_shown:?}");
+        // Paired oracle: bare `1` is numeric in `nb` syntax, so
+        // `nb` resolves the slot while native resolves the literal
+        // file (step 0 wins).
         assert_eq!(
-            legacy_shown.selector,
-            format!("{nb}:1"),
-            "legacy emits the shadowed numeric form: {legacy_shown:?}"
+            oracle.resolve_path("1"),
+            Some(first.clone()),
+            "nb resolves the numeric slot"
+        );
+        assert_eq!(
+            oracle.resolve_path(&first),
+            Some(first.clone()),
+            "nb resolves the shadowed note by path"
         );
 
         // Folder: slot `work/1` holds the seed's first work note; a
@@ -79,15 +81,13 @@ async fn native_shadowed_numeric_ids_fall_back_to_exact_path() {
             format!("{nb}:{target}"),
             "shadowed folder numeric must fall back to the exact path"
         );
-        let legacy_shown = legacy
-            .show_note(&target, None)
-            .await
-            .expect("legacy resolves the seed work note");
-        assert_eq!(legacy_shown.path, target, "{legacy_shown:?}");
+        // `nb` addresses the folder literal too (no path-level
+        // divergence here); the specified divergence is the native
+        // exact-path selector above.
         assert_eq!(
-            legacy_shown.selector,
-            format!("{nb}:work/1"),
-            "legacy emits the shadowed folder numeric: {legacy_shown:?}"
+            oracle.resolve_path("work/1"),
+            Some("work/1".to_string()),
+            "nb addresses the folder literal"
         );
     })
     .await;
@@ -106,8 +106,7 @@ async fn native_reads_never_create_notebooks() {
                 create_notebook,
                 allow_top_level_notes: true,
                 disable_git_signing: true,
-                native_reads: true,
-                ..Config::default()
+                    ..Config::default()
             };
             let native = NbClient::new(&config).expect("native");
             let err = format!(
@@ -152,10 +151,10 @@ async fn native_io_failures_are_not_not_found() {
 
     let env = NbTestEnv::new().expect("fixture");
     with_isolated_env(&env, false, || async {
-        let legacy = NbClient::new(&config_for(&env, false)).expect("legacy");
-        let native = NbClient::new(&config_for(&env, true)).expect("native");
+        let native = NbClient::new(&config_for(&env)).expect("native");
+        let oracle = NbOracle::new(&env);
         let root = env.nb_dir().join(env.notebook());
-        seed(&legacy, &root).await;
+        seed(&native, &root).await;
 
         // A numeric lookup must surface an unreadable `.index`
         // as `Io`, not fall through to title matching or
@@ -179,19 +178,15 @@ async fn native_io_failures_are_not_not_found() {
                 .expect_err("unreadable index must fail")
         );
         assert!(err.contains("Io"), "unreadable .index degraded: {err:?}");
-        // Paired oracle: legacy also fails (generic `CommandFailed`,
-        // never a clean resolve), pinning the accepted divergence.
+        // Paired oracle: `nb` also fails without a readable index.
         assert!(
-            legacy
-                .show_note(&format!("{}:1", env.notebook()), None)
-                .await
-                .is_err(),
-            "legacy must not resolve through an unreadable .index"
+            !oracle.show_ok(&format!("{}:1", env.notebook())),
+            "nb must not resolve through an unreadable .index"
         );
         // The exact existing note itself stays readable, but
         // selector/numeric metadata requires the index: native
         // resolution-critical index reads propagate `Io` even when
-        // the note file is fine. Legacy also fails (it needs the
+        // the note file is fine. `nb` also fails (it needs the
         // index even for exact paths): pinned divergence.
         let err = format!(
             "{:?}",
@@ -202,8 +197,8 @@ async fn native_io_failures_are_not_not_found() {
         );
         assert!(err.contains("Io"), "degraded: {err:?}");
         assert!(
-            legacy.show_note("hello_title.md", None).await.is_err(),
-            "legacy needs the index even for exact paths"
+            !oracle.show_ok("hello_title.md"),
+            "nb needs the index even for exact paths"
         );
         std::fs::set_permissions(
             &index,
@@ -232,10 +227,10 @@ async fn native_io_failures_are_not_not_found() {
                 .expect_err("unreadable note must fail")
         );
         assert!(err.contains("Io"), "unreadable note degraded: {err:?}");
-        // Paired oracle: legacy also fails on the unreadable note.
+        // Paired oracle: `nb` also fails on the unreadable note.
         assert!(
-            legacy.show_note("hello_title.md", None).await.is_err(),
-            "legacy must not resolve an unreadable note"
+            !oracle.show_ok("hello_title.md"),
+            "nb must not resolve an unreadable note"
         );
     })
     .await;
@@ -256,8 +251,8 @@ async fn native_reads_stay_consistent_under_contention() {
     // Seed via transactions only (no untracked files): the
     // concurrent commits below require a committable tree.
     with_isolated_env(&env, false, || async {
-        let legacy = NbClient::new(&config_for(&env, false)).expect("legacy");
-        let mut tx = legacy.transaction(None).await.expect("tx");
+        let native = NbClient::new(&config_for(&env)).expect("native");
+        let mut tx = native.transaction(None).await.expect("tx");
         tx.add_note("victim.md", Some("Victim"), "v0\n", &[])
             .unwrap();
         tx.commit().await.expect("seed");
@@ -287,7 +282,7 @@ async fn native_reads_stay_consistent_under_contention() {
     const VERSIONS: u32 = 12;
     const READERS: usize = 3;
     const READS: u32 = 40;
-    let native = NbClient::new(&config_for(&env, true)).expect("native");
+    let native = NbClient::new(&config_for(&env)).expect("native");
     // Barrier: readers and writer start together so reads genuinely
     // race the mapping churn. Numeric ids are excluded: delete plus
     // recreate legitimately retires slot numbers, so only path and
@@ -363,16 +358,15 @@ async fn native_reads_stay_consistent_under_contention() {
 }
 
 /// Indexed invalid-UTF8 notes fail as `NonUtf8` carrying the
-/// requested selector on both modes: only successful payloads are
-/// canonically renumbered. Covers path and numeric-selector targets.
+/// requested selector: only successful payloads are canonically
+/// renumbered. Covers path and numeric-selector targets.
 #[tokio::test]
 async fn native_non_utf8_keeps_requested_selector() {
     let env = NbTestEnv::new().expect("fixture");
     with_isolated_env(&env, false, || async {
-        let legacy = NbClient::new(&config_for(&env, false)).expect("legacy");
-        let native = NbClient::new(&config_for(&env, true)).expect("native");
+        let native = NbClient::new(&config_for(&env)).expect("native");
         let root = env.nb_dir().join(env.notebook());
-        let mut tx = legacy.transaction(None).await.expect("tx");
+        let mut tx = native.transaction(None).await.expect("tx");
         tx.add_note("bad.md", Some("Bad"), "ok\n", &[]).unwrap();
         tx.commit().await.expect("seed");
         std::fs::write(root.join("bad.md"), b"# Bad\n\xff\xfe\n")
@@ -382,23 +376,21 @@ async fn native_non_utf8_keeps_requested_selector() {
             (NoteTarget::path("bad.md"), format!("{nb}:bad.md")),
             (NoteTarget::selector("1"), format!("{nb}:1")),
         ] {
-            for (mode, client) in [("legacy", &legacy), ("native", &native)] {
-                let err = format!(
-                    "{:?}",
-                    client
-                        .show_note_lines(target.clone(), None, None, None)
-                        .await
-                        .expect_err("invalid utf8 must fail")
-                );
-                assert!(
-                    err.contains("NonUtf8"),
-                    "{mode} {requested}: wrong variant: {err:?}"
-                );
-                assert!(
-                    err.contains(&requested),
-                    "{mode} {requested}: diagnostic lost the requested selector: {err:?}"
-                );
-            }
+            let err = format!(
+                "{:?}",
+                native
+                    .show_note_lines(target.clone(), None, None, None)
+                    .await
+                    .expect_err("invalid utf8 must fail")
+            );
+            assert!(
+                err.contains("NonUtf8"),
+                "{requested}: wrong variant: {err:?}"
+            );
+            assert!(
+                err.contains(&requested),
+                "{requested}: diagnostic lost the requested selector: {err:?}"
+            );
         }
     })
     .await;
@@ -411,7 +403,7 @@ async fn native_non_utf8_keeps_requested_selector() {
 async fn native_backslash_traversal_is_platform_scoped() {
     let env = NbTestEnv::new().expect("fixture");
     with_isolated_env(&env, false, || async {
-        let native = NbClient::new(&config_for(&env, true)).expect("native");
+        let native = NbClient::new(&config_for(&env)).expect("native");
         let root = env.nb_dir().join(env.notebook());
         let mut tx = native.transaction(None).await.expect("tx");
         tx.add_note("sub/nested.md", Some("Nested"), "body\n", &[])
@@ -454,7 +446,7 @@ async fn native_backslash_traversal_is_platform_scoped() {
 async fn native_reads_fail_closed_without_nb_dir() {
     let env = NbTestEnv::new().expect("fixture");
     with_isolated_env(&env, false, || async {
-        let native = NbClient::new(&config_for(&env, true)).expect("native");
+        let native = NbClient::new(&config_for(&env)).expect("native");
         // `with_isolated_env` already serializes process env and
         // restores it on exit; removal needs no extra guard.
         // SAFETY: restored by `with_isolated_env` on exit.

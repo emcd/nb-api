@@ -1,9 +1,8 @@
 //! Native (nb-spawn-free) read-path resolution and classification.
 //!
 //! Implements the pinned selector precedence table and nb's textual
-//! classification without spawning `nb`, for the `native_reads`
-//! feature path. All reads are side-effect-free filesystem plus
-//! `.index` scans under the notebook gate.
+//! classification without spawning `nb`. All reads are
+//! side-effect-free filesystem plus `.index` scans under the notebook gate.
 //!
 //! Classification mirrors nb 7.24.0's `_file_is_text` decision order:
 //! extension against nb's text set first (no content sniff), then the
