@@ -330,11 +330,17 @@ pub(crate) fn file_is_todo(rel: &str) -> bool {
 
 /// Document-kind routing by filename, mirroring the parser's
 /// extension dispatch (case-insensitive).
+/// Document kind by dotted filename suffix, mirroring the
+/// parser's case-insensitive dispatch: `todo.md` / `*.todo.md` are
+/// todos, `bookmark.md` / `*.bookmark.md` bookmarks, everything
+/// else notes. A bare `todo.md`-suffixed name without the dot
+/// boundary (e.g. `xtodo.md`) is a note, exactly like parsing.
 pub(crate) fn document_kind_for_rel(rel: &str) -> crate::DocumentKind {
-    let lower = rel.to_ascii_lowercase();
-    if lower.ends_with(".todo.md") || lower == "todo.md" {
+    let name = rel.rsplit('/').next().unwrap_or(rel);
+    let lower = name.to_ascii_lowercase();
+    if lower.ends_with(".todo.md") {
         crate::DocumentKind::Todo
-    } else if lower.ends_with(".bookmark.md") || lower == "bookmark.md" {
+    } else if lower.ends_with(".bookmark.md") {
         crate::DocumentKind::Bookmark
     } else {
         crate::DocumentKind::Note

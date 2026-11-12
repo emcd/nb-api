@@ -2,7 +2,7 @@
 //! collision suffixes, stable `.index` ids, and numeric selectors.
 
 use nb_api::testing::NbTestEnv;
-use nb_api::{Config, NbClient, NoteTarget};
+use nb_api::{Config, NbClient, NbError, NoteTarget};
 
 use crate::common::with_isolated_env;
 
@@ -308,26 +308,59 @@ async fn delete_kind_mismatch_directs_to_other_op() {
             .delete_folder("n.md", true, None)
             .await
             .expect_err("folder op on a note");
-        let msg = format!("{err:?}");
-        // Typed kind mismatch (commit envelopes stay PlanValidation).
-        assert!(msg.contains("wrong kind"), "{err:?}");
-        assert!(msg.contains("expected Folder"), "{err:?}");
-        assert!(msg.contains("observed Note"), "{err:?}");
+        match err {
+            NbError::WrongKind {
+                expected,
+                actual,
+                path,
+                selector,
+            } => {
+                assert_eq!(expected, nb_api::KindSet::Folder, "{selector:?}");
+                assert!(matches!(actual, nb_api::EntityKind::Note));
+                assert_eq!(path, "n.md".to_string());
+                assert_eq!(selector, format!("{}:1", env.notebook()));
+            },
+            other => panic!("expected WrongKind, got: {other:?}"),
+        }
         let err = client
             .delete_note("foo", None)
             .await
             .expect_err("note op on a folder");
-        let msg = format!("{err:?}");
-        assert!(msg.contains("wrong kind"), "{err:?}");
-        assert!(msg.contains("expected File"), "{err:?}");
-        assert!(msg.contains("observed Folder"), "{err:?}");
+        match err {
+            NbError::WrongKind {
+                expected,
+                actual,
+                path,
+                selector,
+            } => {
+                assert_eq!(expected, nb_api::KindSet::File);
+                assert!(matches!(actual, nb_api::EntityKind::Folder));
+                assert_eq!(path, "foo".to_string());
+                // Canonical identity for the folder: folders take
+                // index slots, so the numeric form wins here.
+                assert_eq!(selector, format!("{}:2", env.notebook()));
+            },
+            other => panic!("expected WrongKind, got: {other:?}"),
+        }
         let mut tx = client.transaction(None).await.expect("tx2");
         tx.move_note(NoteTarget::path("foo"), "bar/").unwrap();
         let err = tx.commit().await.expect_err("folder move");
-        let msg = format!("{err:?}");
-        assert!(msg.contains("wrong kind"), "{err:?}");
-        assert!(msg.contains("expected File"), "{err:?}");
-        assert!(msg.contains("observed Folder"), "{err:?}");
+        match err {
+            NbError::WrongKind {
+                expected,
+                actual,
+                path,
+                selector,
+            } => {
+                assert_eq!(expected, nb_api::KindSet::File);
+                assert!(matches!(actual, nb_api::EntityKind::Folder));
+                assert_eq!(path, "foo".to_string());
+                // Canonical identity for the folder: folders take
+                // index slots, so the numeric form wins here.
+                assert_eq!(selector, format!("{}:2", env.notebook()));
+            },
+            other => panic!("expected WrongKind, got: {other:?}"),
+        }
     })
     .await;
 }
@@ -461,20 +494,24 @@ async fn wrong_kind_covers_state_ops() {
         tx.commit().await.expect("seed");
 
         // mark_task_done on a Note: Todo expected, Note observed.
-        // One-shot commits envelope op errors as PlanValidation;
-        // the typed kind names survive in the message.
         let err = client
             .mark_task_done("hello_title.md", None, None)
             .await
             .expect_err("todo state on a note");
         match err {
-            NbError::PlanValidation { message, .. } => {
-                assert!(message.contains("wrong kind"), "{message:?}");
-                assert!(message.contains("expected Todo"), "{message:?}");
-                assert!(message.contains("observed Note"), "{message:?}");
-                assert!(message.contains("hello_title.md"), "{message:?}");
+            NbError::WrongKind {
+                expected,
+                actual,
+                path,
+                selector,
+            } => {
+                assert_eq!(expected, nb_api::KindSet::Todo);
+                assert!(matches!(actual, nb_api::EntityKind::Note));
+                assert_eq!(path, "hello_title.md".to_string());
+                // Canonical identity, not the raw input.
+                assert_eq!(selector, format!("{}:1", env.notebook()));
             },
-            other => panic!("expected PlanValidation, got: {other:?}"),
+            other => panic!("expected WrongKind, got: {other:?}"),
         }
     })
     .await;
@@ -524,13 +561,27 @@ async fn wrong_kind_covers_text_edits() {
             .await
             .expect_err("text edit on binary");
         match err {
-            NbError::PlanValidation { message, .. } => {
-                assert!(message.contains("wrong kind"), "{message:?}");
-                assert!(message.contains("expected Document"), "{message:?}");
-                assert!(message.contains("Other"), "{message:?}");
-                assert!(message.contains("blob.xyz"), "{message:?}");
+            NbError::WrongKind {
+                expected,
+                actual,
+                path,
+                selector,
+            } => {
+                assert_eq!(expected, nb_api::KindSet::Document);
+                assert!(
+                    matches!(actual, nb_api::EntityKind::Other { .. }),
+                    "{actual:?}"
+                );
+                assert_eq!(path, "blob.xyz".to_string());
+                // Canonical identity re-resolves to the entity
+                // (classify works on non-textual files).
+                let back =
+                    client.classify(&selector, None).await.unwrap_or_else(
+                        |e| panic!("round-trip {selector:?}: {e:?}"),
+                    );
+                assert_eq!(back.path, "blob.xyz".to_string());
             },
-            other => panic!("expected PlanValidation, got: {other:?}"),
+            other => panic!("expected WrongKind, got: {other:?}"),
         }
     })
     .await;

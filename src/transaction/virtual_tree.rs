@@ -70,13 +70,6 @@ impl VirtualTree {
         self.nodes.contains_key(path)
     }
 
-    pub(super) fn get_file(&self, path: &str) -> Option<&[u8]> {
-        match self.nodes.get(path) {
-            Some(VirtualNode::File(b)) => Some(b),
-            _ => None,
-        }
-    }
-
     pub(super) fn insert_file(&mut self, path: String, bytes: Vec<u8>) {
         // Ensure parent folders exist virtually.
         if let Some(parent) = parent_path(&path) {
@@ -249,21 +242,31 @@ pub(super) fn resolve_target_path(
         NoteTarget::Selector { value } => {
             // Pinned precedence, mirroring native reads: exact path,
             // then numeric id, then root-scope exact title. No
-            // cross-folder basename, stem, or suffix search.
+            // cross-folder basename, stem, or suffix search. The
+            // qualifier-stripped input is lexically confined first:
+            // absolute forms, drive letters, and `..` escapes are
+            // terminal `NotFound` before any lookup.
             let stripped = value
                 .rsplit_once(':')
                 .map(|(_, rest)| rest)
                 .unwrap_or(value.as_str());
-            let candidate = normalize_rel(stripped);
+            let Some(candidate) =
+                crate::native::confine(stripped).filter(|r| !r.is_empty())
+            else {
+                return Err(NbError::NotFound {
+                    selector: value.clone(),
+                });
+            };
             refuse_existing_ignored(ignored_existing, &candidate)?;
             if tree.exists(&candidate) {
                 return Ok(candidate);
             }
             // Numeric `<folder>/<id>` / `<id>` via the virtual `.index`;
-            // dead slots and vanished targets fall through to the
-            // title table instead of resolving to nothing.
+            // dead slots, nested-basename lines, and vanished targets
+            // fall through to the title table instead of resolving
+            // to nothing. Folders resolve by id like files.
             if let Some(Ok(path)) = resolve_numeric_in_tree(tree, &candidate)
-                && matches!(tree.nodes.get(&path), Some(VirtualNode::File(_)))
+                && tree.nodes.contains_key(&path)
             {
                 return Ok(path);
             }
@@ -287,10 +290,9 @@ pub(super) fn resolve_target_path(
                         None => continue,
                     };
                     let exact = title.as_str() == candidate.as_str();
-                    let checkbox =
-                        p.to_ascii_lowercase().ends_with(".todo.md")
-                            && crate::native::strip_checkbox(&title)
-                                == candidate.as_str();
+                    let checkbox = crate::native::file_is_todo(p)
+                        && crate::native::strip_checkbox(&title)
+                            == candidate.as_str();
                     if exact || checkbox {
                         titled.push(p.clone());
                     }
@@ -323,14 +325,63 @@ pub(super) fn resolve_target_path(
                         selector: value.clone(),
                     })
                 },
-                _ => Err(NbError::ValidationError {
-                    reason: format!(
-                        "selector `{value}` is ambiguous across multiple paths"
-                    ),
-                    location: None,
+                _ => Err(NbError::NotFound {
+                    selector: value.clone(),
                 }),
             }
         },
+    }
+}
+
+/// Canonical selector for a resolved virtual path: the numeric
+/// `<folder>/<id>` form only when re-resolving it in this tree
+/// yields the same entity, else the exact-path form. Mirrors the
+/// native shadow-aware rule without touching disk.
+pub(super) fn canonical_selector_virtual(
+    notebook: &str,
+    tree: &VirtualTree,
+    rel: &str,
+) -> String {
+    let exact = format!("{notebook}:{rel}");
+    let (folder, basename) = match rel.rfind('/') {
+        Some(i) => (rel[..i].to_string(), rel[i + 1..].to_string()),
+        None => (String::new(), rel.to_string()),
+    };
+    if folder.is_empty() && basename.is_empty() {
+        return exact;
+    }
+    let index_key = if folder.is_empty() {
+        ".index".to_string()
+    } else {
+        format!("{folder}/.index")
+    };
+    let lines = match tree.nodes.get(&index_key) {
+        Some(VirtualNode::File(bytes)) => {
+            let text = String::from_utf8_lossy(bytes);
+            let mut lines: Vec<&str> = text.split('\n').collect();
+            if text.ends_with('\n') {
+                lines.pop();
+            }
+            lines.into_iter().map(|l| l.to_string()).collect::<Vec<_>>()
+        },
+        _ => return exact,
+    };
+    let Some(pos) = lines.iter().position(|l| l == &basename) else {
+        return exact;
+    };
+    let candidate = if folder.is_empty() {
+        (pos + 1).to_string()
+    } else {
+        format!("{folder}/{}", pos + 1)
+    };
+    // Round-trip through the pinned table: a shadowing literal
+    // entry (step 0) or a dead slot (step 1) falls back to exact.
+    if tree.nodes.contains_key(&candidate) {
+        return exact;
+    }
+    match resolve_numeric_in_tree(tree, &candidate) {
+        Some(Ok(back)) if back == rel => format!("{notebook}:{candidate}"),
+        _ => exact,
     }
 }
 
@@ -366,7 +417,11 @@ fn resolve_numeric_in_tree(
     };
     let lines = parse_index_lines(&bytes);
     match lines.get(id - 1) {
-        Some(name) if !name.trim().is_empty() => {
+        Some(name)
+            if !name.trim().is_empty()
+                && !name.contains('/')
+                && !name.contains('\\') =>
+        {
             let path = if folder.is_empty() {
                 name.clone()
             } else {

@@ -399,6 +399,7 @@ pub(super) fn annotate_plan_index(err: NbError, index: u32) -> NbError {
         | NbError::FragmentedBody { .. }
         | NbError::EmptySubstringPattern
         | NbError::NotFound { .. }
+        | NbError::WrongKind { .. }
         | NbError::UnsupportedStructure { .. } => err,
         NbError::PlanValidation {
             kind,

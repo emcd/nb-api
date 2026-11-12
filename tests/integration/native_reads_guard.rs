@@ -5,7 +5,9 @@ use nb_api::testing::NbTestEnv;
 use nb_api::{Config, NbClient, NoteTarget};
 
 use crate::common::with_isolated_env;
-use crate::native_reads_support::{NbOracle, config_for, quiesce, seed};
+use crate::native_reads_support::{
+    NbOracle, config_for, git_commit_all, quiesce, seed,
+};
 
 /// Shadowed numeric ids fall back to the exact-path selector: when
 /// a literal file occupies the numeric form, emitting `nb:<id>`
@@ -678,4 +680,89 @@ async fn native_write_oneshots_spawn_no_nb() {
         "write one-shot path spawned nb: {:?}",
         std::fs::read_to_string(&log).unwrap_or_default()
     );
+}
+
+/// One-shot write resolution follows the pinned table with no `nb`
+/// spawn: absolute and escaping inputs fail closed, dead numeric
+/// slots fall through to titles, and duplicates stay ambiguous.
+#[tokio::test]
+async fn native_oneshot_resolution_matches_native_table() {
+    let env = NbTestEnv::new().expect("fixture");
+    with_isolated_env(&env, false, || async {
+        let native = NbClient::new(&config_for(&env)).expect("native");
+        let root = env.nb_dir().join(env.notebook());
+        seed(&native, &root).await;
+        // Commit the raw seed files so later transactional commits
+        // meet a clean tree instead of racing background `nb`.
+        git_commit_all(&root, "seed");
+
+        // Numeric ids resolve through the virtual index.
+        let mut tx = native.transaction(None).await.expect("tx");
+        tx.delete_note(NoteTarget::selector("work/1")).unwrap();
+        tx.commit().await.expect("delete by folder id");
+        assert!(!root.join("work/a.md").exists(), "slot work/1 deleted");
+
+        // Dead slots fall through to the title table.
+        let mut text =
+            std::fs::read_to_string(root.join(".index")).expect("index");
+        if !text.ends_with('\n') {
+            text.push('\n');
+        }
+        text.push_str("missing.md\n");
+        std::fs::write(root.join(".index"), text).expect("craft slot");
+        let slot = std::fs::read_to_string(root.join(".index"))
+            .expect("read index")
+            .lines()
+            .count()
+            .to_string();
+        std::fs::write(root.join("seven.md"), format!("# {slot}\nseven\n"))
+            .expect("seven");
+        // Commit the craft so the deleting one-shot meets a clean
+        // tree instead of racing background `nb`.
+        git_commit_all(&root, "craft slot");
+        // Dead slots fall through to the title table, mirroring
+        // reads: the titled file resolves and is deleted.
+        native
+            .delete_note(&slot, None)
+            .await
+            .expect("dead slot falls through to title");
+        assert!(!root.join("seven.md").exists(), "titled file deleted");
+        // Absolute and escaping inputs fail closed.
+        for evil in ["/evil.md", "../evil.md", "work/../../evil.md"] {
+            let err = format!(
+                "{:?}",
+                native
+                    .delete_note(evil, None)
+                    .await
+                    .expect_err("escape must fail")
+            );
+            assert!(err.contains("NotFound"), "{evil}: {err:?}");
+        }
+    })
+    .await;
+}
+
+/// Ambiguous duplicates stay missing on write paths, matching
+/// reads: no silent first-match resolution.
+#[tokio::test]
+async fn native_oneshot_duplicates_are_not_found() {
+    let env = NbTestEnv::new().expect("fixture");
+    with_isolated_env(&env, false, || async {
+        let native = NbClient::new(&config_for(&env)).expect("native");
+        let root = env.nb_dir().join(env.notebook());
+        seed(&native, &root).await;
+        std::fs::write(root.join("dup1.md"), "# Dup\none\n").expect("dup1");
+        std::fs::write(root.join("dup2.md"), "# Dup\ntwo\n").expect("dup2");
+        // Commit raw fixtures so the transactional delete meets a
+        // clean tree instead of racing background `nb`.
+        git_commit_all(&root, "dups");
+
+        let mut tx = native.transaction(None).await.expect("tx");
+        tx.delete_note(NoteTarget::selector("Dup")).unwrap();
+        let err = format!("{:?}", tx.commit().await.expect_err("ambiguous"));
+        assert!(err.contains("NotFound"), "{err:?}");
+        assert!(root.join("dup1.md").exists(), "no silent delete");
+        assert!(root.join("dup2.md").exists(), "no silent delete");
+    })
+    .await;
 }

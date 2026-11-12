@@ -68,10 +68,16 @@ async fn subcommand_colliding_folders_resolve_directly() {
             .delete_note("todos", None)
             .await
             .expect_err("note op on colliding folder");
-        let msg = format!("{err:?}");
-        assert!(msg.contains("wrong kind"), "{err:?}");
-        assert!(msg.contains("expected File"), "{err:?}");
-        assert!(msg.contains("observed Folder"), "{err:?}");
+        match err {
+            nb_api::NbError::WrongKind {
+                expected, actual, path, ..
+            } => {
+                assert_eq!(expected, nb_api::KindSet::File);
+                assert!(matches!(actual, nb_api::EntityKind::Folder));
+                assert_eq!(path, "todos".to_string());
+            },
+            other => panic!("expected WrongKind, got: {other:?}"),
+        }
     })
     .await;
 }

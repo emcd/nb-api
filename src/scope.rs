@@ -96,7 +96,12 @@ fn scope_entries(
             path: path.clone(),
             source: e.into(),
         })?;
-        if file_type.is_symlink() || file_type.is_file() != files {
+        let wanted = if files {
+            file_type.is_file()
+        } else {
+            file_type.is_dir()
+        };
+        if file_type.is_symlink() || !wanted {
             continue;
         }
         let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
@@ -142,7 +147,11 @@ pub(crate) fn scope_files_recursive(
                 path: path.clone(),
                 source: e.into(),
             })?;
-            if file_type.is_symlink() {
+            // Symlinks are never followed; special files are never
+            // emitted (a later read must not block on a fifo).
+            if file_type.is_symlink()
+                || (!file_type.is_dir() && !file_type.is_file())
+            {
                 continue;
             }
             let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
@@ -179,6 +188,7 @@ pub(crate) fn scope_files_recursive(
     };
     let mut out = Vec::new();
     walk(&abs, &scope_rel, &mut out)?;
+    out.sort();
     Ok(out)
 }
 

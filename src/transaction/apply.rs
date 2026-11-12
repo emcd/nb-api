@@ -187,7 +187,9 @@ pub(super) fn validate_and_apply_virtual(
                 return Err(NbError::WrongKind {
                     expected: crate::KindSet::File,
                     actual: crate::EntityKind::Folder,
-                    selector: target.value().to_string(),
+                    selector: super::virtual_tree::canonical_selector_virtual(
+                        notebook, tree, &path,
+                    ),
                     path: path.clone(),
                 });
             }
@@ -226,7 +228,9 @@ pub(super) fn validate_and_apply_virtual(
                 return Err(NbError::WrongKind {
                     expected: crate::KindSet::Folder,
                     actual,
-                    selector: target.value().to_string(),
+                    selector: super::virtual_tree::canonical_selector_virtual(
+                        notebook, tree, &path,
+                    ),
                     path: path.clone(),
                 });
             }
@@ -315,7 +319,9 @@ pub(super) fn validate_and_apply_virtual(
                 return Err(NbError::WrongKind {
                     expected: crate::KindSet::File,
                     actual: crate::EntityKind::Folder,
-                    selector: target.value().to_string(),
+                    selector: super::virtual_tree::canonical_selector_virtual(
+                        notebook, tree, &from,
+                    ),
                     path: from.clone(),
                 });
             }
@@ -358,19 +364,18 @@ pub(super) fn validate_and_apply_virtual(
             task_number,
         } => {
             let path = resolve_target_path(tree, ignored_existing, target)?;
-            let bytes = tree
-                .get_file(&path)
-                .ok_or_else(|| NbError::NotFound {
-                    selector: target.value().to_string(),
-                })?
-                .to_vec();
-            let new_bytes = set_todo_state(
-                &bytes,
+            let bytes = gated_file_bytes(
+                tree,
+                notebook,
+                target,
                 &path,
-                target.value(),
-                true,
-                *task_number,
+                crate::KindSet::Todo,
             )?;
+            let canonical = super::virtual_tree::canonical_selector_virtual(
+                notebook, tree, &path,
+            );
+            let new_bytes =
+                set_todo_state(&bytes, &path, &canonical, true, *task_number)?;
             let noop = new_bytes == bytes;
             let fp = fingerprint_bytes(&new_bytes, &path)?;
             tree.insert_file(path.clone(), new_bytes);
@@ -388,16 +393,20 @@ pub(super) fn validate_and_apply_virtual(
             task_number,
         } => {
             let path = resolve_target_path(tree, ignored_existing, target)?;
-            let bytes = tree
-                .get_file(&path)
-                .ok_or_else(|| NbError::NotFound {
-                    selector: target.value().to_string(),
-                })?
-                .to_vec();
+            let bytes = gated_file_bytes(
+                tree,
+                notebook,
+                target,
+                &path,
+                crate::KindSet::Todo,
+            )?;
+            let canonical = super::virtual_tree::canonical_selector_virtual(
+                notebook, tree, &path,
+            );
             let new_bytes = set_todo_state(
                 &bytes,
                 &path,
-                target.value(),
+                &canonical,
                 false,
                 *task_number,
             )?;
@@ -419,13 +428,13 @@ pub(super) fn validate_and_apply_virtual(
             fingerprint: expected,
         } => {
             let path = resolve_target_path(tree, ignored_existing, target)?;
-            let bytes = tree
-                .get_file(&path)
-                .ok_or_else(|| NbError::NotFound {
-                    selector: target.value().to_string(),
-                })?
-                .to_vec();
-            require_document(&bytes, &path, target)?;
+            let bytes = gated_file_bytes(
+                tree,
+                notebook,
+                target,
+                &path,
+                crate::KindSet::Document,
+            )?;
             let doc = parse_doc(&bytes, &path)?;
             // Contiguity before fingerprint so fragmented bodies always surface
             // FragmentedBody even with a stale fingerprint.
@@ -461,13 +470,13 @@ pub(super) fn validate_and_apply_virtual(
             fingerprint: expected,
         } => {
             let path = resolve_target_path(tree, ignored_existing, target)?;
-            let bytes = tree
-                .get_file(&path)
-                .ok_or_else(|| NbError::NotFound {
-                    selector: target.value().to_string(),
-                })?
-                .to_vec();
-            require_document(&bytes, &path, target)?;
+            let bytes = gated_file_bytes(
+                tree,
+                notebook,
+                target,
+                &path,
+                crate::KindSet::Document,
+            )?;
             let doc = parse_doc(&bytes, &path)?;
             let body = require_contiguous_body(&doc)?;
             if let Some(exp) = expected {
@@ -501,13 +510,13 @@ pub(super) fn validate_and_apply_virtual(
         },
         PlanOp::EditNoteLines { target, edits } => {
             let path = resolve_target_path(tree, ignored_existing, target)?;
-            let bytes = tree
-                .get_file(&path)
-                .ok_or_else(|| NbError::NotFound {
-                    selector: target.value().to_string(),
-                })?
-                .to_vec();
-            require_document(&bytes, &path, target)?;
+            let bytes = gated_file_bytes(
+                tree,
+                notebook,
+                target,
+                &path,
+                crate::KindSet::Document,
+            )?;
             let doc = parse_doc(&bytes, &path)?;
             let body = require_contiguous_body(&doc)?;
             let new_body = apply_line_edits(&body, edits)?;
@@ -526,13 +535,13 @@ pub(super) fn validate_and_apply_virtual(
         },
         PlanOp::RetitleNote { target, title } => {
             let path = resolve_target_path(tree, ignored_existing, target)?;
-            let bytes = tree
-                .get_file(&path)
-                .ok_or_else(|| NbError::NotFound {
-                    selector: target.value().to_string(),
-                })?
-                .to_vec();
-            require_document(&bytes, &path, target)?;
+            let bytes = gated_file_bytes(
+                tree,
+                notebook,
+                target,
+                &path,
+                crate::KindSet::Document,
+            )?;
             let doc = parse_doc(&bytes, &path)?;
             let mut title_line = title.clone();
             if !title_line.starts_with('#') {
@@ -557,13 +566,13 @@ pub(super) fn validate_and_apply_virtual(
             remove,
         } => {
             let path = resolve_target_path(tree, ignored_existing, target)?;
-            let bytes = tree
-                .get_file(&path)
-                .ok_or_else(|| NbError::NotFound {
-                    selector: target.value().to_string(),
-                })?
-                .to_vec();
-            require_document(&bytes, &path, target)?;
+            let bytes = gated_file_bytes(
+                tree,
+                notebook,
+                target,
+                &path,
+                crate::KindSet::Document,
+            )?;
             let doc = parse_doc(&bytes, &path)?;
             let new_bytes = apply_tag_edit(&doc, &path, add, remove)?;
             let fp = fingerprint_bytes(&new_bytes, &path)?;
@@ -581,23 +590,49 @@ pub(super) fn validate_and_apply_virtual(
     }
 }
 
-/// Require a document entity for text edits: non-textual files
-/// fail with a typed `WrongKind` instead of being mangled or
-/// producing a string-matched error.
-fn require_document(
-    bytes: &[u8],
-    path: &str,
+/// Existence, then kind, then content: fetch file bytes for an op
+/// that requires `expected`, refusing missing paths with
+/// `NotFound` and kind mismatches with typed `WrongKind` carrying
+/// the canonical virtual selector. Except for the `File` class,
+/// non-textual content also fails, so state and text ops never run
+/// on bytes `nb` would not read as text.
+fn gated_file_bytes(
+    tree: &VirtualTree,
+    notebook: &str,
     target: &NoteTarget,
-) -> Result<(), NbError> {
-    match crate::native::classify_bytes(path, bytes) {
-        crate::native::NativeClass::Text => Ok(()),
-        class => Err(NbError::WrongKind {
-            expected: crate::KindSet::Document,
-            actual: crate::native::entity_kind_for_rel(path, &class),
-            selector: target.value().to_string(),
-            path: path.to_string(),
-        }),
+    path: &str,
+    expected: crate::KindSet,
+) -> Result<Vec<u8>, NbError> {
+    let canonical =
+        super::virtual_tree::canonical_selector_virtual(notebook, tree, path);
+    let bytes = match tree.nodes.get(path) {
+        None => {
+            return Err(NbError::NotFound {
+                selector: target.value().to_string(),
+            });
+        },
+        Some(VirtualNode::Folder) => {
+            return Err(NbError::WrongKind {
+                expected,
+                actual: crate::EntityKind::Folder,
+                selector: canonical,
+                path: path.to_string(),
+            });
+        },
+        Some(VirtualNode::File(bytes)) => bytes.clone(),
+    };
+    if expected != crate::KindSet::File {
+        let class = crate::native::classify_bytes(path, &bytes);
+        if !matches!(class, crate::native::NativeClass::Text) {
+            return Err(NbError::WrongKind {
+                expected,
+                actual: crate::native::entity_kind_for_rel(path, &class),
+                selector: canonical,
+                path: path.to_string(),
+            });
+        }
     }
+    Ok(bytes)
 }
 
 fn parse_doc(bytes: &[u8], path: &str) -> Result<NoteDocument, NbError> {

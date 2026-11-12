@@ -144,9 +144,13 @@ impl NbClient {
         if stripped.is_empty() {
             return Ok(NoteTarget::path(stripped));
         }
-        let direct = root.join(stripped);
-        if direct.is_file() || direct.is_dir() {
-            return Ok(NoteTarget::path(stripped));
+        // Lexically confined exact hit first (symlinks never
+        // followed); anything else goes through the pinned table
+        // inside one gate hold.
+        match crate::native::resolve_exact(&root, stripped) {
+            Ok(rel) => return Ok(NoteTarget::path(rel)),
+            Err(NbError::NotFound { .. }) => {},
+            Err(other) => return Err(other),
         }
         self.with_notebook_gate_native(&root, async {
             let rel = crate::native::resolve_selector(&root, stripped)
@@ -361,10 +365,9 @@ impl NbClient {
         validate_folder_option(folder)?;
         let notebook = self.resolve_notebook_name(notebook)?;
         let root = self.native_notebook_root(&notebook).await?;
-        let scope = folder
-            .map(|f| f.trim_matches('/').to_string())
-            .filter(|f| !f.is_empty())
-            .unwrap_or_default();
+        // Leading slashes are NOT trimmed: absolute forms
+        // fail closed as NotFound inside confinement.
+        let scope = folder.unwrap_or_default().to_string();
         let want_closed = status.map(|s| matches!(s, TaskStatus::Closed));
         self.with_notebook_gate_native(&root, async {
             let rels = if recursive {
@@ -415,7 +418,7 @@ impl NbClient {
     pub async fn list_todos(
         &self,
         folder: Option<&str>,
-        state: Option<TaskStatus>,
+        state: Option<crate::TodoState>,
         recursive: bool,
         notebook: Option<&str>,
     ) -> Result<Vec<crate::TodoSummary>, NbError> {
@@ -424,10 +427,9 @@ impl NbClient {
         validate_folder_option(folder)?;
         let notebook = self.resolve_notebook_name(notebook)?;
         let root = self.native_notebook_root(&notebook).await?;
-        let scope = folder
-            .map(|f| f.trim_matches('/').to_string())
-            .filter(|f| !f.is_empty())
-            .unwrap_or_default();
+        // Leading slashes are NOT trimmed: absolute forms
+        // fail closed as NotFound inside confinement.
+        let scope = folder.unwrap_or_default().to_string();
         self.with_notebook_gate_native(&root, async {
             let rels = if recursive {
                 crate::scope::scope_files_recursive(&root, &scope)?
@@ -449,39 +451,46 @@ impl NbClient {
                 let items = crate::scope::todo_items(&bytes);
                 let completed = items.iter().filter(|&&c| c).count() as u32;
                 let total = items.len() as u32;
-                let file_state = if total > 0 && completed == total {
-                    crate::TodoState::Done
-                } else {
-                    crate::TodoState::Open
-                };
-                let is_open = file_state == crate::TodoState::Open;
-                match state {
-                    Some(TaskStatus::Closed) if is_open => continue,
-                    Some(TaskStatus::Open) if !is_open => continue,
-                    _ => {},
-                }
-                let title =
+                let doc =
                     parse(&bytes, ParseContext::FromPath(rel.clone().into()))
-                        .ok()
-                        .and_then(|doc| {
-                            doc.title().map(|t| {
-                                let s = String::from_utf8_lossy(t);
-                                let s = s
-                                    .trim_end_matches('\n')
-                                    .trim_start_matches('#')
-                                    .trim();
-                                let s = s
-                                    .strip_prefix("[ ]")
-                                    .or_else(|| s.strip_prefix("[x]"))
-                                    .or_else(|| s.strip_prefix("[X]"))
-                                    .unwrap_or(s);
-                                s.trim().to_string()
-                            })
+                        .ok();
+                // Explicit container state wins: a checked title
+                // decides even when the counts disagree. Without a
+                // title checkbox, all-checked (non-empty) is Done.
+                let file_state =
+                    match doc.as_ref().and_then(|d| d.todo_state()) {
+                        Some(explicit) => explicit,
+                        None if total > 0 && completed == total => {
+                            crate::TodoState::Done
+                        },
+                        None => crate::TodoState::Open,
+                    };
+                if let Some(want) = state
+                    && want != file_state
+                {
+                    continue;
+                }
+                let title = doc
+                    .as_ref()
+                    .and_then(|doc| {
+                        doc.title().map(|t| {
+                            let s = String::from_utf8_lossy(t);
+                            let s = s
+                                .trim_end_matches('\n')
+                                .trim_start_matches('#')
+                                .trim();
+                            let s = s
+                                .strip_prefix("[ ]")
+                                .or_else(|| s.strip_prefix("[x]"))
+                                .or_else(|| s.strip_prefix("[X]"))
+                                .unwrap_or(s);
+                            s.trim().to_string()
                         })
-                        .filter(|t| !t.is_empty())
-                        .unwrap_or_else(|| {
-                            rel.rsplit('/').next().unwrap_or(&rel).to_string()
-                        });
+                    })
+                    .filter(|t| !t.is_empty())
+                    .unwrap_or_else(|| {
+                        rel.rsplit('/').next().unwrap_or(&rel).to_string()
+                    });
                 let file = self.list_entry_for(&notebook, &root, &rel).await?;
                 out.push(crate::TodoSummary {
                     id: file.selector,
@@ -593,10 +602,9 @@ impl NbClient {
         validate_folder_option(parent)?;
         let notebook = self.resolve_notebook_name(notebook)?;
         let root = self.native_notebook_root(&notebook).await?;
-        let scope = parent
-            .map(|f| f.trim_matches('/').to_string())
-            .filter(|f| !f.is_empty())
-            .unwrap_or_default();
+        // Leading slashes are NOT trimmed: absolute forms
+        // fail closed as NotFound inside confinement.
+        let scope = parent.unwrap_or_default().to_string();
         self.with_notebook_gate_native(&root, async {
             let mut out = Vec::new();
             for rel in crate::scope::scope_dirs(&root, &scope)? {

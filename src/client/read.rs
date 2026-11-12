@@ -651,10 +651,9 @@ impl NbClient {
         }
         let notebook = self.resolve_notebook_name(notebook)?;
         let root = self.native_notebook_root(&notebook).await?;
-        let scope = folder
-            .map(|f| f.trim_matches('/').to_string())
-            .filter(|f| !f.is_empty())
-            .unwrap_or_default();
+        // Leading slashes are NOT trimmed: absolute forms
+        // fail closed as NotFound inside confinement.
+        let scope = folder.unwrap_or_default().to_string();
         let lowered: Vec<String> =
             queries.iter().map(|q| q.to_lowercase()).collect();
         self.with_notebook_gate_native(&root, async {
@@ -773,10 +772,9 @@ impl NbClient {
         validate_folder_option(folder)?;
         let notebook = self.resolve_notebook_name(notebook)?;
         let root = self.native_notebook_root(&notebook).await?;
-        let scope = folder
-            .map(|f| f.trim_matches('/').to_string())
-            .filter(|f| !f.is_empty())
-            .unwrap_or_default();
+        // Leading slashes are NOT trimmed: absolute forms
+        // fail closed as NotFound inside confinement.
+        let scope = folder.unwrap_or_default().to_string();
         self.with_notebook_gate_native(&root, async {
             let mut out = Vec::new();
             for rel in crate::scope::scope_files(&root, &scope)? {

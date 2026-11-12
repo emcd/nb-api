@@ -232,6 +232,47 @@ pub(crate) fn quiesce(root: &std::path::Path) -> Vec<(String, u64)> {
     panic!("quiesce: tree would not settle, last error: {last_err:?}");
 }
 
+/// Commit every worktree file via git so later transactional
+/// commits meet a clean tree. Raw fixture files are untracked
+/// noise to the DirtyBaseline guard; background `nb` would
+/// eventually checkpoint them, but racing its cadence is flaky.
+/// Deterministic commit wins every time. A no-op tree (nothing to
+/// commit) is fine.
+pub(crate) fn git_commit_all(root: &std::path::Path, message: &str) {
+    let add = std::process::Command::new("git")
+        .current_dir(root)
+        .args(["add", "-A"])
+        .status()
+        .expect("git add runs");
+    assert!(add.success(), "git add must succeed");
+    let commit = std::process::Command::new("git")
+        .current_dir(root)
+        .args([
+            "-c",
+            "user.name=nb-api-test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "--quiet",
+            "-m",
+            message,
+        ])
+        .status()
+        .expect("git commit runs");
+    if !commit.success() {
+        // No-op commit: only acceptable on a clean tree.
+        let status = std::process::Command::new("git")
+            .current_dir(root)
+            .args(["status", "--porcelain"])
+            .output()
+            .expect("git status runs");
+        assert!(
+            status.stdout.is_empty(),
+            "uncommitted changes remain after git-commit-all"
+        );
+    }
+}
+
 /// Seed the corpus; returns numeric ids in seed order:
 /// hello, work note, todo, bookmark (folder `todos` unnumbered here).
 /// Raw files below are written straight to disk (no `.index`

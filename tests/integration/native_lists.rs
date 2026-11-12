@@ -406,7 +406,7 @@ async fn native_task_surfaces_enumerate_todos() {
 
         // State filters: nothing is Done in the seed corpus.
         let done = native
-            .list_todos(None, Some(TaskStatus::Closed), true, None)
+            .list_todos(None, Some(nb_api::TodoState::Done), true, None)
             .await
             .expect("done filter");
         assert!(done.is_empty(), "{done:?}");
@@ -512,6 +512,203 @@ async fn native_read_side_audit_pins_edge_posture() {
                 "non-UTF8 names must not surface"
             );
         }
+    })
+    .await;
+}
+
+/// Explicit container state wins over counts: a checked title is
+/// Done even with no items; an unchecked title with all items
+/// checked stays Open. No-checkbox files fall back to counts.
+#[tokio::test]
+async fn native_todo_state_prefers_explicit_checkbox() {
+    use nb_api::{TodoState, TodoSummary};
+
+    let env = NbTestEnv::new().expect("fixture");
+    with_isolated_env(&env, false, || async {
+        let native = NbClient::new(&config_for(&env)).expect("native");
+        let root = env.nb_dir().join(env.notebook());
+        let mut tx = native.transaction(None).await.expect("tx");
+        tx.add_note("open_empty.md", Some("Open Empty"), "body\n", &[])
+            .unwrap();
+        tx.commit().await.expect("seed");
+        // Raw todo files: header-Done with no items, header-Open
+        // with all items checked, no-checkbox variants.
+        std::fs::write(root.join("done_empty.todo.md"), "# [x] Done\n")
+            .expect("done empty");
+        std::fs::write(
+            root.join("open_checked.todo.md"),
+            "# [ ] Open\n\n- [x] one\n- [x] two\n",
+        )
+        .expect("open checked");
+        std::fs::write(
+            root.join("plain_checked.todo.md"),
+            "# Plain\n\n- [x] one\n",
+        )
+        .expect("plain checked");
+        std::fs::write(
+            root.join("plain_open.todo.md"),
+            "# Plain\n\n- [ ] one\n",
+        )
+        .expect("plain open");
+
+        let todos = native
+            .list_todos(None, None, false, None)
+            .await
+            .expect("todos");
+        let by_path =
+            |p: &str| todos.iter().find(|t| t.path == p).unwrap().clone();
+        let done_empty: TodoSummary = by_path("done_empty.todo.md");
+        assert_eq!(done_empty.state, TodoState::Done, "{done_empty:?}");
+        assert_eq!(done_empty.task_count, 0);
+        let open_checked: TodoSummary = by_path("open_checked.todo.md");
+        assert_eq!(open_checked.state, TodoState::Open, "{open_checked:?}");
+        assert_eq!(open_checked.completed_count, 2);
+        let plain_checked: TodoSummary = by_path("plain_checked.todo.md");
+        assert_eq!(plain_checked.state, TodoState::Done, "{plain_checked:?}");
+        let plain_open: TodoSummary = by_path("plain_open.todo.md");
+        assert_eq!(plain_open.state, TodoState::Open, "{plain_open:?}");
+
+        // TodoState filters select by derived-or-explicit state.
+        let done_only = native
+            .list_todos(None, Some(TodoState::Done), false, None)
+            .await
+            .expect("done filter");
+        assert!(
+            done_only.iter().all(|t| t.state == TodoState::Done),
+            "{done_only:?}"
+        );
+        assert!(
+            done_only.iter().any(|t| t.path == "done_empty.todo.md"),
+            "{done_only:?}"
+        );
+        let open_only = native
+            .list_todos(None, Some(TodoState::Open), false, None)
+            .await
+            .expect("open filter");
+        assert!(
+            open_only.iter().all(|t| t.state == TodoState::Open),
+            "{open_only:?}"
+        );
+    })
+    .await;
+}
+
+/// Special filesystem entries never appear in listings and never
+/// hang reads: fifos, sockets, and devices are skipped like
+/// symlinks (Unix-only: needs `mkfifo`).
+#[cfg(unix)]
+#[tokio::test]
+async fn native_listings_skip_special_files() {
+    let env = NbTestEnv::new().expect("fixture");
+    with_isolated_env(&env, false, || async {
+        let native = NbClient::new(&config_for(&env)).expect("native");
+        let root = env.nb_dir().join(env.notebook());
+        seed(&native, &root).await;
+        let mk = std::process::Command::new("mkfifo")
+            .arg(root.join("pipe.xyz"))
+            .status()
+            .expect("mkfifo runs");
+        assert!(mk.success(), "mkfifo must succeed");
+        // A blocking open would hang the suite under the gate;
+        // the listing must skip the fifo instead.
+        let listed = native
+            .list_notes_typed(None, &[], None, None)
+            .await
+            .expect("listing skips fifo");
+        assert!(
+            listed.iter().all(|e| e.path != "pipe.xyz"),
+            "fifo must not be listed"
+        );
+        let search = native
+            .search_notes_typed(
+                &["body".to_string()],
+                nb_api::SearchMode::Any,
+                &[],
+                None,
+                None,
+            )
+            .await
+            .expect("search skips fifo");
+        assert!(
+            search.iter().all(|e| e.path != "pipe.xyz"),
+            "fifo must not be searched"
+        );
+    })
+    .await;
+}
+
+/// Dotted-boundary document kinds: `todo.md` bare is a Note, while
+/// `*.todo.md` is a Todo, mirroring the parser dispatch.
+#[tokio::test]
+async fn native_document_kind_matches_parser_dispatch() {
+    use nb_api::EntityKind;
+
+    let env = NbTestEnv::new().expect("fixture");
+    with_isolated_env(&env, false, || async {
+        let native = NbClient::new(&config_for(&env)).expect("native");
+        let root = env.nb_dir().join(env.notebook());
+        seed(&native, &root).await;
+        std::fs::write(root.join("todo.md"), "# Todo\nbody\n").expect("todo");
+        std::fs::write(root.join("x.todo.md"), "# X Todo\nbody\n")
+            .expect("x todo");
+
+        // Bare `todo.md` is a Note (no dotted suffix), dotted is Todo.
+        let bare = native.classify("todo.md", None).await.expect("bare");
+        assert_eq!(bare.kind, EntityKind::Note, "{bare:?}");
+        let dotted = native.classify("x.todo.md", None).await.expect("dotted");
+        assert_eq!(dotted.kind, EntityKind::Todo, "{dotted:?}");
+    })
+    .await;
+}
+
+/// Leading-slash scopes fail closed instead of retargeting.
+#[tokio::test]
+async fn native_leading_slash_scopes_are_not_found() {
+    let env = NbTestEnv::new().expect("fixture");
+    with_isolated_env(&env, false, || async {
+        let native = NbClient::new(&config_for(&env)).expect("native");
+        let root = env.nb_dir().join(env.notebook());
+        seed(&native, &root).await;
+        for scope in ["/work", "/"] {
+            let err = format!(
+                "{:?}",
+                native
+                    .list_notes_typed(Some(scope), &[], None, None)
+                    .await
+                    .expect_err("absolute scope must fail")
+            );
+            assert!(err.contains("NotFound"), "{scope}: {err:?}");
+        }
+    })
+    .await;
+}
+
+/// Nested-basename index lines are dead slots in the virtual tree:
+/// a crafted `sub/evil.md` entry never resolves through the
+/// folder table.
+#[tokio::test]
+async fn native_virtual_index_rejects_nested_basenames() {
+    use nb_api::NoteTarget;
+
+    let env = NbTestEnv::new().expect("fixture");
+    with_isolated_env(&env, false, || async {
+        let native = NbClient::new(&config_for(&env)).expect("native");
+        let root = env.nb_dir().join(env.notebook());
+        seed(&native, &root).await;
+        let index = root.join(".index");
+        let mut text = std::fs::read_to_string(&index).expect("index");
+        if !text.ends_with('\n') {
+            text.push('\n');
+        }
+        text.push_str("sub/evil.md\n");
+        std::fs::write(&index, &text).expect("craft nested");
+        crate::native_reads_support::git_commit_all(&root, "craft nested");
+
+        let mut tx = native.transaction(None).await.expect("tx");
+        let slot = text.lines().count().to_string();
+        tx.delete_note(NoteTarget::selector(&slot)).unwrap();
+        let err = format!("{:?}", tx.commit().await.expect_err("dead slot"));
+        assert!(err.contains("NotFound"), "{err:?}");
     })
     .await;
 }

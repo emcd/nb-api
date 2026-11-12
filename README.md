@@ -4,9 +4,14 @@ Typed Rust interface to the [nb](https://github.com/xwmx/nb) note-taking CLI.
 
 ## Purpose
 
-`nb-api` provides a programmatic Rust client for [`nb`](https://github.com/xwmx/nb), the command-line
-note-taking tool. It wraps `nb` as a subprocess, handling argument escaping,
-notebook qualification, output parsing, and error recovery.
+`nb-api` provides a programmatic Rust client for [`nb`](https://github.com/xwmx/nb) notebooks.
+Reads resolve natively from the notebook filesystem plus `.index` scans
+inside a process-shared gate — spawning zero `nb` subprocesses — with
+side-effect-free notebook discovery (missing notebooks are terminal
+`NotFound`, never created). Writes are collect-then-commit Git
+transactions; notebook management commands shell out to `nb`.
+Pre-1.0 breaking changes ship without compatibility surface: opting
+into a release means opting into its behavior.
 
 This crate is designed for use by:
 
@@ -83,12 +88,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## API Surface
 
-`0.4.0` centers on a collect-then-commit [`Transaction`] and structured
-reads. Inventory mutators are plan ops on `Transaction` with one-shot
-`NbClient` wrappers that return [`CommitOutcome`]. List/search-style
-reads still return ANSI-stripped CLI text. `edit_note` / `EditMode` are
-**removed** — use `replace_note_body`, `edit_note_substring`, or
-`edit_note_lines`.
+`0.5.0` centers on a collect-then-commit [`Transaction`], native
+structured reads, and typed listings. Inventory mutators are plan ops
+on `Transaction` with one-shot `NbClient` wrappers that return
+[`CommitOutcome`]. Structured reads (`show_note`, `show_note_lines`,
+`search_note_lines`, `read_note_source_bytes`, `show_notebook_status`)
+and the typed list/search/task/todo surfaces never spawn `nb`; the
+legacy `String` list/search surfaces keep their verbatim `nb`-backed
+rendering. `edit_note` / `EditMode` are **removed** — use
+`replace_note_body`, `edit_note_substring`, or `edit_note_lines`.
+Kind mismatches fail typed [`NbError::WrongKind`] (accepted-kinds
+set, actual kind, canonical selector) instead of string-matched
+validation errors.
 
 Structured text is `String` throughout (no base64 in the library;
 non-UTF-8 files surface as `NonUtf8`, raw bytes via
@@ -119,8 +130,12 @@ post-write selector derivation for cross-process safety.
 | `edit_note_tags` | Add/remove tags |
 | `delete_note` | Delete a note |
 | `move_note` | Move or rename a note (folder destinations keep basename; numeric outcome) |
-| `list_notes` | List notes with optional filtering |
-| `search_notes` | Full-text search with OR/AND semantics |
+| `classify` | Kind, path, and shadow-aware canonical selector for one id, no content read |
+| `list_notes` | List notes with optional filtering (verbatim `nb` output) |
+| `search_notes` | Full-text search with OR/AND semantics (verbatim `nb` output) |
+| `list_notes_typed` | Typed `ListEntry` notes in a scope: lexical order, tag/limit filters, zero `nb` spawns |
+| `search_notes_typed` | Typed case-insensitive title/body search, recursive, zero `nb` spawns |
+| `list_folders_typed` | Typed `Folder` entries for direct child directories |
 
 ### Todos
 
@@ -129,7 +144,9 @@ post-write selector derivation for cross-process safety.
 | `add_todo` | Create a todo item with optional checklist |
 | `mark_task_done` | Mark a todo (or specific task) as complete |
 | `unmark_task_done` | Reopen a completed todo (or specific task) |
-| `list_tasks` | List checklist items within todos, with optional status filter |
+| `list_tasks` | List checklist items within todos, with optional status filter (verbatim `nb` output) |
+| `list_tasks_typed` | Typed per-item `ListEntry` values with `#task-<n>` fragment selectors, optional status filter |
+| `list_todos` | Typed per-file `TodoSummary` values with counts and explicit open/closed state |
 
 ### Organization
 
@@ -152,7 +169,9 @@ post-write selector derivation for cross-process safety.
 | `CommitOutcome` / `OpOutcome` | Structured commit results |
 | `ShowNote` / `ShowNoteLines` / `SearchNoteLines` | Structured read results |
 | `NoteTarget` / `LineEdit` / `LineEol` / `Occurrence` / … | Text-first wire types for MCP lockstep (see body-aware-editing spec) |
-| `NbError` | Structured errors including `DirtyBaseline`, `IndeterminateCommit`, `RecoveryRequired`, `FragmentedBody`, `NonUtf8`, `IndexLockTimeout`, fingerprint/anchor/occurrence mismatches. Serde is internally tagged (`"type": "…"`). |
+| `EntityKind` / `KindSet` | Entity taxonomy (`Note`, `Todo`, `Bookmark`, `Folder`, `Other { reason }`) plus accepted-kinds sets for `WrongKind` |
+| `ListEntry` / `Classify` / `TodoSummary` | Typed list entries with shadow-aware canonical selectors, single-id classify records, and per-file todo summaries with explicit state |
+| `NbError` | Structured errors including `WrongKind` (typed kind mismatch), `DirtyBaseline`, `IndeterminateCommit`, `RecoveryRequired`, `FragmentedBody`, `NonUtf8`, `IndexLockTimeout`, fingerprint/anchor/occurrence mismatches. Serde is internally tagged (`"type": "…"`). |
 | `Config` | Configuration for constructing `NbClient` |
 | `SearchMode` | Query matching mode (any, all) |
 | `TaskStatus` | Todo status filter (open, closed) |
