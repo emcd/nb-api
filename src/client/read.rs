@@ -179,6 +179,45 @@ impl NbClient {
         }
     }
 
+    /// Classify one id without reading content beyond
+    /// classification: kind, notebook-relative path, shadow-aware
+    /// canonical selector, and numeric id when listed. Plain ids
+    /// carry selector semantics; notebook qualification resolves
+    /// upstream. Side-effect-free: filesystem plus `.index` under
+    /// the gate, zero spawns.
+    pub async fn classify(
+        &self,
+        id: &str,
+        notebook: Option<&str>,
+    ) -> Result<crate::Classify, NbError> {
+        let (notebook, display, input, exact) = self
+            .resolve_read_identity(&NoteTarget::selector(id), notebook)
+            .await?;
+        let root = self.native_notebook_root(&notebook).await?;
+        self.with_notebook_gate_native(&root, async {
+            let rel = if exact {
+                crate::native::resolve_exact(&root, &input)
+            } else {
+                crate::native::resolve_selector(&root, &input)
+            }
+            .map_err(Self::map_native_miss(&display))?;
+            let abs = root.join(&rel);
+            let abs = crate::native::confine_canonical(&root, &abs, &display)?;
+            let class = crate::native::classify_path(&abs, &rel)?;
+            let kind = crate::native::entity_kind_for_rel(&rel, &class);
+            let selector =
+                crate::native::canonical_selector(&notebook, &root, &rel)?;
+            let numeric_id = crate::native::numeric_id_for_rel(&root, &rel)?;
+            Ok(crate::Classify {
+                kind,
+                path: rel,
+                selector,
+                numeric_id,
+            })
+        })
+        .await
+    }
+
     /// Resolve a write one-shot selector to an absolute path: direct
     /// filesystem hit first, else `nb show --path`. Write one-shots
     /// keep legacy resolution until the unconditional migration

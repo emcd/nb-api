@@ -466,3 +466,129 @@ async fn native_reads_fail_closed_without_nb_dir() {
     })
     .await;
 }
+
+/// Classify one id without content reads: kind, path,
+/// shadow-aware selector, and numeric id.
+#[tokio::test]
+async fn native_classify_reports_entity_kinds() {
+    use nb_api::EntityKind;
+
+    let env = NbTestEnv::new().expect("fixture");
+    with_isolated_env(&env, false, || async {
+        let native = NbClient::new(&config_for(&env)).expect("native");
+        let root = env.nb_dir().join(env.notebook());
+        seed(&native, &root).await;
+        let nb = env.notebook();
+
+        for (id, kind, path, selector, numeric) in [
+            (
+                "hello_title.md",
+                EntityKind::Note,
+                "hello_title.md",
+                format!("{nb}:1"),
+                Some(1),
+            ),
+            (
+                "Hello Title",
+                EntityKind::Note,
+                "hello_title.md",
+                format!("{nb}:1"),
+                Some(1),
+            ),
+            (
+                "work/do_the_thing.todo.md",
+                EntityKind::Todo,
+                "work/do_the_thing.todo.md",
+                format!("{nb}:work/2"),
+                Some(2),
+            ),
+            (
+                "work/example.bookmark.md",
+                EntityKind::Bookmark,
+                "work/example.bookmark.md",
+                format!("{nb}:work/3"),
+                Some(3),
+            ),
+            (
+                "work",
+                EntityKind::Folder,
+                "work",
+                format!("{nb}:work"),
+                None,
+            ),
+        ] {
+            let got = native
+                .classify(id, None)
+                .await
+                .unwrap_or_else(|e| panic!("{id}: {e:?}"));
+            assert_eq!(got.kind, kind, "{id}");
+            assert_eq!(got.path, path, "{id}");
+            assert_eq!(got.selector, selector, "{id}");
+            assert_eq!(got.numeric_id, numeric, "{id}");
+        }
+        // Raw files gain background-`nb` index slots, so the
+        // selector is validated by round-trip instead of a literal
+        // expectation: the emitted form always re-resolves.
+        let got = native
+            .classify("mystery.xyz", None)
+            .await
+            .expect("raw file classifies");
+        assert_eq!(got.kind, EntityKind::Note);
+        assert_eq!(got.path, "mystery.xyz".to_string());
+        let back = native
+            .show_note(&got.selector, None)
+            .await
+            .expect("round-trip resolves");
+        assert_eq!(back.path, "mystery.xyz".to_string());
+        // Other carries the non-textual diagnostic.
+        let got = native
+            .classify("blob.xyz", None)
+            .await
+            .expect("binary classifies");
+        assert_eq!(
+            got.kind,
+            EntityKind::Other {
+                reason: "non-textual:xyz".to_string()
+            },
+            "{got:?}"
+        );
+        // Missing and escaping ids stay NotFound.
+        for id in ["nope-missing.md", "../evil.md", "C:/evil.md"] {
+            let err = format!(
+                "{:?}",
+                native.classify(id, None).await.expect_err("must miss")
+            );
+            assert!(err.contains("NotFound"), "{id}: {err:?}");
+        }
+    })
+    .await;
+}
+
+/// EntityKind wire shapes: exact JSON per variant plus round-trip.
+#[tokio::test]
+async fn entity_kind_wire_shapes_round_trip() {
+    use nb_api::EntityKind;
+    use serde_json::{from_value, to_value};
+
+    for (kind, json) in [
+        (EntityKind::Note, r#"{"type":"note"}"#),
+        (EntityKind::Todo, r#"{"type":"todo"}"#),
+        (EntityKind::Bookmark, r#"{"type":"bookmark"}"#),
+        (EntityKind::Folder, r#"{"type":"folder"}"#),
+        (
+            EntityKind::Other {
+                reason: "non-textual:pdf".to_string(),
+            },
+            r#"{"type":"other","reason":"non-textual:pdf"}"#,
+        ),
+    ] {
+        let value = to_value(&kind).expect("serialize");
+        assert_eq!(
+            value,
+            serde_json::from_str::<serde_json::Value>(json).expect("literal"),
+            "{kind:?}"
+        );
+        let back: EntityKind = from_value(value).expect("round-trip");
+        assert_eq!(back, kind);
+    }
+}

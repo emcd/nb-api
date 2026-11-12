@@ -41,6 +41,67 @@ impl NoteTarget {
     }
 }
 
+/// Entity kind for typed list and classify surfaces.
+///
+/// Struct payload, never a bare string: internally-tagged enums
+/// cannot carry primitive newtype payloads. `Other` carries a short
+/// diagnostic (`non-textual:<ext>`) for genuinely unclassifiable
+/// leftovers; kind never encodes indexing state (unindexed notes
+/// keep their `DocumentKind`, `.gitkeep`-only dirs keep `Folder`).
+/// Deliberately `non_exhaustive` for source evolution, a separate
+/// decision from the runtime `Other` value.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(tag = "type", rename_all = "lowercase")]
+#[non_exhaustive]
+pub enum EntityKind {
+    Note,
+    Todo,
+    Bookmark,
+    Folder,
+    Other { reason: String },
+}
+
+/// One typed list entry: shadow-aware canonical selector built at
+/// the source (numeric form only when it re-resolves to the same
+/// entity, else exact-path form).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct ListEntry {
+    pub selector: String,
+    pub path: String,
+    pub kind: EntityKind,
+    /// Numeric `.index` id when resolvable via `.index` scan.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub numeric_id: Option<u32>,
+}
+
+/// Classify record: kind, path, and shadow-aware selector for one
+/// id, without reading content beyond classification.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct Classify {
+    pub kind: EntityKind,
+    pub path: String,
+    pub selector: String,
+    /// Numeric `.index` id when resolvable via `.index` scan.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub numeric_id: Option<u32>,
+}
+
+/// Todo summary with explicit open/closed state and shadow-aware
+/// canonical `id`. Minimal six fields, nothing more.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct TodoSummary {
+    pub id: String,
+    pub title: String,
+    pub path: String,
+    pub task_count: u32,
+    pub completed_count: u32,
+    pub state: TodoState,
+}
+
 /// One body fragment exposed by structured show.
 ///
 /// `bytes` is the fragment text (UTF-8); `start_byte`/`end_byte` are offsets

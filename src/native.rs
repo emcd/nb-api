@@ -321,6 +321,39 @@ fn file_is_todo(rel: &str) -> bool {
     lower.ends_with("todo.md")
 }
 
+/// Document-kind routing by filename, mirroring the parser's
+/// extension dispatch (case-insensitive).
+pub(crate) fn document_kind_for_rel(rel: &str) -> crate::DocumentKind {
+    let lower = rel.to_ascii_lowercase();
+    if lower.ends_with(".todo.md") || lower == "todo.md" {
+        crate::DocumentKind::Todo
+    } else if lower.ends_with(".bookmark.md") || lower == "bookmark.md" {
+        crate::DocumentKind::Bookmark
+    } else {
+        crate::DocumentKind::Note
+    }
+}
+
+/// Entity kind for a resolved path: folders stay folders,
+/// non-textual files become `Other` with a short diagnostic, and
+/// textual files route by document kind.
+pub(crate) fn entity_kind_for_rel(
+    rel: &str,
+    class: &NativeClass,
+) -> crate::EntityKind {
+    match class {
+        NativeClass::Folder => crate::EntityKind::Folder,
+        NativeClass::NonTextual { ext } => crate::EntityKind::Other {
+            reason: format!("non-textual:{ext}"),
+        },
+        NativeClass::Text => match document_kind_for_rel(rel) {
+            crate::DocumentKind::Note => crate::EntityKind::Note,
+            crate::DocumentKind::Todo => crate::EntityKind::Todo,
+            crate::DocumentKind::Bookmark => crate::EntityKind::Bookmark,
+        },
+    }
+}
+
 /// Strip up to the last `"] "` exactly like nb's
 /// `${_title##*] }`: `[ ] Do the thing` becomes `Do the thing`.
 /// No `"] "` means no stripped form (returns the input unchanged,
