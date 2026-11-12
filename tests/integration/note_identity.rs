@@ -488,6 +488,7 @@ async fn wrong_kind_covers_state_ops() {
     let env = NbTestEnv::new().expect("fixture");
     with_isolated_env(&env, false, || async {
         let client = NbClient::new(&config_for(&env)).expect("client");
+        let root = env.nb_dir().join(env.notebook());
         let mut tx = client.transaction(None).await.expect("tx");
         tx.add_note("hello_title.md", Some("Hello Title"), "body\n", &[])
             .unwrap();
@@ -510,6 +511,40 @@ async fn wrong_kind_covers_state_ops() {
                 assert_eq!(path, "hello_title.md".to_string());
                 // Canonical identity, not the raw input.
                 assert_eq!(selector, format!("{}:1", env.notebook()));
+            },
+            other => panic!("expected WrongKind, got: {other:?}"),
+        }
+
+        // Binary content is `Other`, never a misclassified document:
+        // textuality is checked before parsing.
+        std::fs::write(root.join("blob.xyz"), [b'a', 1u8, b'b', b'\n'])
+            .expect("binary");
+        let committed = std::process::Command::new("git")
+            .current_dir(&root)
+            .args(["add", "blob.xyz"])
+            .status()
+            .expect("git add runs")
+            .success()
+            && std::process::Command::new("git")
+                .current_dir(&root)
+                .args(["commit", "-m", "binary fixture", "--quiet"])
+                .status()
+                .expect("git commit runs")
+                .success();
+        assert!(committed, "binary fixture must commit");
+        let err = client
+            .mark_task_done("blob.xyz", None, None)
+            .await
+            .expect_err("todo state on binary");
+        match err {
+            NbError::WrongKind {
+                expected, actual, ..
+            } => {
+                assert_eq!(expected, nb_api::KindSet::Todo);
+                assert!(
+                    matches!(actual, nb_api::EntityKind::Other { .. }),
+                    "{actual:?}"
+                );
             },
             other => panic!("expected WrongKind, got: {other:?}"),
         }

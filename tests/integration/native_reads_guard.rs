@@ -702,6 +702,18 @@ async fn native_oneshot_resolution_matches_native_table() {
         tx.commit().await.expect("delete by folder id");
         assert!(!root.join("work/a.md").exists(), "slot work/1 deleted");
 
+        // Root numeric ids and plain titles resolve one-shot too.
+        native
+            .delete_note("1", None)
+            .await
+            .expect("delete by root numeric id");
+        assert!(!root.join("hello_title.md").exists(), "slot 1 deleted");
+        native
+            .delete_note("Notes", None)
+            .await
+            .expect_err("non-.md title must not resolve");
+        assert!(root.join("notes.txt").exists(), "no title fallback");
+
         // Dead slots fall through to the title table.
         let mut text =
             std::fs::read_to_string(root.join(".index")).expect("index");

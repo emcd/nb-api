@@ -270,7 +270,8 @@ pub(super) fn resolve_target_path(
             {
                 return Ok(path);
             }
-            // Root-scope exact title; duplicates stay ambiguous.
+            // Root-scope exact title; duplicates are terminal
+            // `NotFound`, matching reads.
             // Titles scan virtual bytes so planned files resolve.
             let mut titled = Vec::new();
             if !candidate.contains('/') {

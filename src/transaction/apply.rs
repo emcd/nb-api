@@ -770,6 +770,30 @@ fn set_todo_state(
     done: bool,
     task_number: Option<u32>,
 ) -> Result<Vec<u8>, NbError> {
+    // Textuality first: binary content is `Other`, not a
+    // misclassified document kind. Then the parsed kind must be
+    // a todo; anything else is a typed wrong-kind.
+    match crate::native::classify_bytes(path, bytes) {
+        crate::native::NativeClass::Text => {},
+        crate::native::NativeClass::Folder => {
+            return Err(NbError::WrongKind {
+                expected: crate::KindSet::Todo,
+                actual: crate::EntityKind::Folder,
+                selector: selector.to_string(),
+                path: path.to_string(),
+            });
+        },
+        crate::native::NativeClass::NonTextual { ext } => {
+            return Err(NbError::WrongKind {
+                expected: crate::KindSet::Todo,
+                actual: crate::EntityKind::Other {
+                    reason: format!("non-textual:{ext}"),
+                },
+                selector: selector.to_string(),
+                path: path.to_string(),
+            });
+        },
+    }
     let doc = parse_doc(bytes, path)?;
     if doc.kind() != DocumentKind::Todo {
         let actual = match doc.kind() {

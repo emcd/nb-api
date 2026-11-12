@@ -448,44 +448,56 @@ impl NbClient {
                     path: abs.clone(),
                     source: e.into(),
                 })?;
+                // Malformed containers surface instead of skipping:
+                // without valid UTF-8 there is no faithful title,
+                // state, or task text to report.
+                if std::str::from_utf8(&bytes).is_err() {
+                    let selector = crate::native::canonical_selector(
+                        &notebook, &root, &rel,
+                    )?;
+                    return Err(NbError::NonUtf8 {
+                        selector,
+                        path: rel.clone(),
+                        kind: "todo".to_string(),
+                        mime_hint: None,
+                    });
+                }
                 let items = crate::scope::todo_items(&bytes);
                 let completed = items.iter().filter(|&&c| c).count() as u32;
                 let total = items.len() as u32;
+                // Malformed containers surface their parse error;
+                // only a missing title falls back to the filename.
                 let doc =
-                    parse(&bytes, ParseContext::FromPath(rel.clone().into()))
-                        .ok();
+                    parse(&bytes, ParseContext::FromPath(rel.clone().into()))?;
                 // Explicit container state wins: a checked title
                 // decides even when the counts disagree. Without a
                 // title checkbox, all-checked (non-empty) is Done.
-                let file_state =
-                    match doc.as_ref().and_then(|d| d.todo_state()) {
-                        Some(explicit) => explicit,
-                        None if total > 0 && completed == total => {
-                            crate::TodoState::Done
-                        },
-                        None => crate::TodoState::Open,
-                    };
+                let file_state = match doc.todo_state() {
+                    Some(explicit) => explicit,
+                    None if total > 0 && completed == total => {
+                        crate::TodoState::Done
+                    },
+                    None => crate::TodoState::Open,
+                };
                 if let Some(want) = state
                     && want != file_state
                 {
                     continue;
                 }
                 let title = doc
-                    .as_ref()
-                    .and_then(|doc| {
-                        doc.title().map(|t| {
-                            let s = String::from_utf8_lossy(t);
-                            let s = s
-                                .trim_end_matches('\n')
-                                .trim_start_matches('#')
-                                .trim();
-                            let s = s
-                                .strip_prefix("[ ]")
-                                .or_else(|| s.strip_prefix("[x]"))
-                                .or_else(|| s.strip_prefix("[X]"))
-                                .unwrap_or(s);
-                            s.trim().to_string()
-                        })
+                    .title()
+                    .map(|t| {
+                        let s = String::from_utf8_lossy(t);
+                        let s = s
+                            .trim_end_matches('\n')
+                            .trim_start_matches('#')
+                            .trim();
+                        let s = s
+                            .strip_prefix("[ ]")
+                            .or_else(|| s.strip_prefix("[x]"))
+                            .or_else(|| s.strip_prefix("[X]"))
+                            .unwrap_or(s);
+                        s.trim().to_string()
                     })
                     .filter(|t| !t.is_empty())
                     .unwrap_or_else(|| {

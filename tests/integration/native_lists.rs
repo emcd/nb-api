@@ -589,6 +589,12 @@ async fn native_todo_state_prefers_explicit_checkbox() {
             open_only.iter().all(|t| t.state == TodoState::Open),
             "{open_only:?}"
         );
+        // Lexical file order regardless of index slots.
+        let paths: Vec<&str> =
+            open_only.iter().map(|t| t.path.as_str()).collect();
+        let mut sorted = paths.clone();
+        sorted.sort_unstable();
+        assert_eq!(paths, sorted, "todos must be lexical");
     })
     .await;
 }
@@ -709,6 +715,29 @@ async fn native_virtual_index_rejects_nested_basenames() {
         tx.delete_note(NoteTarget::selector(&slot)).unwrap();
         let err = format!("{:?}", tx.commit().await.expect_err("dead slot"));
         assert!(err.contains("NotFound"), "{err:?}");
+    })
+    .await;
+}
+
+/// Malformed todo containers surface their parse error instead of
+/// being silently skipped.
+#[tokio::test]
+async fn native_list_todos_surfaces_malformed() {
+    let env = NbTestEnv::new().expect("fixture");
+    with_isolated_env(&env, false, || async {
+        let native = NbClient::new(&config_for(&env)).expect("native");
+        let root = env.nb_dir().join(env.notebook());
+        seed(&native, &root).await;
+        std::fs::write(root.join("bad.todo.md"), b"# Bad\xff\n- [ ] x\n")
+            .expect("malformed todo");
+        let err = format!(
+            "{:?}",
+            native
+                .list_todos(None, None, true, None)
+                .await
+                .expect_err("malformed todo must fail")
+        );
+        assert!(err.contains("NonUtf8") || err.contains("Io"), "{err:?}");
     })
     .await;
 }
