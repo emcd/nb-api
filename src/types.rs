@@ -102,6 +102,20 @@ pub struct TodoSummary {
     pub state: TodoState,
 }
 
+/// Accepted-kinds set for an operation, used by
+/// [`NbError::WrongKind`]. `File` is any non-folder entity,
+/// `Document` the text kinds (`Note | Todo | Bookmark`), `Todo`
+/// only todos, `Folder` only folders.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(rename_all = "lowercase")]
+pub enum KindSet {
+    File,
+    Document,
+    Todo,
+    Folder,
+}
+
 /// One body fragment exposed by structured show.
 ///
 /// `bytes` is the fragment text (UTF-8); `start_byte`/`end_byte` are offsets

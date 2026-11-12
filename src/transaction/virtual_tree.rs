@@ -247,7 +247,9 @@ pub(super) fn resolve_target_path(
             })
         },
         NoteTarget::Selector { value } => {
-            // Prefer exact path match when value looks like a path.
+            // Pinned precedence, mirroring native reads: exact path,
+            // then numeric id, then root-scope exact title. No
+            // cross-folder basename, stem, or suffix search.
             let stripped = value
                 .rsplit_once(':')
                 .map(|(_, rest)| rest)
@@ -257,30 +259,44 @@ pub(super) fn resolve_target_path(
             if tree.exists(&candidate) {
                 return Ok(candidate);
             }
-            // Numeric `<folder>/<id>` / `<id>` via the virtual `.index`
-            // (blank lines are dead ids -> NotFound, never reused).
-            if let Some(resolved) = resolve_numeric_in_tree(tree, &candidate) {
-                return resolved;
+            // Numeric `<folder>/<id>` / `<id>` via the virtual `.index`;
+            // dead slots and vanished targets fall through to the
+            // title table instead of resolving to nothing.
+            if let Some(Ok(path)) = resolve_numeric_in_tree(tree, &candidate)
+                && matches!(tree.nodes.get(&path), Some(VirtualNode::File(_)))
+            {
+                return Ok(path);
             }
-            // Match by basename or unique suffix.
-            let matches: Vec<_> = tree
-                .nodes
-                .iter()
-                .filter_map(|(p, n)| match n {
-                    VirtualNode::File(_)
-                        if p == &candidate
-                            || p.ends_with(&format!("/{candidate}"))
-                            || Path::new(p)
-                                .file_stem()
-                                .and_then(|s| s.to_str())
-                                == Some(stripped)
-                            || p.ends_with(stripped) =>
-                    {
-                        Some(p.clone())
-                    },
-                    _ => None,
-                })
-                .collect();
+            // Root-scope exact title; duplicates stay ambiguous.
+            // Titles scan virtual bytes so planned files resolve.
+            let mut titled = Vec::new();
+            if !candidate.contains('/') {
+                for (p, node) in &tree.nodes {
+                    let VirtualNode::File(bytes) = node else {
+                        continue;
+                    };
+                    if p.contains('/') {
+                        continue;
+                    }
+                    let name = p.rsplit('/').next().unwrap_or(p.as_str());
+                    if name.starts_with('.') {
+                        continue;
+                    }
+                    let title = match crate::native::title_of_bytes(p, bytes) {
+                        Some(t) => t,
+                        None => continue,
+                    };
+                    let exact = title.as_str() == candidate.as_str();
+                    let checkbox =
+                        p.to_ascii_lowercase().ends_with(".todo.md")
+                            && crate::native::strip_checkbox(&title)
+                                == candidate.as_str();
+                    if exact || checkbox {
+                        titled.push(p.clone());
+                    }
+                }
+            }
+            let matches = titled;
             match matches.as_slice() {
                 [one] => Ok(one.clone()),
                 [] => {

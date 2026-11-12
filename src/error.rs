@@ -269,6 +269,19 @@ pub enum NbError {
 
     /// Document structure is not supported for the requested op.
     UnsupportedStructure { reason: String },
+
+    /// An operation was applied to an entity of the wrong kind:
+    /// deleting a folder as a note, editing text of a non-textual
+    /// file, or changing task state on a non-todo. Replaces
+    /// string-matched `ValidationError` / `UnsupportedStructure`
+    /// reasons with typed kinds. `expected` is the accepted-kinds
+    /// set for the operation, `actual` the single observed kind.
+    WrongKind {
+        expected: crate::KindSet,
+        actual: crate::EntityKind,
+        selector: String,
+        path: String,
+    },
 }
 
 impl std::fmt::Display for NbError {
@@ -427,6 +440,17 @@ impl std::fmt::Display for NbError {
             },
             Self::UnsupportedStructure { reason } => {
                 write!(f, "unsupported structure: {reason}")
+            },
+            Self::WrongKind {
+                expected,
+                actual,
+                selector,
+                path,
+            } => {
+                write!(
+                    f,
+                    "wrong kind for {selector:?} ({path}): expected {expected:?}, observed {actual:?}"
+                )
             },
         }
     }

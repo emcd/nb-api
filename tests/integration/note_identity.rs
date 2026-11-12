@@ -308,16 +308,26 @@ async fn delete_kind_mismatch_directs_to_other_op() {
             .delete_folder("n.md", true, None)
             .await
             .expect_err("folder op on a note");
-        assert!(format!("{err:?}").contains("delete_note"), "{err:?}");
+        let msg = format!("{err:?}");
+        // Typed kind mismatch (commit envelopes stay PlanValidation).
+        assert!(msg.contains("wrong kind"), "{err:?}");
+        assert!(msg.contains("expected Folder"), "{err:?}");
+        assert!(msg.contains("observed Note"), "{err:?}");
         let err = client
             .delete_note("foo", None)
             .await
             .expect_err("note op on a folder");
-        assert!(format!("{err:?}").contains("delete_folder"), "{err:?}");
+        let msg = format!("{err:?}");
+        assert!(msg.contains("wrong kind"), "{err:?}");
+        assert!(msg.contains("expected File"), "{err:?}");
+        assert!(msg.contains("observed Folder"), "{err:?}");
         let mut tx = client.transaction(None).await.expect("tx2");
         tx.move_note(NoteTarget::path("foo"), "bar/").unwrap();
         let err = tx.commit().await.expect_err("folder move");
-        assert!(format!("{err:?}").contains("folder moves"), "{err:?}");
+        let msg = format!("{err:?}");
+        assert!(msg.contains("wrong kind"), "{err:?}");
+        assert!(msg.contains("expected File"), "{err:?}");
+        assert!(msg.contains("observed Folder"), "{err:?}");
     })
     .await;
 }
@@ -433,6 +443,133 @@ async fn list_empty_subfolder_with_parent_index_succeeds() {
             .await
             .expect("empty subfolder lists");
         assert!(out.contains("0 items"), "{out:?}");
+    })
+    .await;
+}
+
+/// Todo state ops on a non-todo are a typed kind mismatch.
+#[tokio::test]
+async fn wrong_kind_covers_state_ops() {
+    use nb_api::NbError;
+
+    let env = NbTestEnv::new().expect("fixture");
+    with_isolated_env(&env, false, || async {
+        let client = NbClient::new(&config_for(&env)).expect("client");
+        let mut tx = client.transaction(None).await.expect("tx");
+        tx.add_note("hello_title.md", Some("Hello Title"), "body\n", &[])
+            .unwrap();
+        tx.commit().await.expect("seed");
+
+        // mark_task_done on a Note: Todo expected, Note observed.
+        // One-shot commits envelope op errors as PlanValidation;
+        // the typed kind names survive in the message.
+        let err = client
+            .mark_task_done("hello_title.md", None, None)
+            .await
+            .expect_err("todo state on a note");
+        match err {
+            NbError::PlanValidation { message, .. } => {
+                assert!(message.contains("wrong kind"), "{message:?}");
+                assert!(message.contains("expected Todo"), "{message:?}");
+                assert!(message.contains("observed Note"), "{message:?}");
+                assert!(message.contains("hello_title.md"), "{message:?}");
+            },
+            other => panic!("expected PlanValidation, got: {other:?}"),
+        }
+    })
+    .await;
+}
+
+/// Text edits on non-textual files are a typed kind mismatch: the
+/// document set is required. The binary fixture is committed with
+/// git directly (transactions only carry UTF-8 notes) so later
+/// commits meet a clean tree.
+#[tokio::test]
+async fn wrong_kind_covers_text_edits() {
+    use nb_api::{NbError, NoteTarget, Occurrence};
+
+    let env = NbTestEnv::new().expect("fixture");
+    with_isolated_env(&env, false, || async {
+        let client = NbClient::new(&config_for(&env)).expect("client");
+        let root = env.nb_dir().join(env.notebook());
+        let mut tx = client.transaction(None).await.expect("tx");
+        tx.add_note("hello_title.md", Some("Hello Title"), "body\n", &[])
+            .unwrap();
+        tx.commit().await.expect("seed");
+        std::fs::write(root.join("blob.xyz"), b"a\x01b\n").expect("binary");
+        let committed = std::process::Command::new("git")
+            .current_dir(&root)
+            .args(["add", "blob.xyz"])
+            .status()
+            .expect("git add runs")
+            .success()
+            && std::process::Command::new("git")
+                .current_dir(&root)
+                .args(["commit", "-m", "binary fixture", "--quiet"])
+                .status()
+                .expect("git commit runs")
+                .success();
+        assert!(committed, "binary fixture must commit");
+
+        let err = client
+            .edit_note_substring(
+                NoteTarget::path("blob.xyz"),
+                "a",
+                "b",
+                Occurrence::First,
+                1,
+                None,
+                None,
+            )
+            .await
+            .expect_err("text edit on binary");
+        match err {
+            NbError::PlanValidation { message, .. } => {
+                assert!(message.contains("wrong kind"), "{message:?}");
+                assert!(message.contains("expected Document"), "{message:?}");
+                assert!(message.contains("Other"), "{message:?}");
+                assert!(message.contains("blob.xyz"), "{message:?}");
+            },
+            other => panic!("expected PlanValidation, got: {other:?}"),
+        }
+    })
+    .await;
+}
+
+/// Virtual-tree resolution follows the pinned table: exact path,
+/// numeric id, then root title; dead slots fall through instead of
+/// resolving to nothing.
+#[tokio::test]
+async fn virtual_tree_resolves_selector_table_natively() {
+    let env = NbTestEnv::new().expect("fixture");
+    with_isolated_env(&env, false, || async {
+        let client = NbClient::new(&config_for(&env)).expect("client");
+        let root = env.nb_dir().join(env.notebook());
+        let mut tx = client.transaction(None).await.expect("tx");
+        tx.add_note("hello_title.md", Some("Hello Title"), "body\n", &[])
+            .unwrap();
+        tx.add_note("notes.txt", Some("Notes"), "notes body\n", &[])
+            .unwrap();
+        tx.commit().await.expect("seed");
+
+        // Numeric id through the virtual index.
+        let mut tx = client.transaction(None).await.expect("tx");
+        tx.delete_note(NoteTarget::selector("2")).unwrap();
+        tx.commit().await.expect("delete by id");
+        assert!(!root.join("notes.txt").exists(), "slot 2 deleted");
+
+        // Root title through the virtual tree.
+        let mut tx = client.transaction(None).await.expect("tx");
+        tx.delete_note(NoteTarget::selector("Hello Title")).unwrap();
+        tx.commit().await.expect("delete by title");
+        assert!(!root.join("hello_title.md").exists(), "title deleted");
+
+        // Missing stays NotFound.
+        let mut tx = client.transaction(None).await.expect("tx");
+        tx.delete_note(NoteTarget::selector("nope-missing"))
+            .unwrap();
+        let err = format!("{:?}", tx.commit().await.expect_err("missing"));
+        assert!(err.contains("NotFound"), "{err:?}");
     })
     .await;
 }

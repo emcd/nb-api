@@ -48,8 +48,8 @@ pub use parser::{
 };
 pub use transaction::Transaction;
 pub use types::{
-    BodyFragment, BoundaryAt, Classify, CommitOutcome, EntityKind, LineAnchor,
-    LineEdit, LineEol, LinePosition, LineRef, ListEntry, NoteLine,
+    BodyFragment, BoundaryAt, Classify, CommitOutcome, EntityKind, KindSet,
+    LineAnchor, LineEdit, LineEol, LinePosition, LineRef, ListEntry, NoteLine,
     NoteLineHit, NoteTarget, Occurrence, OpOutcome, SearchNoteLines, ShowNote,
     ShowNoteLines, TodoSummary,
 };

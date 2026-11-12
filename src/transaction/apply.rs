@@ -9,6 +9,7 @@ use crate::lines::{
     splice_title,
 };
 use crate::parser::{DocumentKind, NoteDocument, ParseContext, parse};
+use crate::types::NoteTarget;
 
 use super::index::{
     PendingIndexEdit, append_index_edit, blank_index_edit, move_index_edits,
@@ -183,11 +184,11 @@ pub(super) fn validate_and_apply_virtual(
                 });
             }
             if matches!(tree.nodes.get(&path), Some(VirtualNode::Folder)) {
-                return Err(NbError::ValidationError {
-                    reason: format!(
-                        "`{path}` is a folder; use delete_folder instead of delete_note"
-                    ),
-                    location: None,
+                return Err(NbError::WrongKind {
+                    expected: crate::KindSet::File,
+                    actual: crate::EntityKind::Folder,
+                    selector: target.value().to_string(),
+                    path: path.clone(),
                 });
             }
             tree.remove(&path);
@@ -214,11 +215,19 @@ pub(super) fn validate_and_apply_virtual(
                 });
             }
             if !matches!(tree.nodes.get(&path), Some(VirtualNode::Folder)) {
-                return Err(NbError::ValidationError {
-                    reason: format!(
-                        "`{path}` is not a folder; use delete_note instead of delete_folder"
-                    ),
-                    location: None,
+                let actual = match tree.nodes.get(&path) {
+                    Some(VirtualNode::File(bytes)) => {
+                        let class =
+                            crate::native::classify_bytes(&path, bytes);
+                        crate::native::entity_kind_for_rel(&path, &class)
+                    },
+                    _ => crate::EntityKind::Folder,
+                };
+                return Err(NbError::WrongKind {
+                    expected: crate::KindSet::Folder,
+                    actual,
+                    selector: target.value().to_string(),
+                    path: path.clone(),
                 });
             }
             // Contents are descendant keys excluding our own markers:
@@ -303,11 +312,11 @@ pub(super) fn validate_and_apply_virtual(
             let from = resolve_target_path(tree, ignored_existing, target)?;
             let to = resolve_move_destination(&from, destination);
             if matches!(tree.nodes.get(&from), Some(VirtualNode::Folder)) {
-                return Err(NbError::ValidationError {
-                    reason: format!(
-                        "`{from}` is a folder; folder moves are not supported (delete and recreate instead)"
-                    ),
-                    location: None,
+                return Err(NbError::WrongKind {
+                    expected: crate::KindSet::File,
+                    actual: crate::EntityKind::Folder,
+                    selector: target.value().to_string(),
+                    path: from.clone(),
                 });
             }
             refuse_create_collision(
@@ -355,7 +364,13 @@ pub(super) fn validate_and_apply_virtual(
                     selector: target.value().to_string(),
                 })?
                 .to_vec();
-            let new_bytes = set_todo_state(&bytes, &path, true, *task_number)?;
+            let new_bytes = set_todo_state(
+                &bytes,
+                &path,
+                target.value(),
+                true,
+                *task_number,
+            )?;
             let noop = new_bytes == bytes;
             let fp = fingerprint_bytes(&new_bytes, &path)?;
             tree.insert_file(path.clone(), new_bytes);
@@ -379,8 +394,13 @@ pub(super) fn validate_and_apply_virtual(
                     selector: target.value().to_string(),
                 })?
                 .to_vec();
-            let new_bytes =
-                set_todo_state(&bytes, &path, false, *task_number)?;
+            let new_bytes = set_todo_state(
+                &bytes,
+                &path,
+                target.value(),
+                false,
+                *task_number,
+            )?;
             let noop = new_bytes == bytes;
             let fp = fingerprint_bytes(&new_bytes, &path)?;
             tree.insert_file(path.clone(), new_bytes);
@@ -405,6 +425,7 @@ pub(super) fn validate_and_apply_virtual(
                     selector: target.value().to_string(),
                 })?
                 .to_vec();
+            require_document(&bytes, &path, target)?;
             let doc = parse_doc(&bytes, &path)?;
             // Contiguity before fingerprint so fragmented bodies always surface
             // FragmentedBody even with a stale fingerprint.
@@ -446,6 +467,7 @@ pub(super) fn validate_and_apply_virtual(
                     selector: target.value().to_string(),
                 })?
                 .to_vec();
+            require_document(&bytes, &path, target)?;
             let doc = parse_doc(&bytes, &path)?;
             let body = require_contiguous_body(&doc)?;
             if let Some(exp) = expected {
@@ -485,6 +507,7 @@ pub(super) fn validate_and_apply_virtual(
                     selector: target.value().to_string(),
                 })?
                 .to_vec();
+            require_document(&bytes, &path, target)?;
             let doc = parse_doc(&bytes, &path)?;
             let body = require_contiguous_body(&doc)?;
             let new_body = apply_line_edits(&body, edits)?;
@@ -509,6 +532,7 @@ pub(super) fn validate_and_apply_virtual(
                     selector: target.value().to_string(),
                 })?
                 .to_vec();
+            require_document(&bytes, &path, target)?;
             let doc = parse_doc(&bytes, &path)?;
             let mut title_line = title.clone();
             if !title_line.starts_with('#') {
@@ -539,6 +563,7 @@ pub(super) fn validate_and_apply_virtual(
                     selector: target.value().to_string(),
                 })?
                 .to_vec();
+            require_document(&bytes, &path, target)?;
             let doc = parse_doc(&bytes, &path)?;
             let new_bytes = apply_tag_edit(&doc, &path, add, remove)?;
             let fp = fingerprint_bytes(&new_bytes, &path)?;
@@ -553,6 +578,25 @@ pub(super) fn validate_and_apply_virtual(
                 index_edits: Vec::new(),
             })
         },
+    }
+}
+
+/// Require a document entity for text edits: non-textual files
+/// fail with a typed `WrongKind` instead of being mangled or
+/// producing a string-matched error.
+fn require_document(
+    bytes: &[u8],
+    path: &str,
+    target: &NoteTarget,
+) -> Result<(), NbError> {
+    match crate::native::classify_bytes(path, bytes) {
+        crate::native::NativeClass::Text => Ok(()),
+        class => Err(NbError::WrongKind {
+            expected: crate::KindSet::Document,
+            actual: crate::native::entity_kind_for_rel(path, &class),
+            selector: target.value().to_string(),
+            path: path.to_string(),
+        }),
     }
 }
 
@@ -687,14 +731,22 @@ fn build_bookmark_bytes(
 fn set_todo_state(
     bytes: &[u8],
     path: &str,
+    selector: &str,
     done: bool,
     task_number: Option<u32>,
 ) -> Result<Vec<u8>, NbError> {
     let doc = parse_doc(bytes, path)?;
     if doc.kind() != DocumentKind::Todo {
-        return Err(NbError::UnsupportedStructure {
-            reason: "mark_task_done/unmark_task_done require a Todo document"
-                .into(),
+        let actual = match doc.kind() {
+            DocumentKind::Note => crate::EntityKind::Note,
+            DocumentKind::Todo => crate::EntityKind::Todo,
+            DocumentKind::Bookmark => crate::EntityKind::Bookmark,
+        };
+        return Err(NbError::WrongKind {
+            expected: crate::KindSet::Todo,
+            actual,
+            selector: selector.to_string(),
+            path: path.to_string(),
         });
     }
     let mut out = bytes.to_vec();

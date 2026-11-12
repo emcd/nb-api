@@ -721,6 +721,12 @@ async fn show_notebook_path_successful_empty_output_command_field_is_actual_argv
     // path with the actual argv as the `command` field.
     let crafted = "";
     with_shim_nb_env(&env, crafted, || async {
+        // Drop NB_DIR so notebook discovery actually spawns the
+        // shim: with NB_DIR present, existence is proven from the
+        // filesystem without spawning (covered by the no-spawn
+        // one-shot test). Restored by the harness on exit.
+        // SAFETY: serialized by ENV_LOCK; restored on drop.
+        unsafe { std::env::remove_var("NB_DIR") };
         let client = NbClient::new(&Config {
             notebook: Some(env.notebook().to_string()),
             create_notebook: false,

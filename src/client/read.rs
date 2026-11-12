@@ -1,7 +1,6 @@
 use std::path::{Path, PathBuf};
 
 use crate::argv::search_command_args;
-use crate::diagnostics::is_selector_not_found;
 use crate::error::NbError;
 use crate::fingerprint;
 use crate::gate;
@@ -198,61 +197,6 @@ impl NbClient {
             })
         })
         .await
-    }
-
-    /// Resolve a write one-shot selector to an absolute path: direct
-    /// filesystem hit first, else `nb show --path`. Write one-shots
-    /// keep legacy resolution until the unconditional migration
-    /// slice; reads never call this.
-    pub(super) async fn resolve_item_path(
-        &self,
-        selector: &str,
-    ) -> Result<PathBuf, NbError> {
-        // Fast path: existing filesystem entries (files AND
-        // directories) resolve directly without spawning `nb`, which
-        // misdispatches selectors whose trailing component collides
-        // with subcommand vocabulary (`todos` -> tasks listing,
-        // `notebooks` -> notebook root, `list` -> folder listing;
-        // nb-mcp-server:todos/mcp/62). Falls back to `nb show --path`
-        // for numeric ids/titles that have no direct filesystem form.
-        if let Ok(Some((notebook, rel))) =
-            crate::validate::parse_qualified_selector(selector)
-            && !rel.is_empty()
-            && let Ok(root) =
-                self.show_notebook_path_unguarded(Some(notebook)).await
-        {
-            let direct = root.join(rel);
-            if direct.is_file() || direct.is_dir() {
-                return Ok(direct);
-            }
-        }
-        let output = self
-            .exec_vec(vec![
-                "show".to_string(),
-                selector.to_string(),
-                "--path".to_string(),
-                "--no-color".to_string(),
-            ])
-            .await
-            .map_err(|err| match err {
-                NbError::CommandFailed { stderr, .. }
-                    if is_selector_not_found(&stderr, selector) =>
-                {
-                    NbError::NotFound {
-                        selector: selector.to_string(),
-                    }
-                },
-                other => other,
-            })?;
-        let path = output.trim();
-        if path.is_empty() {
-            return Err(NbError::CommandFailed {
-                command: format!("nb show {selector} --path"),
-                stderr: "empty path".into(),
-                exit_code: None,
-            });
-        }
-        Ok(PathBuf::from(path))
     }
 
     /// Native inside-gate read: variant-preserving resolution,

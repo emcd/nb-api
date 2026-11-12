@@ -16,8 +16,6 @@ use crate::validate::{
 };
 use crate::{NbClient, TaskStatus};
 
-use super::read::path_relative_to;
-
 impl NbClient {
     /// Creates a new note (one-shot transaction; nb-mangled filename).
     pub async fn add_note(
@@ -127,6 +125,12 @@ impl NbClient {
         tx.commit().await
     }
 
+    /// Resolve a write one-shot selector to a [`NoteTarget`]:
+    /// direct filesystem hit first, else the native pinned table
+    /// (numeric id, then root title) inside one no-ensure gate hold.
+    /// Spawns zero `nb` subprocesses; notebook existence is ensured
+    /// upstream by the caller. Missing inputs are terminal
+    /// `NotFound` with the original selector.
     async fn note_target_for_selector(
         &self,
         notebook: &str,
@@ -137,14 +141,24 @@ impl NbClient {
             .rsplit_once(':')
             .map(|(_, rest)| rest)
             .unwrap_or(selector);
+        if stripped.is_empty() {
+            return Ok(NoteTarget::path(stripped));
+        }
         let direct = root.join(stripped);
         if direct.is_file() || direct.is_dir() {
             return Ok(NoteTarget::path(stripped));
         }
-        // Fall back to `nb show --path` for numeric ids / titles.
-        let abs = self.resolve_item_path(selector).await?;
-        let rel = path_relative_to(&root, &abs)?;
-        Ok(NoteTarget::path(rel))
+        self.with_notebook_gate_native(&root, async {
+            let rel = crate::native::resolve_selector(&root, stripped)
+                .map_err(|e| match e {
+                    NbError::NotFound { .. } => NbError::NotFound {
+                        selector: selector.to_string(),
+                    },
+                    other => other,
+                })?;
+            Ok(NoteTarget::path(rel))
+        })
+        .await
     }
 
     /// Creates a todo item (one-shot transaction; nb-mangled filename).

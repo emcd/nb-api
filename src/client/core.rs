@@ -335,6 +335,12 @@ impl NbClient {
     }
 
     async fn check_notebook(&self, notebook: &str) -> Result<(), NbError> {
+        // Fast path: an existing `$NB_DIR/<notebook>` needs no
+        // subprocess. Discovery I/O failures propagate; only a
+        // genuine miss falls through to the `nb` check below.
+        if notebook_dir_from_env(notebook)?.is_some() {
+            return Ok(());
+        }
         let show_result = self
             .exec_vec(vec![
                 "notebooks".to_string(),

@@ -168,6 +168,25 @@ fn is_text_bytes(bytes: &[u8]) -> bool {
     })
 }
 
+/// Classify in-memory bytes with nb's decision order: extension
+/// sets verbatim, then the magic table, then the strict byte rule.
+/// Mirrors [`classify_path`] without filesystem access, for virtual
+/// trees and already-read content.
+pub(crate) fn classify_bytes(rel: &str, bytes: &[u8]) -> NativeClass {
+    let first = ext_after_first_dot(rel);
+    let name = rel.rsplit('/').next().unwrap_or(rel);
+    let last = ext_after_last_dot(name);
+    if TEXT_EXTENSIONS.contains(&last) {
+        return NativeClass::Text;
+    }
+    if is_known_non_text(last) {
+        return NativeClass::NonTextual { ext: first };
+    }
+    if magic_non_text(bytes) || !is_text_bytes(bytes) {
+        return NativeClass::NonTextual { ext: first };
+    }
+    NativeClass::Text
+}
 /// Classify one existing path without spawning `nb`.
 ///
 /// `rel` is the notebook-relative form, used for nb's `--type`
@@ -185,23 +204,11 @@ pub(crate) fn classify_path(
     if abs.is_dir() {
         return Ok(NativeClass::Folder);
     }
-    let first = ext_after_first_dot(rel);
-    let name = rel.rsplit('/').next().unwrap_or(rel);
-    let last = ext_after_last_dot(name);
-    if TEXT_EXTENSIONS.contains(&last) {
-        return Ok(NativeClass::Text);
-    }
-    if is_known_non_text(last) {
-        return Ok(NativeClass::NonTextual { ext: first });
-    }
     let bytes = std::fs::read(abs).map_err(|e| NbError::Io {
         path: abs.to_path_buf(),
         source: e.into(),
     })?;
-    if magic_non_text(&bytes) || !is_text_bytes(&bytes) {
-        return Ok(NativeClass::NonTextual { ext: first });
-    }
-    Ok(NativeClass::Text)
+    Ok(classify_bytes(rel, &bytes))
 }
 
 /// Confined fallible reverse `.index` lookup: the one-based slot
@@ -316,7 +323,7 @@ fn split_folder_id(input: &str) -> Option<(String, String)> {
 
 /// Whether `rel` names a todo file (nb matches `todo.md$`
 /// case-insensitively for the checkbox-stripped title form).
-fn file_is_todo(rel: &str) -> bool {
+pub(crate) fn file_is_todo(rel: &str) -> bool {
     let lower = rel.to_ascii_lowercase();
     lower.ends_with("todo.md")
 }
@@ -358,7 +365,7 @@ pub(crate) fn entity_kind_for_rel(
 /// `${_title##*] }`: `[ ] Do the thing` becomes `Do the thing`.
 /// No `"] "` means no stripped form (returns the input unchanged,
 /// which then only matches itself).
-fn strip_checkbox(title: &str) -> &str {
+pub(crate) fn strip_checkbox(title: &str) -> &str {
     match title.rfind("] ") {
         Some(i) => &title[i + 2..],
         None => title,
@@ -544,7 +551,7 @@ fn strip_closing_hashes(line: &str) -> &str {
 /// Whether `name` may carry an nb-matchable title: `.md` or
 /// `.markdown`, ASCII case-insensitive (nb matches with
 /// `nocasematch` on).
-fn has_nb_title_extension(name: &str) -> bool {
+pub(crate) fn has_nb_title_extension(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     lower.ends_with(".md") || lower.ends_with(".markdown")
 }
@@ -579,10 +586,8 @@ fn file_title(
             });
         },
     };
+    let mut scan = TitleScan::default();
     let mut reader = std::io::BufReader::new(file);
-    let mut in_code = false;
-    let mut in_front = false;
-    let mut maybe: Option<String> = None;
     let mut chunk = Vec::new();
     loop {
         chunk.clear();
@@ -599,38 +604,77 @@ fn file_title(
         }
         let line = String::from_utf8_lossy(&chunk);
         let line = line.strip_suffix('\r').unwrap_or(&line);
+        if let Some(title) = scan.feed(line) {
+            return Ok(Some(title));
+        }
+    }
+    Ok(None)
+}
+
+/// Line-by-line nb title state machine (`_get_content --title`):
+/// first ATX H1 outside code blocks, else front-matter `title:`,
+/// else setext underline. Shared by streaming disk reads and
+/// bounded in-memory scans so both agree byte-for-byte.
+#[derive(Default)]
+struct TitleScan {
+    in_code: bool,
+    in_front: bool,
+    maybe: Option<String>,
+}
+
+impl TitleScan {
+    /// Feed one newline-stripped line; returns the title once found.
+    fn feed(&mut self, line: &str) -> Option<String> {
         // ATX H1 outside code blocks (leading blanks allowed).
         let bare = line.trim_start_matches([' ', '\t', '\u{b}', '\u{c}']);
         if let Some(after_hash) = bare.strip_prefix('#')
             && !after_hash.starts_with('#')
-            && !in_code
+            && !self.in_code
             && let Some(body) = after_hash.strip_prefix([' ', '\t'])
         {
             let body = body.trim_start_matches([' ', '\t']);
-            return Ok(Some(strip_closing_hashes(body).to_string()));
+            return Some(strip_closing_hashes(body).to_string());
         }
         if line == "---" {
-            in_front = !in_front;
+            self.in_front = !self.in_front;
         } else if line.starts_with("```") {
-            in_code = !in_code;
-        } else if in_front && line.starts_with("title: ") {
-            return Ok(Some(line["title: ".len()..].to_string()));
-        } else if !in_front && !in_code {
-            if maybe.is_none() && !line.is_empty() {
-                maybe = Some(line.to_string());
-            } else if let Some(candidate) = maybe.take() {
+            self.in_code = !self.in_code;
+        } else if self.in_front && line.starts_with("title: ") {
+            return Some(line["title: ".len()..].to_string());
+        } else if !self.in_front && !self.in_code {
+            if self.maybe.is_none() && !line.is_empty() {
+                self.maybe = Some(line.to_string());
+            } else if let Some(candidate) = self.maybe.take() {
                 let underline = line.trim();
                 if !underline.is_empty() && underline.chars().all(|c| c == '=')
                 {
-                    return Ok(Some(
+                    return Some(
                         candidate.trim_start_matches([' ', '\t']).to_string(),
-                    ));
+                    );
                 }
-                maybe = Some(candidate);
+                self.maybe = Some(candidate);
             }
         }
+        None
     }
-    Ok(None)
+}
+
+/// In-memory nb title scan with byte-identical semantics to the
+/// streaming disk version, for virtual trees and planned files.
+/// Bytes are already resident, so the whole content scans.
+pub(crate) fn title_of_bytes(rel: &str, bytes: &[u8]) -> Option<String> {
+    let name = rel.rsplit('/').next().unwrap_or(rel);
+    if !has_nb_title_extension(name) {
+        return None;
+    }
+    let mut scan = TitleScan::default();
+    let text = String::from_utf8_lossy(bytes);
+    for line in text.split('\n').map(|l| l.strip_suffix('\r').unwrap_or(l)) {
+        if let Some(title) = scan.feed(line) {
+            return Some(title);
+        }
+    }
+    None
 }
 
 /// Root-scope files eligible for title matching: regular files

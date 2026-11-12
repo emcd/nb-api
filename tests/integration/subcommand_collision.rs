@@ -62,16 +62,16 @@ async fn subcommand_colliding_folders_resolve_directly() {
             "show on colliding folder must be typed folder refusal, got: {msg:?}"
         );
 
-        // delete_note on a folder must direct to delete_folder via the
-        // plan validator, not fail in nb CLI resolution.
+        // delete_note on a folder must be a typed kind mismatch
+        // (not a generic CommandFailed from a misdispatched `nb show`).
         let err = client
             .delete_note("todos", None)
             .await
             .expect_err("note op on colliding folder");
-        assert!(
-            format!("{err:?}").contains("delete_folder"),
-            "{err:?}"
-        );
+        let msg = format!("{err:?}");
+        assert!(msg.contains("wrong kind"), "{err:?}");
+        assert!(msg.contains("expected File"), "{err:?}");
+        assert!(msg.contains("observed Folder"), "{err:?}");
     })
     .await;
 }

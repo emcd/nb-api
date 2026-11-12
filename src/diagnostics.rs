@@ -33,27 +33,13 @@ pub(crate) fn append_warning(mut output: String, warning: String) -> String {
 /// - `"! error: not found during expansion"` (real error with
 ///   "not found" mid-sentence, not the canonical shape).
 ///
-/// Note: this helper is a transient bridge while `NbClient`
-/// still wraps `nb` as a subprocess. The native rewrite
-/// (`nb-api:todos/2`) will let `show_note` and friends read
-/// the on-disk file directly via the P1 note-document-model,
-/// removing the need to classify `nb` stderr at all. Whether
-/// this helper is deleted is a separate change when the
-/// native rewrite lands; the deletion is NOT automatic.
-pub(crate) fn is_selector_not_found(
-    stderr: &str,
-    expected_selector: &str,
-) -> bool {
-    exact_normalized_diagnostic(stderr, "Not found: ", expected_selector)
-}
-
 /// Returns `true` if `stderr` from `nb notebooks show <name>
 /// --path` matches the exact `nb 7.24.0` notebook-absence
 /// diagnostic shape for the given expected notebook name. The
 /// complete normalized diagnostic must equal
-/// `! Notebook not found: <expected>`. See
-/// [`is_selector_not_found`] for normalization details and
-/// verified failure-mode negatives.
+/// `! Notebook not found: <expected>`. Normalization details
+/// and verified failure-mode negatives: see
+/// [`exact_normalized_diagnostic`].
 pub(crate) fn is_notebook_not_found(
     stderr: &str,
     expected_notebook: &str,

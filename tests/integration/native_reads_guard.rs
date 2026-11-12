@@ -592,3 +592,90 @@ async fn entity_kind_wire_shapes_round_trip() {
         assert_eq!(back, kind);
     }
 }
+
+/// Write one-shots resolve without spawning `nb`: numeric ids and
+/// titles go through the native table, and missing selectors stay
+/// `NotFound` (never a `CommandFailed` from a dead `nb`).
+///
+/// Unix-only: relies on a `sh` counting shim on `PATH`.
+#[cfg(unix)]
+#[allow(clippy::await_holding_lock)]
+#[tokio::test]
+async fn native_write_oneshots_spawn_no_nb() {
+    use std::os::unix::fs::PermissionsExt;
+
+    use crate::common::{EnvSnapshot, lock_env};
+
+    let env = NbTestEnv::new().expect("fixture");
+    with_isolated_env(&env, false, || async {
+        let native = NbClient::new(&config_for(&env)).expect("native");
+        let mut tx = native.transaction(None).await.expect("tx");
+        tx.add_note("hello_title.md", Some("Hello Title"), "body\n", &[])
+            .unwrap();
+        tx.add_note("notes.txt", Some("Notes"), "notes body\n", &[])
+            .unwrap();
+        tx.commit().await.expect("seed");
+    })
+    .await;
+
+    let root = env.nb_dir().join(env.notebook());
+    let _frozen = quiesce(&root);
+
+    let _guard = lock_env();
+    let _snap = EnvSnapshot::capture(&["NB_DIR", "HOME", "PATH"]);
+    let dir = env.nb_dir().join("deadbin");
+    std::fs::create_dir_all(&dir).expect("deadbin");
+    let log = dir.join("calls.log");
+    let shim = dir.join("nb");
+    std::fs::write(
+        &shim,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> {}\nexit 1\n",
+            log.display()
+        ),
+    )
+    .expect("write shim");
+    std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755))
+        .expect("chmod shim");
+    let path_var = std::env::var_os("PATH").unwrap_or_default();
+    let mut new_path = dir.into_os_string();
+    new_path.push(":");
+    new_path.push(path_var);
+    // SAFETY: serialized by ENV_LOCK; restored by `_snap` on drop.
+    unsafe { std::env::set_var("PATH", new_path) };
+    unsafe { std::env::set_var("NB_DIR", env.nb_dir()) };
+    unsafe { std::env::set_var("HOME", env.home_dir()) };
+
+    let native = NbClient::new(&config_for(&env)).expect("native");
+
+    // Numeric id through the virtual index: slot 2 is notes.txt.
+    native
+        .delete_note("2", None)
+        .await
+        .expect("delete by numeric id must succeed with dead nb");
+    assert!(!root.join("notes.txt").exists(), "slot 2 deleted");
+
+    // Title through the native table.
+    native
+        .delete_note("Hello Title", None)
+        .await
+        .expect("delete by title must succeed with dead nb");
+    assert!(!root.join("hello_title.md").exists(), "title deleted");
+
+    // Missing stays NotFound, never a spawned-`nb` failure.
+    let err = format!(
+        "{:?}",
+        native
+            .delete_note("nope-missing", None)
+            .await
+            .expect_err("missing delete must fail")
+    );
+    assert!(err.contains("NotFound"), "{err:?}");
+
+    // Zero spawn attempts, not merely zero successful spawns.
+    assert!(
+        !log.exists(),
+        "write one-shot path spawned nb: {:?}",
+        std::fs::read_to_string(&log).unwrap_or_default()
+    );
+}
