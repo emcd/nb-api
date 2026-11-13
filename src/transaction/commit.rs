@@ -1,5 +1,4 @@
 use std::collections::HashSet;
-use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
 
 use crate::error::NbError;
@@ -10,13 +9,11 @@ use crate::types::{CommitOutcome, OpOutcome};
 use super::apply::{OpMeta, PlanEffects, validate_and_apply_virtual};
 use super::index::{
     PendingIndexEdit, acquire_index_lock, apply_index_edits, index_id_on_disk,
-    index_rel_for_folder, is_index_rel, numeric_selector,
-    reap_stale_index_lock, split_folder_basename,
+    is_index_rel, numeric_selector, reap_stale_index_lock,
 };
 use super::plan::annotate_plan_index;
 use super::virtual_tree::{
-    VirtualNode, VirtualTree, normalize_rel, parent_path,
-    refuse_symlink_ancestors,
+    VirtualNode, VirtualTree, parent_path, refuse_symlink_ancestors,
 };
 
 use super::plan::Transaction;
@@ -293,7 +290,20 @@ fn existing_dirs_under(notebook_root: &Path) -> HashSet<String> {
             } else {
                 rel.join(&name)
             };
-            let key = child_rel.to_string_lossy().replace('\\', "/");
+            let key = {
+                let s = child_rel.to_string_lossy();
+                // Platform-scoped: Windows disk separators become
+                // `/`; Unix backslashes stay literal so rollback
+                // restores the original directory name.
+                #[cfg(windows)]
+                {
+                    s.replace('\\', "/")
+                }
+                #[cfg(not(windows))]
+                {
+                    s.into_owned()
+                }
+            };
             out.insert(key);
             walk(&entry.path(), &child_rel, out);
         }
@@ -490,12 +500,16 @@ fn restore_verify_dirty(notebook_root: &Path) -> Result<bool, NbError> {
 /// `PathCollision`, never overwrite).
 #[cfg(feature = "testing")]
 fn simulate_external_writer(notebook_root: &Path) -> Result<(), NbError> {
+    use std::fs::OpenOptions;
     use std::io::Write as _;
+
+    use super::index::{index_rel_for_folder, split_folder_basename};
     let (folder, name) =
         match std::env::var("NB_API_SIMULATE_EXTERNAL_SAME_PATH") {
             Ok(rel) => {
-                let (folder, basename) =
-                    split_folder_basename(&normalize_rel(&rel));
+                let (folder, basename) = split_folder_basename(
+                    &super::virtual_tree::normalize_rel(&rel),
+                );
                 (folder, basename)
             },
             Err(_) => {

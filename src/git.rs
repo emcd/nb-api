@@ -345,7 +345,22 @@ pub fn list_notebook_paths(
             })?;
             if file_type.is_dir() {
                 let child_rel = rel.join(&name);
-                let rel_str = child_rel.to_string_lossy().replace('\\', "/");
+                // Platform-scoped: on Windows the disk form uses
+                // `\` separators, which are normalized here. On
+                // Unix a backslash is an ordinary filename
+                // character (e.g. a literal `a\b` directory) and
+                // must be preserved verbatim.
+                let rel_str = {
+                    let s = child_rel.to_string_lossy();
+                    #[cfg(windows)]
+                    {
+                        s.replace('\\', "/")
+                    }
+                    #[cfg(not(windows))]
+                    {
+                        s.into_owned()
+                    }
+                };
                 if !out.iter().any(|p| {
                     p == &rel_str || p.starts_with(&format!("{rel_str}/"))
                 }) {

@@ -800,3 +800,137 @@ async fn wrong_kind_covers_unsupported_textual_note() {
     })
     .await;
 }
+
+/// Directory keys preserve literal backslashes: a committed literal
+/// `a\b` directory with a tracked child (plus an empty literal `e\f`
+/// directory) must not collapse onto nested `a/b` / `e/f` paths.
+/// Transactions over the snapshot must succeed and leave no phantom
+/// nested directory behind.
+/// Unix-only: on Windows the backslash is a native separator.
+#[cfg(unix)]
+#[tokio::test]
+async fn directory_snapshot_preserves_literal_backslash() {
+    let env = NbTestEnv::new().expect("fixture");
+    with_isolated_env(&env, false, || async {
+        let client = NbClient::new(&config_for(&env)).expect("client");
+        let root = env.nb_dir().join(env.notebook());
+        let mut tx = client.transaction(None).await.expect("tx");
+        tx.add_note("victim.md", Some("Victim"), "victim\n", &[])
+            .unwrap();
+        tx.commit().await.expect("seed");
+
+        // Raw literal fixtures: transactions refuse backslash
+        // creates, so commit directly with git.
+        std::fs::create_dir_all(root.join("a\\b")).expect("literal dir");
+        std::fs::write(root.join("a\\b/note.md"), "# Literal\n\nliteral\n")
+            .expect("literal child");
+        std::fs::create_dir_all(root.join("e\\f")).expect("empty literal");
+        let added = std::process::Command::new("git")
+            .current_dir(&root)
+            .args(["add", "-A"])
+            .status()
+            .expect("git add runs")
+            .success();
+        assert!(added, "git add must succeed");
+        let committed = std::process::Command::new("git")
+            .current_dir(&root)
+            .args(["commit", "-m", "literal backslash dirs", "--quiet"])
+            .status()
+            .expect("git commit runs")
+            .success();
+        assert!(committed, "literal dir fixture must commit");
+        assert!(!root.join("a/b").exists(), "no nested alias beforehand");
+        assert!(!root.join("e/f").exists(), "no nested alias beforehand");
+
+        // The snapshot must load (old key mangling failed here with
+        // Io on the phantom path) and the commit must succeed.
+        let mut tx = client.transaction(None).await.expect("tx");
+        tx.delete_note(NoteTarget::path("victim.md")).unwrap();
+        tx.commit().await.expect("delete victim");
+
+        assert!(!root.join("victim.md").exists(), "victim deleted");
+        assert!(
+            root.join("a\\b/note.md").exists(),
+            "literal dir child untouched"
+        );
+        assert!(root.join("e\\f").is_dir(), "empty literal dir untouched");
+        assert!(!root.join("a/b").exists(), "no phantom nested dir");
+        assert!(!root.join("e/f").exists(), "no phantom nested dir");
+    })
+    .await;
+}
+
+/// Rollback preserves pre-existing literal-backslash directory names:
+/// after an injected post-stage failure, the literal `a\b` directory
+/// survives and no aliased nested `a/b` directory is recreated.
+/// Unix-only: on Windows the backslash is a native separator.
+#[cfg(unix)]
+#[tokio::test]
+async fn rollback_preserves_literal_backslash_directory() {
+    let env = NbTestEnv::new().expect("fixture");
+    with_isolated_env(&env, false, || async {
+        let client = NbClient::new(&config_for(&env)).expect("client");
+        let root = env.nb_dir().join(env.notebook());
+        let mut tx = client.transaction(None).await.expect("tx");
+        tx.add_note("victim.md", Some("Victim"), "victim\n", &[])
+            .unwrap();
+        tx.commit().await.expect("seed");
+
+        std::fs::create_dir_all(root.join("a\\b")).expect("literal dir");
+        std::fs::write(root.join("a\\b/note.md"), "# Literal\n\nliteral\n")
+            .expect("literal child");
+        let added = std::process::Command::new("git")
+            .current_dir(&root)
+            .args(["add", "-A"])
+            .status()
+            .expect("git add runs")
+            .success();
+        assert!(added, "git add must succeed");
+        let committed = std::process::Command::new("git")
+            .current_dir(&root)
+            .args(["commit", "-m", "literal backslash dir", "--quiet"])
+            .status()
+            .expect("git commit runs")
+            .success();
+        assert!(committed, "literal dir fixture must commit");
+        let pre = head(&root);
+
+        unsafe {
+            std::env::set_var("NB_API_FAIL_AFTER_STAGE", "1");
+        }
+        let mut tx = client.transaction(None).await.expect("tx");
+        tx.add_note("fresh.md", Some("Fresh"), "fresh\n", &[])
+            .unwrap();
+        let err = tx.commit().await.expect_err("injected fail");
+        match err {
+            // The injected post-stage failure: proves the commit got
+            // past snapshot load and staging. An Io error here would
+            // mean the literal directory keys broke the snapshot.
+            nb_api::NbError::CommandFailed { ref command, .. } => {
+                assert_eq!(
+                    command, "nb-api://fail-after-stage",
+                    "must reach the injected failure: {err:?}"
+                );
+            },
+            other => panic!("expected injected CommandFailed, got: {other:?}"),
+        }
+        assert_eq!(head(&root), pre, "HEAD unchanged after rollback");
+        assert!(
+            root.join("a\\b/note.md").exists(),
+            "literal dir child survives rollback"
+        );
+        assert!(!root.join("a/b").exists(), "no aliased nested dir");
+        assert!(!root.join("fresh.md").exists(), "owned output removed");
+    })
+    .await;
+}
+
+fn head(root: &std::path::Path) -> String {
+    let out = std::process::Command::new("git")
+        .current_dir(root)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .expect("git rev-parse runs");
+    assert!(out.status.success(), "git rev-parse HEAD failed: {out:?}");
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}

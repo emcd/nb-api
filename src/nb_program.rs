@@ -32,6 +32,7 @@ const DEFAULT_PATHEXT: &str = ".COM;.EXE;.BAT;.CMD";
 /// Candidate file names for the `nb` executable within a single PATH
 /// directory, in the order a Windows shell would try them (PATHEXT
 /// order). Unix yields only the bare `nb` shebang script.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub(crate) fn nb_candidate_names() -> Vec<OsString> {
     #[cfg(windows)]
     {
