@@ -7,6 +7,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.4.5] - 2026-11-14
+
+### Fixed
+
+- `CommandFailed` display renders the exit code as a bare number
+  (`exit 1`) or `exit unknown` instead of leaking the `Option`
+  `Debug` shape (`exit Some(1)`) into user-facing errors.
+
 ## [0.4.4] - 2026-11-10
 
 ### Fixed
