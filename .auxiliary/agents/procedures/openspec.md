@@ -47,6 +47,11 @@ nothing; do not report that as a pass.
   `#### Scenario:` (exactly four hashtags).
 - When a commit completes an OpenSpec task or requirement, update the
   relevant task status in the same commit.
+- `tasks.md` carries implementation work only. Review routing lives in
+  review records and operator holds; publishing lives with the
+  operator. Do not add review, push, release, or publish checkboxes
+  to a change's task list — they linger unchecked, block completion
+  checks, and survive into archives.
 - When a commit changes a requirement's wording, sweep `design.md` and
   `proposal.md` for the same claim, not only the delta spec and
   `tasks.md`. `openspec validate --strict` checks structure, not
