@@ -69,6 +69,10 @@ path = "tests/unit/fingerprint.rs"
 name = "lines"
 path = "tests/unit/lines.rs"
 
+[[test]]
+name = "error"
+path = "tests/unit/error.rs"
+
 # Unit tests for `IoError` snapshot chains captured from
 # `std::io::Error` source chains via the public
 # `From<std::io::Error> for IoError` entry point. The tests

@@ -291,10 +291,20 @@ impl std::fmt::Display for NbError {
                 command,
                 stderr,
                 exit_code,
-            } => write!(
-                f,
-                "command {command:?} failed (exit {exit_code:?}): {stderr}"
-            ),
+            } => match exit_code {
+                Some(code) => {
+                    write!(
+                        f,
+                        "command {command:?} failed (exit {code}): {stderr}"
+                    )
+                },
+                None => {
+                    write!(
+                        f,
+                        "command {command:?} failed (exit unknown): {stderr}"
+                    )
+                },
+            },
             Self::ExecutableNotFound { path } => {
                 write!(f, "`nb` executable not found at path {path:?}")
             },
