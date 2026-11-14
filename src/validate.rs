@@ -11,6 +11,8 @@ pub(crate) fn validate_notebook_name(name: &str) -> Result<(), NbError> {
         || name.contains(':')
         || name.contains('/')
         || name.contains('\\')
+        || name == "."
+        || name == ".."
     {
         return Err(NbError::ValidationError {
             reason: NOTEBOOK_FIELD_MESSAGE.to_string(),

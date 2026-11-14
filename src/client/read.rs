@@ -809,25 +809,38 @@ pub(super) fn notebook_dir_from_env(
         return Ok(None);
     };
     let path = PathBuf::from(nb_dir).join(notebook);
-    // `metadata` follows symlinks exactly like the previous
-    // `is_dir` check; only genuine misses map to `None` while
-    // permission and I/O failures propagate instead of collapsing
-    // into `NotFound`.
-    match std::fs::metadata(&path) {
+    // Refuse symlink roots before anything follows them: resolution
+    // must stay under `NB_DIR`. Only genuine misses map to `None`
+    // while permission and I/O failures propagate instead of
+    // collapsing into `NotFound`.
+    match std::fs::symlink_metadata(&path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(None);
+        },
+        Err(e) => {
+            return Err(NbError::Io {
+                path: path.clone(),
+                source: e.into(),
+            });
+        },
+        Ok(meta) if meta.file_type().is_symlink() => {
+            return Err(NbError::UnsupportedStructure {
+                reason: format!(
+                    "refusing notebook root through symlink `{}`",
+                    path.display()
+                ),
+            });
+        },
+        Ok(meta) if !meta.is_dir() => return Ok(None),
+        Ok(_) => {},
+    }
+    match std::fs::metadata(path.join(".git")) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(NbError::Io {
-            path: path.clone(),
+            path: path.join(".git"),
             source: e.into(),
         }),
-        Ok(m) if !m.is_dir() => Ok(None),
-        Ok(_) => match std::fs::metadata(path.join(".git")) {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(NbError::Io {
-                path: path.join(".git"),
-                source: e.into(),
-            }),
-            Ok(_) => Ok(Some(path)),
-        },
+        Ok(_) => Ok(Some(path)),
     }
 }
 
@@ -874,13 +887,6 @@ pub(super) fn path_relative_to(
 /// initialized or removed.
 pub(super) fn create_notebook_dir(notebook: &str) -> Result<PathBuf, NbError> {
     validate_notebook_name(notebook)?;
-    if notebook == "." || notebook == ".." {
-        return Err(NbError::ValidationError {
-            reason: "Invalid `notebook`: `.` and `..` are not notebook names."
-                .to_string(),
-            location: None,
-        });
-    }
     let Some(nb_dir) = std::env::var_os("NB_DIR") else {
         return Err(NbError::ValidationError {
             reason: "notebook root is not configured (`NB_DIR` is unset)."
