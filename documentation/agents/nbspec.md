@@ -2,6 +2,8 @@
 
 This project uses **Nbspec** (notebook-resident change orchestration) for all in-flight changes. The notebook is the source of truth for proposals; the repository receives only durable documents at merge time (specifications, designs, decisions, archives). The upstream `openspec` CLI appears only as an optional, version-pinned CI conformance oracle scoped to grammar-level fixtures — it never holds in-flight proposals.
 
+Authorized exception: when the operator explicitly directs a filesystem-held change (for example agent-driven delegated review), the committed `documentation/architecture/openspec/changes/<id>/` tree is the review surface and `openspec validate --strict` is the grammar gate. Durable merge follows the same provenance rules; relocate nothing merely to satisfy this file. This exception covers operator-directed review packets only and does not authorize agents to change storage conventions on their own.
+
 ## Authoring workflow
 
 Proposals live in the project notebook under `proposals/<change-id>/`, scaffolded by `nbspec create <change-id> [--title ...]`. Author the proposal, design, specifications (one note per capability under `specifications/<capability>`), and the `work` todo checklist as notebook notes. Review the deterministic materialization via `nbspec render <change-id>`; the rendered tree is the reviewable artifact. Transfer durable documents to the configured repository targets via `nbspec merge <change-id>` with provenance and drift protection.
