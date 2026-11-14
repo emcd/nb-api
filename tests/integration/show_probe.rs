@@ -694,37 +694,18 @@ async fn show_note_qualified_selector_nonexistent_notebook_propagates_typed_not_
     .await;
 }
 
-// ---------- show_notebook_path successful-empty-output regression ----------
+// ---------- show_notebook_path without NB_DIR ----------
 //
-// Regression: when `show_notebook_path` succeeds with empty
-// stdout, the synthesized `CommandFailed.command` must carry
-// the actual argv (`nb notebooks show {notebook} --path`), not
-// a rewritten display string such as
-// `nb {notebook}:notebooks show --path`. Drives the public API
-// through `with_shim_nb_env` returning empty stdout.
-//
-// Unix-only because `with_shim_nb_env` requires a Bash script
-// + executable-bit chmod + `:`-separated PATH.
+// Native contract: path resolution never spawns `nb`. With `NB_DIR`
+// unset, resolution refuses with `ValidationError` (creation is
+// disabled here) instead of shelling out to the CLI.
 
-#[cfg(unix)]
-use crate::common::with_shim_nb_env;
-
-#[cfg(unix)]
 #[tokio::test]
-async fn show_notebook_path_successful_empty_output_command_field_is_actual_argv()
- {
+async fn show_notebook_path_without_nb_dir_refuses_natively() {
     let env = NbTestEnv::new().expect("fixture initialization");
-    // The shim emits zero bytes for `nb notebooks show
-    // {notebook} --path`. `show_notebook_path` interprets this
-    // as a successful invocation returning no path and synthesizes
-    // a `CommandFailed` for the empty-output contract failure
-    // path with the actual argv as the `command` field.
-    let crafted = "";
-    with_shim_nb_env(&env, crafted, || async {
-        // Drop NB_DIR so notebook discovery actually spawns the
-        // shim: with NB_DIR present, existence is proven from the
-        // filesystem without spawning (covered by the no-spawn
-        // one-shot test). Restored by the harness on exit.
+    with_isolated_env(&env, false, || async {
+        // Drop NB_DIR so discovery finds nothing: resolution
+        // must refuse natively. Restored by the harness on exit.
         // SAFETY: serialized by ENV_LOCK; restored on drop.
         unsafe { std::env::remove_var("NB_DIR") };
         let client = NbClient::new(&Config {
@@ -735,38 +716,20 @@ async fn show_notebook_path_successful_empty_output_command_field_is_actual_argv
         })
         .expect("client construction");
 
-        let result = client.show_notebook_path(Some(env.notebook())).await;
-        match result {
-            Ok(_) => panic!(
-                "show_notebook_path must return Err for empty stdout, not Ok; \
-                 this is the empty-output contract failure path"
-            ),
-            Err(NbError::CommandFailed {
-                command,
-                stderr,
-                exit_code,
-                ..
-            }) => {
-                assert_eq!(
-                    command,
-                    format!("nb notebooks show {} --path", env.notebook()),
-                    "successful-empty-output command field must match the actual \
-                     argv `nb notebooks show {{notebook}} --path`, not the legacy \
-                     display string `nb {{notebook}}:notebooks show --path`. \
-                     successful-empty-output command-field regression."
+        let err = client
+            .show_notebook_path(Some(env.notebook()))
+            .await
+            .expect_err("missing NB_DIR must refuse");
+        match err {
+            NbError::ValidationError { reason, .. } => {
+                assert!(
+                    reason.contains("automatic creation is disabled"),
+                    "unexpected reason: {reason:?}"
                 );
-                assert_eq!(
-                    stderr, "nb notebooks path output was empty",
-                    "synthesized stderr must identify the empty-output cause"
-                );
-                assert_eq!(
-                    exit_code, None,
-                    "synthesized exit_code must be None (subprocess succeeded with empty output)"
-                );
-            }
-            Err(other) => panic!(
-                "expected NbError::CommandFailed for empty-output contract failure, got: {other:?}"
-            ),
+            },
+            other => {
+                panic!("expected ValidationError, got: {other:?}");
+            },
         }
     })
     .await;

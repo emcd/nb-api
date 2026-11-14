@@ -281,6 +281,24 @@ pub fn notebook_commit_all(
     }
 }
 
+/// Initialize an empty notebook worktree at `root`, which must be an
+/// empty directory: `git init`, an empty `.index`, and an initial
+/// `[nb] Initialize` commit so `HEAD` resolves immediately.
+/// Replicates the `nb notebooks add` layout exactly.
+pub fn notebook_init_empty(root: &Path) -> Result<(), NbError> {
+    git_capture(root, &["init".into()])?;
+    std::fs::write(root.join(".index"), b"").map_err(|e| NbError::Io {
+        path: root.join(".index"),
+        source: e.into(),
+    })?;
+    git_capture(root, &["add".into(), "-A".into()])?;
+    git_capture(
+        root,
+        &["commit".into(), "-m".into(), "[nb] Initialize".into()],
+    )?;
+    Ok(())
+}
+
 /// Hard-reset worktree/index to `revision` and remove untracked files.
 pub fn notebook_reset_clean(
     notebook_root: &Path,

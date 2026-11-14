@@ -5,7 +5,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 use tokio::process::Command;
 
-use crate::diagnostics::{append_warning, is_notebook_not_found};
+use crate::diagnostics::append_warning;
 use crate::error::NbError;
 use crate::gate;
 use crate::git::derive_git_notebook_name;
@@ -16,7 +16,7 @@ use crate::transaction::Transaction;
 use crate::validate::{parse_qualified_selector, validate_notebook_name};
 use crate::{Config, NbClient};
 
-use super::read::notebook_dir_from_env;
+use super::read::{create_notebook_dir, notebook_dir_from_env};
 
 /// Regex to match ANSI/ISO 2022 escape sequences.
 ///
@@ -64,8 +64,9 @@ impl NbClient {
         notebook: Option<&str>,
     ) -> Result<Transaction, NbError> {
         let notebook = self.resolve_notebook_name(notebook)?;
-        // Prefer filesystem existence under NB_DIR so plan construction does
-        // not invoke `nb` (which can auto-checkpoint a dirty worktree).
+        // Prefer filesystem existence under NB_DIR so plan construction
+        // never spawns a subprocess (native ensure cannot
+        // auto-checkpoint a dirty worktree).
         // Discovery I/O failures fall back to ensure here (legacy
         // behavior): only the native read path treats them as `Io`.
         // Only a genuine miss ensures (and possibly creates).
@@ -82,41 +83,20 @@ impl NbClient {
     }
 
     /// Notebook path without acquiring the notebook gate (caller holds gate or
-    /// is still resolving identity).
-    ///
-    /// Prefers `$NB_DIR/<notebook>` when that directory exists so path
-    /// resolution does not invoke `nb` (which can auto-checkpoint and clear a
-    /// dirty baseline before `Transaction::commit` inspects status).
+    /// is still resolving identity). Pure `NB_DIR` probe plus native
+    /// ensure; never spawns `nb`.
     pub(crate) async fn show_notebook_path_unguarded(
         &self,
         notebook: Option<&str>,
     ) -> Result<PathBuf, NbError> {
         let notebook = self.resolve_notebook_name(notebook)?;
-        // Discovery I/O failures fall back to ensure here (legacy
-        // behavior); only the native read path treats them as `Io`.
-        let existing: Option<PathBuf> =
-            notebook_dir_from_env(&notebook).unwrap_or_default();
-        if let Some(path) = existing {
+        if let Some(path) = notebook_dir_from_env(&notebook)? {
             return Ok(path);
         }
         self.ensure_notebook(&notebook).await?;
-        let output = self
-            .exec_vec(vec![
-                "notebooks".to_string(),
-                "show".to_string(),
-                notebook.clone(),
-                "--path".to_string(),
-            ])
-            .await?;
-        let path = output.trim();
-        if path.is_empty() {
-            return Err(NbError::CommandFailed {
-                command: format!("nb notebooks show {notebook} --path"),
-                stderr: "nb notebooks path output was empty".to_string(),
-                exit_code: None,
-            });
-        }
-        Ok(PathBuf::from(path))
+        notebook_dir_from_env(&notebook)?.ok_or(NbError::NotFound {
+            selector: format!("{notebook}:"),
+        })
     }
 
     pub(super) async fn with_notebook_gate<F, T>(
@@ -260,144 +240,37 @@ impl NbClient {
         Ok(name)
     }
 
+    /// Ensures the notebook exists, creating it natively when allowed.
     pub(super) async fn ensure_notebook(
         &self,
         notebook: &str,
     ) -> Result<(), NbError> {
-        match self.check_notebook(notebook).await {
-            Ok(()) => Ok(()),
-            // Genuine infrastructure failure (no nb binary, IO
-            // error) — surface verbatim; do not try to create.
-            Err(
-                err
-                @ (NbError::ExecutableNotFound { .. } | NbError::Io { .. }),
-            ) => Err(err),
-            // Typed NotFound from `check_notebook` means the
-            // pinned diagnostic matched the genuine notebook-
-            // absence shape (`Notebook not found: <name>`).
-            // Try to create it; if creation is disabled, surface
-            // a typed validation error; if creation fails,
-            // propagate the new CommandFailed verbatim.
-            Err(NbError::NotFound { .. }) => {
-                if !self.create_notebook {
-                    return Err(NbError::ValidationError {
-                        reason: format!(
-                            "notebook not found; create it with the nb CLI (`nb notebooks add {}`) \
-                             or remove --no-create-notebook",
-                            notebook
-                        ),
-                        location: None,
-                    });
-                }
-                self.exec_vec(vec![
-                    "notebooks".to_string(),
-                    "add".to_string(),
-                    notebook.to_string(),
-                ])
-                .await?;
-                Ok(())
-            },
-            // Any other error from `check_notebook` (permission
-            // denied, transient crash, etc.) propagates verbatim;
-            // we deliberately do not try `notebooks add`, because
-            // a non-NotFound CommandFailed likely indicates a
-            // real failure that creation would not rescue.
-            Err(err) => Err(err),
+        if notebook_dir_from_env(notebook)?.is_some() {
+            return Ok(());
         }
+        if !self.create_notebook {
+            return Err(NbError::ValidationError {
+                reason: format!(
+                    "notebook `{notebook}` does not exist and automatic creation is disabled"
+                ),
+                location: None,
+            });
+        }
+        create_notebook_dir(notebook).map(|_| ())
     }
 
+    /// Ensures the notebook exists without creating it; a missing
+    /// notebook is terminal `NotFound`.
     pub(super) async fn ensure_existing_notebook(
         &self,
         notebook: &str,
     ) -> Result<(), NbError> {
-        match self.check_notebook(notebook).await {
-            Ok(()) => Ok(()),
-            // Infrastructure failure — surface verbatim.
-            Err(
-                err
-                @ (NbError::ExecutableNotFound { .. } | NbError::Io { .. }),
-            ) => Err(err),
-            // Genuine notebook absence: propagate the typed
-            // `NbError::NotFound` produced by `check_notebook`
-            // verbatim. The qualified-selector path
-            // (`<notebook>:<item>`) used by `show_note`,
-            // `add_note`, `edit_note`, etc. surfaces this to the
-            // caller as the typed `NotFound` variant — the
-            // caller can distinguish "notebook gone" from a
-            // generic validation failure. Erasing the typed
-            // `NotFound` into a `ValidationError` would lose
-            // the variant distinction.
-            Err(err @ NbError::NotFound { .. }) => Err(err),
-            // Other CommandFailed errors propagate verbatim
-            // rather than being misclassified as "not found."
-            Err(err) => Err(err),
-        }
-    }
-
-    async fn check_notebook(&self, notebook: &str) -> Result<(), NbError> {
-        // Fast path: an existing `$NB_DIR/<notebook>` needs no
-        // subprocess. Discovery I/O failures propagate; only a
-        // genuine miss falls through to the `nb` check below.
         if notebook_dir_from_env(notebook)?.is_some() {
             return Ok(());
         }
-        let show_result = self
-            .exec_vec(vec![
-                "notebooks".to_string(),
-                "show".to_string(),
-                notebook.to_string(),
-                "--path".to_string(),
-            ])
-            .await;
-        match show_result {
-            Ok(output) => {
-                if output.trim().is_empty() {
-                    // Use the actual argument vector that was passed
-                    // to `exec_vec`, not a reformatted display
-                    // string. This way the `command` field matches
-                    // what was actually executed on the wire, with
-                    // no possibility of drift between the synthetic
-                    // field and the real argv.
-                    return Err(NbError::CommandFailed {
-                        command: format!(
-                            "nb notebooks show {notebook} --path"
-                        ),
-                        stderr: "nb notebooks path output was empty"
-                            .to_string(),
-                        exit_code: None,
-                    });
-                }
-                Ok(())
-            },
-            Err(err) => {
-                // Surface genuine infrastructure failures verbatim
-                // so callers can distinguish "nb is broken" from
-                // "notebook does not exist". Genuine notebook
-                // absence (nb's pinned diagnostic on stderr) maps
-                // to typed `NotFound`. Any other subprocess
-                // failure (e.g., permission denied, a transient
-                // crash, an nb bug surfacing as `NotFound` in
-                // stderr without the literal `Notebook not found:`
-                // prefix) propagates as the original
-                // `CommandFailed` rather than being swallowed
-                // here. The caller (`ensure_notebook` /
-                // `ensure_existing_notebook`) decides whether to
-                // try to create the notebook on `NotFound` or
-                // surface the error verbatim otherwise.
-                match err {
-                    NbError::ExecutableNotFound { .. }
-                    | NbError::Io { .. } => Err(err),
-                    NbError::CommandFailed { ref stderr, .. }
-                        if is_notebook_not_found(stderr, notebook) =>
-                    {
-                        Err(NbError::NotFound {
-                            selector: format!("{notebook}:"),
-                        })
-                    },
-                    other => Err(other),
-                }
-            },
-        }
+        Err(NbError::NotFound {
+            selector: format!("{notebook}:"),
+        })
     }
 
     /// Executes an nb command and returns stdout.

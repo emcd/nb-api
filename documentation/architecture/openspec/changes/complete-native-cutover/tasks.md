@@ -1,7 +1,7 @@
 ## 1. Native notebook lifecycle
 
-- [ ] 1.1 Replicate `nb` notebook on-disk layout for create (git init + initial commit so `HEAD` resolves; `.index` lazily as today) behind a single create entry point
-- [ ] 1.2 Rewire ensure/exists/path resolution to the `NB_DIR` probe; remove the `nb notebooks show --path` fallback; implement the `create_notebook` true/false × read/write matrix with no `nb` CLI references
+- [x] 1.1 Replicate `nb` notebook on-disk layout for create (git init + initial commit so `HEAD` resolves; `.index` lazily as today) behind a single create entry point
+- [x] 1.2 Rewire ensure/exists/path resolution to the `NB_DIR` probe; remove the `nb notebooks show --path` fallback; implement the `create_notebook` true/false × read/write matrix with no `nb` CLI references
 - [ ] 1.3 Enforce name/root confinement (dot-segment, absolute/drive, separator rejection; symlink roots refused) before any mutation
 - [ ] 1.4 Implement atomic concurrent create (single winner, idempotent ensure) with owned-only failure cleanup
 - [ ] 1.5 Add typed notebook enumeration (`list_notebook_names`, sorted valid names)
