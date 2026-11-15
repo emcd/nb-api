@@ -16,7 +16,7 @@ use crate::transaction::Transaction;
 use crate::validate::{parse_qualified_selector, validate_notebook_name};
 use crate::{Config, NbClient};
 
-use super::read::{create_notebook_dir, notebook_dir_from_env};
+use super::lifecycle::{create_notebook_dir, notebook_dir_from_env};
 
 /// Regex to match ANSI/ISO 2022 escape sequences.
 ///
@@ -256,7 +256,7 @@ impl NbClient {
                 location: None,
             });
         }
-        create_notebook_dir(notebook).map(|_| ())
+        create_notebook_dir(notebook).await.map(|_| ())
     }
 
     /// Ensures the notebook exists without creating it; a missing
