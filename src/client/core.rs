@@ -16,7 +16,7 @@ use crate::transaction::Transaction;
 use crate::validate::{parse_qualified_selector, validate_notebook_name};
 use crate::{Config, NbClient};
 
-use super::lifecycle::{create_notebook_dir, notebook_dir_from_env};
+use super::lifecycle::{ensure_notebook_dir, notebook_dir_from_env};
 
 /// Regex to match ANSI/ISO 2022 escape sequences.
 ///
@@ -64,16 +64,9 @@ impl NbClient {
         notebook: Option<&str>,
     ) -> Result<Transaction, NbError> {
         let notebook = self.resolve_notebook_name(notebook)?;
-        // Prefer filesystem existence under NB_DIR so plan construction
-        // never spawns a subprocess (native ensure cannot
-        // auto-checkpoint a dirty worktree).
-        // Discovery I/O failures fall back to ensure here (legacy
-        // behavior): only the native read path treats them as `Io`.
-        // Only a genuine miss ensures (and possibly creates).
-        let existing = notebook_dir_from_env(&notebook).unwrap_or_default();
-        if existing.is_none() {
-            self.ensure_notebook(&notebook).await?;
-        }
+        // Native ensure converges on concurrent creators and refuses
+        // cleanly; no subprocess runs on this path.
+        self.ensure_notebook(&notebook).await?;
         Ok(Transaction::new(self.clone(), notebook, self.gate_timeout))
     }
 
@@ -83,20 +76,20 @@ impl NbClient {
     }
 
     /// Notebook path without acquiring the notebook gate (caller holds gate or
-    /// is still resolving identity). Pure `NB_DIR` probe plus native
-    /// ensure; never spawns `nb`.
+    /// is still resolving identity). Pure `NB_DIR` probe; never
+    /// creates, ensures, or spawns `nb`. Present-but-not-ready
+    /// entries surface the genuine git failure instead of reading
+    /// as absent.
     pub(crate) async fn show_notebook_path_unguarded(
         &self,
         notebook: Option<&str>,
     ) -> Result<PathBuf, NbError> {
         let notebook = self.resolve_notebook_name(notebook)?;
-        if let Some(path) = notebook_dir_from_env(&notebook)? {
-            return Ok(path);
-        }
-        self.ensure_notebook(&notebook).await?;
-        notebook_dir_from_env(&notebook)?.ok_or(NbError::NotFound {
-            selector: format!("{notebook}:"),
-        })
+        notebook_dir_from_env(&notebook)
+            .await?
+            .ok_or(NbError::NotFound {
+                selector: format!("{notebook}:"),
+            })
     }
 
     pub(super) async fn with_notebook_gate<F, T>(
@@ -245,32 +238,25 @@ impl NbClient {
         &self,
         notebook: &str,
     ) -> Result<(), NbError> {
-        if notebook_dir_from_env(notebook)?.is_some() {
-            return Ok(());
-        }
-        if !self.create_notebook {
-            return Err(NbError::ValidationError {
-                reason: format!(
-                    "notebook `{notebook}` does not exist and automatic creation is disabled"
-                ),
-                location: None,
-            });
-        }
-        create_notebook_dir(notebook).await.map(|_| ())
+        ensure_notebook_dir(notebook, self.create_notebook)
+            .await
+            .map(|_| ())
     }
 
     /// Ensures the notebook exists without creating it; a missing
-    /// notebook is terminal `NotFound`.
+    /// notebook is terminal `NotFound`. Present-but-not-ready
+    /// entries surface the genuine git failure instead of reading
+    /// as absent.
     pub(super) async fn ensure_existing_notebook(
         &self,
         notebook: &str,
     ) -> Result<(), NbError> {
-        if notebook_dir_from_env(notebook)?.is_some() {
-            return Ok(());
-        }
-        Err(NbError::NotFound {
-            selector: format!("{notebook}:"),
-        })
+        notebook_dir_from_env(notebook)
+            .await?
+            .ok_or(NbError::NotFound {
+                selector: format!("{notebook}:"),
+            })?;
+        Ok(())
     }
 
     /// Executes an nb command and returns stdout.
@@ -487,6 +473,27 @@ mod native_gate_tests {
             .status()
             .expect("git init runs");
         assert!(git_init.success(), "git init must succeed");
+        // Validity requires a resolvable HEAD: an initial commit
+        // makes this hand-built repo a complete notebook without
+        // involving `nb`.
+        let git_commit = std::process::Command::new("git")
+            .args([
+                "-c",
+                "user.name=nb-api-test",
+                "-c",
+                "user.email=nb-api-test@example.invalid",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "--allow-empty",
+                "-q",
+                "-m",
+                "init",
+            ])
+            .current_dir(&root)
+            .status()
+            .expect("git commit runs");
+        assert!(git_commit.success(), "git commit must succeed");
         std::fs::write(root.join(".index"), "victim.md\nother.md\n")
             .expect("index");
         std::fs::write(root.join("victim.md"), "# Victim\nv0\n")

@@ -284,19 +284,46 @@ pub fn notebook_commit_all(
 /// Initialize an empty notebook worktree at `root`, which must be an
 /// empty directory: `git init`, an empty `.index`, and an initial
 /// `[nb] Initialize` commit so `HEAD` resolves immediately.
-/// Replicates the `nb notebooks add` layout exactly.
-pub fn notebook_init_empty(root: &Path) -> Result<(), NbError> {
+/// Replicates the `nb notebooks add` layout exactly. Only the
+/// `.index` file itself is staged, never a directory sweep, so
+/// late-arriving foreign files are not collected. Returns the
+/// initial commit hash for ownership checks.
+pub fn notebook_init_empty(root: &Path) -> Result<String, NbError> {
     git_capture(root, &["init".into()])?;
     std::fs::write(root.join(".index"), b"").map_err(|e| NbError::Io {
         path: root.join(".index"),
         source: e.into(),
     })?;
-    git_capture(root, &["add".into(), "-A".into()])?;
+    git_capture(root, &["add".into(), "--".into(), ".index".into()])?;
+    #[cfg(feature = "testing")]
+    if let Some(ms) = std::env::var_os("NB_API_PAUSE_BEFORE_INIT_COMMIT_MS")
+        && let Ok(ms) = ms.to_string_lossy().parse::<u64>()
+        && ms > 0
+    {
+        std::thread::sleep(std::time::Duration::from_millis(ms));
+    }
+    #[cfg(feature = "testing")]
+    if std::env::var_os("NB_API_NOTEBOOK_INIT_FAIL").is_some() {
+        return Err(NbError::Io {
+            path: root.to_path_buf(),
+            source: std::io::Error::other("injected notebook init failure")
+                .into(),
+        });
+    }
+    // Unsigned like every other automated commit (see
+    // `notebook_commit_all`): initialization never requests signing.
     git_capture(
         root,
-        &["commit".into(), "-m".into(), "[nb] Initialize".into()],
+        &[
+            "commit".into(),
+            "--no-gpg-sign".into(),
+            "-m".into(),
+            "[nb] Initialize".into(),
+        ],
     )?;
-    Ok(())
+    Ok(git_capture(root, &["rev-parse".into(), "HEAD".into()])?
+        .trim()
+        .to_string())
 }
 
 /// Hard-reset worktree/index to `revision` and remove untracked files.

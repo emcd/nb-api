@@ -442,8 +442,9 @@ async fn native_backslash_traversal_is_platform_scoped() {
     .await;
 }
 
-/// With `NB_DIR` absent, native reads fail closed as `NotFound`
-/// without spawning or creating anything.
+/// A missing `NB_DIR` fails closed without spawning or creating
+/// anything: reads report a typed configuration failure, never a
+/// fabricated missing-notebook result.
 #[tokio::test]
 async fn native_reads_fail_closed_without_nb_dir() {
     let env = NbTestEnv::new().expect("fixture");
@@ -460,7 +461,10 @@ async fn native_reads_fail_closed_without_nb_dir() {
                 .await
                 .expect_err("no NB_DIR must fail")
         );
-        assert!(err.contains("NotFound"), "{err:?}");
+        assert!(
+            err.contains("ValidationError") && err.contains("not configured"),
+            "missing root is a configuration failure: {err:?}"
+        );
         assert!(
             !env.nb_dir().join("no-such-notebook").exists(),
             "no notebook may materialize"

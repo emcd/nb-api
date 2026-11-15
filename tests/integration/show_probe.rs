@@ -696,9 +696,9 @@ async fn show_note_qualified_selector_nonexistent_notebook_propagates_typed_not_
 
 // ---------- show_notebook_path without NB_DIR ----------
 //
-// Native contract: path resolution never spawns `nb`. With `NB_DIR`
-// unset, resolution refuses with `ValidationError` (creation is
-// disabled here) instead of shelling out to the CLI.
+// Native contract: path queries never spawn `nb`. With `NB_DIR`
+// unset, resolution fails closed with a typed configuration
+// failure instead of shelling out to the CLI.
 
 #[tokio::test]
 async fn show_notebook_path_without_nb_dir_refuses_natively() {
@@ -723,7 +723,7 @@ async fn show_notebook_path_without_nb_dir_refuses_natively() {
         match err {
             NbError::ValidationError { reason, .. } => {
                 assert!(
-                    reason.contains("automatic creation is disabled"),
+                    reason.contains("not configured"),
                     "unexpected reason: {reason:?}"
                 );
             },

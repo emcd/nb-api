@@ -1,6 +1,9 @@
 use std::path::{Path, PathBuf};
 
-use super::lifecycle::notebook_dir_from_env;
+use super::lifecycle::{
+    CreateMode, Probe, create_notebook_dir, notebook_dir_from_env,
+    notebook_root_dir, probe_notebook_dir,
+};
 use crate::argv::search_command_args;
 use crate::error::NbError;
 use crate::fingerprint;
@@ -52,32 +55,20 @@ impl NbClient {
     /// Lists notebook names natively: sorted names of valid
     /// notebooks under `NB_DIR`, with zero `nb` spawns. Entries
     /// that fail name validation or the validity probe are
-    /// skipped, never created or modified.
+    /// skipped (including symlinked roots, which stay
+    /// un-followed); genuine I/O failures still propagate.
+    /// A mid-initialization notebook is skipped until ready.
     pub async fn list_notebook_names(&self) -> Result<Vec<String>, NbError> {
         let _g = gate::acquire_global(self.gate_timeout).await?;
-        let Some(nb_dir) = std::env::var_os("NB_DIR") else {
-            return Err(NbError::ValidationError {
-                reason: "notebook root is not configured (`NB_DIR` is unset)."
-                    .to_string(),
-                location: None,
-            });
-        };
-        let nb_dir = PathBuf::from(nb_dir);
-        if !nb_dir.is_dir() {
-            return Err(NbError::ValidationError {
-                reason: "notebook root is not a directory (`NB_DIR`)."
-                    .to_string(),
-                location: None,
-            });
-        }
+        let root = notebook_root_dir()?;
         let mut names = Vec::new();
-        let entries = std::fs::read_dir(&nb_dir).map_err(|e| NbError::Io {
-            path: nb_dir.clone(),
+        let entries = std::fs::read_dir(&root).map_err(|e| NbError::Io {
+            path: root.clone(),
             source: e.into(),
         })?;
         for entry in entries {
             let entry = entry.map_err(|e| NbError::Io {
-                path: nb_dir.clone(),
+                path: root.clone(),
                 source: e.into(),
             })?;
             let name = entry.file_name();
@@ -87,26 +78,45 @@ impl NbClient {
             if validate_notebook_name(name).is_err() {
                 continue;
             }
-            if notebook_dir_from_env(name)?.is_some() {
-                names.push(name.to_string());
+            match probe_notebook_dir(&root, name) {
+                Ok(Probe::Ready(_)) => names.push(name.to_string()),
+                Ok(Probe::Absent | Probe::Pending | Probe::NotADirectory) => {
+                },
+                Err(NbError::UnsupportedStructure { .. }) => {},
+                Err(other) => return Err(other),
             }
         }
         names.sort();
         Ok(names)
     }
 
-    /// Returns the path for a notebook.
+    /// Returns the path for an existing notebook. This is a
+    /// side-effect-free query: a missing notebook is `NotFound`,
+    /// never created. Use [`Self::create_notebook`] to create or
+    /// write paths to ensure-then-operate.
     pub async fn show_notebook_path(
         &self,
         notebook: Option<&str>,
     ) -> Result<PathBuf, NbError> {
         let notebook = self.resolve_notebook_name(notebook)?;
-        self.ensure_notebook(&notebook).await?;
         self.with_notebook_gate(
             &notebook,
             self.show_notebook_path_unguarded(Some(&notebook)),
         )
         .await
+    }
+
+    /// Creates a notebook explicitly, returning its canonical path.
+    /// An existing valid notebook is refused as already-exists
+    /// (unlike write-path ensure, which converges idempotently).
+    /// Creation validates the name, initializes the empty layout,
+    /// and verifies the result before returning.
+    pub async fn create_notebook(
+        &self,
+        notebook: Option<&str>,
+    ) -> Result<PathBuf, NbError> {
+        let name = self.resolve_notebook_name(notebook)?;
+        create_notebook_dir(&name, CreateMode::Exact).await
     }
 
     /// Shows a note as a structured [`ShowNote`] (gate-held).
@@ -199,7 +209,7 @@ impl NbClient {
         &self,
         notebook: &str,
     ) -> Result<PathBuf, NbError> {
-        match notebook_dir_from_env(notebook)? {
+        match notebook_dir_from_env(notebook).await? {
             Some(path) => Ok(path),
             None => Err(NbError::NotFound {
                 selector: format!("{notebook}:"),

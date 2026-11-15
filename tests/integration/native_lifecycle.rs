@@ -1,11 +1,11 @@
 //! Native notebook lifecycle: creation layout, validity matrix,
-//! confinement, enumeration, concurrent creation, and true-`nb`
-//! interoperability.
+//! confinement, enumeration, concurrent creation, failure
+//! injection, and true-`nb` interoperability.
 //!
-//! Everything here except the explicitly `#[ignore]`d oracle test
-//! runs in the default suite with zero `nb` spawns: fixtures are
-//! assembled with `git` and the filesystem only. The ignored test
-//! belongs to the extended oracle profile.
+//! Default-suite tests never spawn `nb` themselves; the fixture
+//! notebook is still provisioned by `nb` (native fixture setup
+//! arrives separately). The ignored oracle test belongs to the
+//! extended suite.
 
 use nb_api::testing::NbTestEnv;
 use nb_api::{Config, NbClient, NbError};
@@ -39,7 +39,7 @@ fn git(root: &std::path::Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
-/// Creation replicates the `nb notebooks add` layout and the result
+/// Creation lays out the exact `nb` notebook shape and the result
 /// is immediately committable.
 #[tokio::test]
 async fn create_resolves_layout_and_transacts_immediately() {
@@ -47,7 +47,7 @@ async fn create_resolves_layout_and_transacts_immediately() {
     with_isolated_env(&env, false, || async {
         let client = NbClient::new(&config_for_create(&env)).expect("client");
         let root = client
-            .show_notebook_path(Some("fresh-native"))
+            .create_notebook(Some("fresh-native"))
             .await
             .expect("create");
         assert!(root.join(".index").is_file(), "empty index exists");
@@ -76,31 +76,64 @@ async fn create_resolves_layout_and_transacts_immediately() {
     .await;
 }
 
-/// A missing notebook is created on write paths when allowed.
+/// Explicit creation refuses an existing notebook instead of
+/// converging onto it.
 #[tokio::test]
-async fn missing_notebook_write_path_creates_when_allowed() {
+async fn explicit_create_refuses_existing() {
     let env = NbTestEnv::new().expect("fixture");
     with_isolated_env(&env, false, || async {
         let client = NbClient::new(&config_for_create(&env)).expect("client");
-        let root = client
-            .show_notebook_path(Some("brand-new"))
+        let first = client
+            .create_notebook(Some("once"))
             .await
-            .expect("create");
-        assert!(root.is_dir(), "notebook directory created");
+            .expect("first create");
+        let err = client
+            .create_notebook(Some("once"))
+            .await
+            .expect_err("second create must refuse");
+        match err {
+            NbError::ValidationError { reason, .. } => {
+                assert!(
+                    reason.contains("already exists"),
+                    "unexpected reason: {reason:?}"
+                );
+            },
+            other => {
+                panic!("expected ValidationError, got: {other:?}");
+            },
+        }
+        assert!(first.join(".index").is_file(), "original untouched");
+    })
+    .await;
+}
+
+/// A missing notebook is ensured on write paths when allowed.
+#[tokio::test]
+async fn missing_notebook_write_path_ensures_when_allowed() {
+    let env = NbTestEnv::new().expect("fixture");
+    with_isolated_env(&env, false, || async {
+        let client = NbClient::new(&config_for_create(&env)).expect("client");
+        client
+            .transaction(Some("brand-new"))
+            .await
+            .map(|_| ())
+            .expect("ensure creates");
+        assert!(env.nb_dir().join("brand-new/.index").is_file());
     })
     .await;
 }
 
 /// A missing notebook refuses on write paths when creation is off,
-/// without creating anything.
+/// creating nothing.
 #[tokio::test]
 async fn missing_notebook_write_path_refuses_when_disabled() {
     let env = NbTestEnv::new().expect("fixture");
     with_isolated_env(&env, false, || async {
         let client = NbClient::new(&config_for(&env)).expect("client");
         let err = client
-            .show_notebook_path(Some("nope"))
+            .transaction(Some("nope"))
             .await
+            .map(|_| ())
             .expect_err("missing notebook must refuse");
         match err {
             NbError::ValidationError { reason, .. } => {
@@ -141,27 +174,29 @@ async fn missing_notebook_read_path_is_not_found() {
     .await;
 }
 
-/// A plain directory is never git-initialized by ensure.
+/// A plain directory is never git-initialized, on any write path.
 #[tokio::test]
 async fn plain_directory_is_never_initialized() {
     let env = NbTestEnv::new().expect("fixture");
     with_isolated_env(&env, false, || async {
         std::fs::create_dir(env.nb_dir().join("plain")).expect("plain dir");
         let client = NbClient::new(&config_for_create(&env)).expect("client");
-        let err = client
-            .show_notebook_path(Some("plain"))
-            .await
-            .expect_err("plain directory must refuse");
-        match err {
-            NbError::ValidationError { reason, .. } => {
-                assert!(
-                    reason.contains("refusing to initialize"),
-                    "unexpected reason: {reason:?}"
-                );
-            },
-            other => {
-                panic!("expected ValidationError, got: {other:?}");
-            },
+        for result in [
+            client.create_notebook(Some("plain")).await.map(|_| ()),
+            client.transaction(Some("plain")).await.map(|_| ()),
+        ] {
+            let err = result.expect_err("plain directory must refuse");
+            match err {
+                NbError::ValidationError { reason, .. } => {
+                    assert!(
+                        reason.contains("refusing to initialize"),
+                        "unexpected reason: {reason:?}"
+                    );
+                },
+                other => {
+                    panic!("expected ValidationError, got: {other:?}");
+                },
+            }
         }
         assert!(
             !env.nb_dir().join("plain/.git").exists(),
@@ -192,23 +227,31 @@ async fn dot_names_refused() {
 }
 
 /// Enumeration returns sorted valid notebook names and skips
-/// anything else without touching it.
+/// anything else: plain directories, symlinked roots, and
+/// invalid names are left untouched.
 #[tokio::test]
 async fn enumeration_lists_valid_notebooks_sorted() {
     let env = NbTestEnv::new().expect("fixture");
     with_isolated_env(&env, false, || async {
         let client = NbClient::new(&config_for_create(&env)).expect("client");
         client
-            .show_notebook_path(Some("zzz-native"))
+            .create_notebook(Some("zzz-native"))
             .await
             .expect("create zzz");
         client
-            .show_notebook_path(Some("aaa-native"))
+            .create_notebook(Some("aaa-native"))
             .await
             .expect("create aaa");
         std::fs::create_dir(env.nb_dir().join("plain")).expect("plain dir");
+        #[cfg(unix)]
         std::fs::create_dir(env.nb_dir().join("bad:name"))
             .expect("invalid-name dir");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(
+            env.nb_dir().join("aaa-native"),
+            env.nb_dir().join("linked"),
+        )
+        .expect("symlink");
 
         let names = client.list_notebook_names().await.expect("enumerate");
         let mut expected = vec![
@@ -226,18 +269,16 @@ async fn enumeration_lists_valid_notebooks_sorted() {
     .await;
 }
 
-/// Concurrent creators converge on one notebook: every caller
-/// succeeds and exactly one initial commit exists.
+/// Concurrent explicit creates resolve to exactly one winner; the
+/// losers are refused without touching the winner.
 #[tokio::test]
 async fn concurrent_creates_converge_on_single_notebook() {
     let env = NbTestEnv::new().expect("fixture");
     with_isolated_env(&env, false, || async {
-        let barrier = std::sync::Barrier::new(4);
         let results = std::thread::scope(|s| {
             let handles: Vec<_> = (0..4)
                 .map(|_| {
                     s.spawn(|| {
-                        barrier.wait();
                         let rt = tokio::runtime::Builder::new_current_thread()
                             .enable_all()
                             .build()
@@ -246,7 +287,7 @@ async fn concurrent_creates_converge_on_single_notebook() {
                             let client =
                                 NbClient::new(&config_for_create(&env))
                                     .expect("client");
-                            client.show_notebook_path(Some("race")).await
+                            client.create_notebook(Some("race")).await
                         })
                     })
                 })
@@ -256,25 +297,193 @@ async fn concurrent_creates_converge_on_single_notebook() {
                 .map(|h| h.join().expect("thread"))
                 .collect::<Vec<_>>()
         });
-        assert_eq!(results.len(), 4, "all creators finished");
+        let mut winners = 0;
         for result in &results {
-            assert!(result.is_ok(), "every creator succeeds: {result:?}");
+            match result {
+                Ok(_) => winners += 1,
+                Err(NbError::ValidationError { reason, .. }) => {
+                    assert!(
+                        reason.contains("already exists"),
+                        "losers refused as existing: {reason:?}"
+                    );
+                },
+                Err(other) => {
+                    panic!("unexpected failure: {other:?}");
+                },
+            }
         }
-        let first = results[0]
-            .as_ref()
-            .expect("first creator succeeded")
-            .clone();
-        for result in &results[1..] {
-            assert_eq!(
-                result.as_ref().expect("creator succeeded"),
-                &first,
-                "all creators resolve the same notebook"
-            );
-        }
+        assert_eq!(winners, 1, "exactly one winner: {results:?}");
+        let root = env.nb_dir().join("race");
         assert_eq!(
-            git(&first, &["rev-list", "--count", "HEAD"]).trim(),
+            git(&root, &["rev-list", "--count", "HEAD"]).trim(),
             "1",
             "exactly one initial commit"
+        );
+    })
+    .await;
+}
+
+/// A delayed initializer still converges: observers that arrive
+/// mid-init wait for the real `HEAD` instead of refusing the
+/// notebook as invalid.
+#[tokio::test]
+async fn slow_initializer_still_converges() {
+    let env = NbTestEnv::new().expect("fixture");
+    with_isolated_env(&env, false, || async {
+        unsafe {
+            std::env::set_var("NB_API_PAUSE_BEFORE_INIT_COMMIT_MS", "1000");
+        }
+        let root = env.nb_dir().join("slow-race");
+        let (winner, observer) = std::thread::scope(|s| {
+            let creator = s.spawn(|| {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("runtime");
+                rt.block_on(async {
+                    let client = NbClient::new(&config_for_create(&env))
+                        .expect("client");
+                    client.create_notebook(Some("slow-race")).await
+                })
+            });
+            let mut poll = 0;
+            while !root.join(".index").exists() {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                poll += 1;
+                assert!(poll < 500, "creator never reached its pause point");
+            }
+            let waiter = s.spawn(|| {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("runtime");
+                rt.block_on(async {
+                    let client = NbClient::new(&config_for_create(&env))
+                        .expect("client");
+                    client.transaction(Some("slow-race")).await.map(|_| ())
+                })
+            });
+            (
+                creator.join().expect("creator thread"),
+                waiter.join().expect("waiter thread"),
+            )
+        });
+        winner.expect("creator succeeds");
+        observer.expect("observer converges instead of refusing");
+        assert_eq!(
+            git(&root, &["rev-list", "--count", "HEAD"]).trim(),
+            "1",
+            "exactly one initial commit"
+        );
+    })
+    .await;
+}
+
+/// An injected init failure removes only the owned directory.
+#[tokio::test]
+async fn injected_failure_removes_owned_only() {
+    let env = NbTestEnv::new().expect("fixture");
+    with_isolated_env(&env, false, || async {
+        unsafe {
+            std::env::set_var("NB_API_NOTEBOOK_INIT_FAIL", "1");
+        }
+        let client = NbClient::new(&config_for_create(&env)).expect("client");
+        let err = client
+            .create_notebook(Some("doomed"))
+            .await
+            .expect_err("injected failure must fail");
+        assert!(
+            matches!(err, NbError::Io { .. }),
+            "expected injected Io failure, got: {err:?}"
+        );
+        assert!(
+            !env.nb_dir().join("doomed").exists(),
+            "owned directory cleaned up"
+        );
+    })
+    .await;
+}
+
+/// An injected init failure preserves foreign changes instead of
+/// deleting them: a foreign file and a foreign commit survive.
+#[tokio::test]
+async fn injected_failure_preserves_foreign_changes() {
+    let env = NbTestEnv::new().expect("fixture");
+    with_isolated_env(&env, false, || async {
+        unsafe {
+            std::env::set_var("NB_API_PAUSE_BEFORE_INIT_COMMIT_MS", "1000");
+            std::env::set_var("NB_API_NOTEBOOK_INIT_FAIL", "1");
+        }
+        let root = env.nb_dir().join("contested");
+        let outcome = std::thread::scope(|s| {
+            let creator = s.spawn(|| {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("runtime");
+                rt.block_on(async {
+                    let client = NbClient::new(&config_for_create(&env))
+                        .expect("client");
+                    client.create_notebook(Some("contested")).await
+                })
+            });
+            let mut poll = 0;
+            while !root.join(".index").exists() {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                poll += 1;
+                assert!(poll < 500, "creator never reached its pause point");
+            }
+            std::fs::write(root.join("foreign.txt"), "foreign\n")
+                .expect("foreign file");
+            assert_eq!(
+                git(&root, &["add", "-A"]).trim(),
+                "",
+                "stage foreign content"
+            );
+            assert!(
+                !git(&root, &["commit", "-m", "foreign", "--no-gpg-sign"])
+                    .is_empty(),
+                "foreign commit lands"
+            );
+            creator.join().expect("creator thread")
+        });
+        let err = outcome.expect_err("injected failure must fail");
+        assert!(
+            matches!(err, NbError::Io { .. }),
+            "expected injected Io failure, got: {err:?}"
+        );
+        assert!(
+            root.join("foreign.txt").is_file(),
+            "foreign file survives cleanup"
+        );
+        assert!(
+            git(&root, &["log", "--format=%s"]).contains("foreign"),
+            "foreign commit survives cleanup"
+        );
+    })
+    .await;
+}
+
+/// Initialization commits without invoking commit signing, even
+/// when the isolated git config requires it.
+#[tokio::test]
+async fn init_commit_bypasses_required_signing() {
+    let env = NbTestEnv::new().expect("fixture");
+    with_isolated_env(&env, false, || async {
+        std::fs::write(
+            env.home_dir().join(".gitconfig"),
+            "[user]\n\tname = probe\n\temail = probe@example.com\n[commit]\n\tgpgsign = true\n[gpg]\n\tprogram = /nonexistent-gpg-program\n",
+        )
+        .expect("signing-required gitconfig");
+        let client = NbClient::new(&config_for_create(&env)).expect("client");
+        let root = client
+            .create_notebook(Some("unsigned-init"))
+            .await
+            .expect("init must not invoke signing");
+        assert_eq!(
+            git(&root, &["rev-list", "--count", "HEAD"]).trim(),
+            "1",
+            "initial commit landed unsigned"
         );
     })
     .await;
@@ -299,12 +508,13 @@ async fn symlink_root_is_refused() {
             matches!(err, NbError::UnsupportedStructure { .. }),
             "expected UnsupportedStructure, got: {err:?}"
         );
-        assert!(!target.join("alias").exists(), "target left untouched");
+        assert!(!target.join("alias").exists(), "target untouched");
     })
     .await;
 }
 
-/// An `nb`-created notebook resolves natively (no `nb` spawns).
+/// An `nb`-created notebook resolves natively (no `nb` spawned for
+/// resolution itself; only fixture setup uses `nb` here).
 #[tokio::test]
 async fn interop_nb_created_notebook_resolves_natively() {
     let env = NbTestEnv::new().expect("fixture");
@@ -336,7 +546,7 @@ async fn interop_native_created_notebook_opens_in_nb() {
     with_isolated_env(&env, false, || async {
         let client = NbClient::new(&config_for_create(&env)).expect("client");
         let root = client
-            .show_notebook_path(Some("interop-native"))
+            .create_notebook(Some("interop-native"))
             .await
             .expect("create");
         let mut tx = client
@@ -346,7 +556,7 @@ async fn interop_native_created_notebook_opens_in_nb() {
         tx.add_note("hello.md", Some("Hello"), "hello\n", &[])
             .unwrap();
         tx.commit().await.expect("seed note");
-        assert!(root.join("hello.md").is_file());
+        assert!(root.join("hello.md").is_file(), "note landed");
 
         let oracle = NbOracle::new(&env);
         assert!(

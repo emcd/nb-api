@@ -45,6 +45,10 @@ A notebook SHALL be a `$NB_DIR/<name>` directory containing `.git` (the existing
 - **WHEN** a notebook is created and a `Transaction` adding a note commits against it with no intervening steps
 - **THEN** the commit SHALL succeed and `HEAD` SHALL advance past the initial commit
 
+#### Scenario: Initialization commits without signing
+- **WHEN** the isolated git config requires commit signing
+- **THEN** native creation SHALL still succeed: the initial commit is made with signing explicitly suppressed, matching the transaction commit policy
+
 #### Scenario: Existing unrelated directory is never initialized
 - **WHEN** ensure/create targets a path that exists but is not a valid notebook (plain directory without `.git`)
 - **THEN** the system SHALL refuse with a typed not-a-notebook failure and SHALL NOT run `git init` inside it or remove anything
@@ -97,6 +101,10 @@ Directory creation is atomic. A creator that did not create the directory SHALL 
 #### Scenario: Partial-init failure cleans up owned paths only
 - **WHEN** creation fails after creating the directory but before the initial commit
 - **THEN** the system SHALL remove only what this call created and SHALL leave pre-existing contents untouched
+
+#### Scenario: Slow initializer still converges
+- **WHEN** creation takes longer than one convergence interval to reach a resolvable `HEAD`
+- **THEN** concurrent ensures SHALL still converge on the finished notebook instead of misclassifying it as not-a-notebook
 
 ### Requirement: Typed notebook enumeration
 The system SHALL provide typed notebook enumeration returning the sorted names of `NB_DIR` entries satisfying the validity probe (directory with `.git`), replacing the enumeration half of the retired `list_notebooks`.
