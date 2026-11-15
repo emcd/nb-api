@@ -5,7 +5,7 @@
 - [x] 1.3 Enforce name/root confinement (dot-segment, absolute/drive, separator rejection; symlink roots refused) before any mutation
 - [x] 1.4 Implement atomic concurrent create (single winner, idempotent ensure) with owned-only failure cleanup
 - [x] 1.5 Add typed notebook enumeration (`list_notebook_names`, sorted valid names)
-- [ ] 1.6 Add purely-native layout/validity/matrix/concurrency tests plus extended two-way `nb`/native interop tests
+- [x] 1.6 Add purely-native layout/validity/matrix/concurrency tests plus extended two-way `nb`/native interop tests
 
 ## 2. Native import
 
