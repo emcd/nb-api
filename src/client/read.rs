@@ -14,7 +14,7 @@ use crate::parser::{ParseContext, parse};
 use crate::types::{
     BodyFragment, NoteTarget, SearchNoteLines, ShowNote, ShowNoteLines,
 };
-use crate::validate::validate_folder_option;
+use crate::validate::{validate_folder_option, validate_notebook_name};
 use crate::{NbClient, SearchMode};
 
 impl NbClient {
@@ -47,6 +47,52 @@ impl NbClient {
         let _g = gate::acquire_global(self.gate_timeout).await?;
         // Use --no-color to avoid ANSI escape codes
         self.exec(&["notebooks", "--no-color"]).await
+    }
+
+    /// Lists notebook names natively: sorted names of valid
+    /// notebooks under `NB_DIR`, with zero `nb` spawns. Entries
+    /// that fail name validation or the validity probe are
+    /// skipped, never created or modified.
+    pub async fn list_notebook_names(&self) -> Result<Vec<String>, NbError> {
+        let _g = gate::acquire_global(self.gate_timeout).await?;
+        let Some(nb_dir) = std::env::var_os("NB_DIR") else {
+            return Err(NbError::ValidationError {
+                reason: "notebook root is not configured (`NB_DIR` is unset)."
+                    .to_string(),
+                location: None,
+            });
+        };
+        let nb_dir = PathBuf::from(nb_dir);
+        if !nb_dir.is_dir() {
+            return Err(NbError::ValidationError {
+                reason: "notebook root is not a directory (`NB_DIR`)."
+                    .to_string(),
+                location: None,
+            });
+        }
+        let mut names = Vec::new();
+        let entries = std::fs::read_dir(&nb_dir).map_err(|e| NbError::Io {
+            path: nb_dir.clone(),
+            source: e.into(),
+        })?;
+        for entry in entries {
+            let entry = entry.map_err(|e| NbError::Io {
+                path: nb_dir.clone(),
+                source: e.into(),
+            })?;
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else {
+                continue;
+            };
+            if validate_notebook_name(name).is_err() {
+                continue;
+            }
+            if notebook_dir_from_env(name)?.is_some() {
+                names.push(name.to_string());
+            }
+        }
+        names.sort();
+        Ok(names)
     }
 
     /// Returns the path for a notebook.
