@@ -80,8 +80,12 @@ impl NbClient {
             }
             match probe_notebook_dir(&root, name) {
                 Ok(Probe::Ready(_)) => names.push(name.to_string()),
-                Ok(Probe::Absent | Probe::Pending | Probe::NotADirectory) => {
-                },
+                Ok(
+                    Probe::Absent
+                    | Probe::Pending
+                    | Probe::NotADirectory
+                    | Probe::NotANotebook,
+                ) => {},
                 Err(NbError::UnsupportedStructure { .. }) => {},
                 Err(other) => return Err(other),
             }

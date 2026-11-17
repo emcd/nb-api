@@ -212,6 +212,17 @@ impl NbTestEnvBuilder {
         let notebook = self
             .notebook
             .unwrap_or_else(|| DEFAULT_NOTEBOOK.to_string());
+        if crate::validate::validate_notebook_name(&notebook).is_err() {
+            return Err(NbTestError::Io {
+                context: format!(
+                    "invalid notebook name {notebook:?}: refusing to initialize outside the fixture store"
+                ),
+                source: std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "notebook name escapes the fixture store",
+                ),
+            });
+        }
         Ok(ScaffoldedEnv {
             root,
             nb_dir,

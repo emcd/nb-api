@@ -52,12 +52,15 @@ pub(super) fn notebook_root_dir() -> Result<PathBuf, NbError> {
 
 /// Readiness of a notebook directory: only a resolvable `HEAD`
 /// counts as ready, so observers never mistake a mid-initialization
-/// directory for a complete one.
+/// directory for a complete one. A directory without its own `.git`
+/// is a plain entry, never a pending notebook; only a `.git`
+/// holder with an unresolvable `HEAD` waits as pending.
 enum Readiness {
     Ready,
     Absent,
     Pending,
     NotADirectory,
+    NotANotebook,
 }
 
 fn readiness(path: &Path) -> Result<Readiness, NbError> {
@@ -84,46 +87,117 @@ fn readiness(path: &Path) -> Result<Readiness, NbError> {
     if !meta.is_dir() {
         return Ok(Readiness::NotADirectory);
     }
-    if head_resolvable(path) {
+    if head_resolvable(path)? {
         return Ok(Readiness::Ready);
     }
-    Ok(Readiness::Pending)
+    match std::fs::symlink_metadata(path.join(".git")) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            Ok(Readiness::NotANotebook)
+        },
+        Err(e) => Err(NbError::Io {
+            path: path.join(".git"),
+            source: e.into(),
+        }),
+        Ok(_) => Ok(Readiness::Pending),
+    }
 }
 
-/// Whether the notebook's `HEAD` resolves, from files alone: a
-/// loose ref target, a packed-refs entry, or a detached hash.
-/// Anything else means initialization has not finished — or the
-/// repository is malformed.
-fn head_resolvable(root: &Path) -> bool {
+/// Whether a symbolic-ref target is a confined notebook ref:
+/// under `refs/`, without escapes or git-special sequences, so
+/// unvalidated paths are never joined outside `.git`.
+fn is_valid_ref_name(r: &str) -> bool {
+    if !r.starts_with("refs/") || r.len() <= "refs/".len() {
+        return false;
+    }
+    if r.contains("..")
+        || r.contains("//")
+        || r.starts_with('/')
+        || r.ends_with('/')
+        || r.ends_with(".lock")
+        || r.contains("@{")
+    {
+        return false;
+    }
+    r.chars().all(|c| {
+        c.is_ascii_alphanumeric() || matches!(c, '/' | '.' | '_' | '-')
+    })
+}
+
+/// Whether a string is a full object hash (SHA-1 or SHA-256).
+fn is_valid_hex_hash(s: &str) -> bool {
+    (s.len() == 40 || s.len() == 64)
+        && s.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// Whether the notebook's `HEAD` resolves: a validated loose
+/// ref target, a validated packed-refs entry, or a full
+/// detached hash. Anything else means initialization has not
+/// finished or the repository is malformed. Read failures
+/// propagate as `Io` instead of collapsing into absence.
+fn head_resolvable(root: &Path) -> Result<bool, NbError> {
     let head = match std::fs::read_to_string(root.join(".git/HEAD")) {
         Ok(head) => head,
-        Err(_) => return false,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(false);
+        },
+        Err(e) => {
+            return Err(NbError::Io {
+                path: root.join(".git/HEAD"),
+                source: e.into(),
+            });
+        },
     };
     let head = head.trim();
     if let Some(r) = head.strip_prefix("ref: ") {
         let r = r.trim();
-        if root.join(".git").join(r).is_file() {
-            return true;
+        if !is_valid_ref_name(r) {
+            return Ok(false);
         }
-        if let Ok(packed) =
-            std::fs::read_to_string(root.join(".git/packed-refs"))
-        {
-            for line in packed.lines() {
-                let mut parts = line.split_whitespace();
-                let (_hash, name) = match (parts.next(), parts.next()) {
-                    (Some(hash), Some(name)) => (hash, name),
-                    _ => continue,
-                };
-                if name == r && !_hash.starts_with('#') {
-                    return true;
-                }
+        match std::fs::read_to_string(root.join(".git").join(r)) {
+            Ok(content) => {
+                return Ok(is_valid_hex_hash(content.trim()));
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {},
+            Err(e) => {
+                return Err(NbError::Io {
+                    path: root.join(".git").join(r),
+                    source: e.into(),
+                });
+            },
+        }
+        let packed =
+            match std::fs::read_to_string(root.join(".git/packed-refs")) {
+                Ok(packed) => packed,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    return Ok(false);
+                },
+                Err(e) => {
+                    return Err(NbError::Io {
+                        path: root.join(".git/packed-refs"),
+                        source: e.into(),
+                    });
+                },
+            };
+        for line in packed.lines() {
+            let line = line.trim();
+            if line.is_empty()
+                || line.starts_with('#')
+                || line.starts_with('^')
+            {
+                continue;
+            }
+            let mut parts = line.split_whitespace();
+            let (hash, name) = match (parts.next(), parts.next()) {
+                (Some(hash), Some(name)) => (hash, name),
+                _ => continue,
+            };
+            if name == r && is_valid_hex_hash(hash) {
+                return Ok(true);
             }
         }
-        return false;
+        return Ok(false);
     }
-    !head.is_empty()
-        && head.len() >= 4
-        && head.chars().all(|c| c.is_ascii_hexdigit())
+    Ok(is_valid_hex_hash(head))
 }
 
 /// Canonical path confined under `root`; anything escaping the
@@ -153,6 +227,7 @@ pub(super) enum Probe {
     Absent,
     Pending,
     NotADirectory,
+    NotANotebook,
 }
 
 pub(super) fn probe_notebook_dir(
@@ -166,6 +241,7 @@ pub(super) fn probe_notebook_dir(
         Readiness::Absent => Ok(Probe::Absent),
         Readiness::Pending => Ok(Probe::Pending),
         Readiness::NotADirectory => Ok(Probe::NotADirectory),
+        Readiness::NotANotebook => Ok(Probe::NotANotebook),
     }
 }
 
@@ -188,10 +264,13 @@ async fn await_ready(
             Probe::Absent => return Ok(None),
             // A non-directory entry can never become a notebook
             // through the creation path; refuse without waiting.
+            // A plain directory waits here: it may be a concurrent
+            // winner between `mkdir` and `git init`, or a
+            // pre-existing plain entry that settles as a refusal.
             Probe::NotADirectory => {
                 return Err(not_a_notebook(&root.join(notebook)));
             },
-            Probe::Pending => {},
+            Probe::Pending | Probe::NotANotebook => {},
         }
     }
     settle_pending(root, notebook).await
@@ -199,7 +278,9 @@ async fn await_ready(
 
 /// Settles an entry that stayed not-ready past the convergence
 /// window: vanished is absent, plain entries are refused, and
-/// `.git`-without-`HEAD` surfaces the genuine git failure.
+/// `.git`-without-resolvable-`HEAD` surfaces the genuine git
+/// failure. The fallback never lets git search a parent: the
+/// directory must carry its own `.git` marker first.
 async fn settle_pending(
     root: &Path,
     notebook: &str,
@@ -208,7 +289,9 @@ async fn settle_pending(
     match readiness(&path)? {
         Readiness::Ready => Ok(Some(confined_canonical(root, &path)?)),
         Readiness::Absent => Ok(None),
-        Readiness::NotADirectory => Err(not_a_notebook(&path)),
+        Readiness::NotADirectory | Readiness::NotANotebook => {
+            Err(not_a_notebook(&path))
+        },
         Readiness::Pending => {
             match std::fs::symlink_metadata(path.join(".git")) {
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -242,19 +325,33 @@ fn not_a_notebook(path: &Path) -> NbError {
 }
 
 /// Notebook dir from the environment: canonical path for a ready
-/// notebook, `None` for true absence or non-directory entries.
-/// Never creates, ensures, or waits: a present-but-not-ready entry
+/// notebook, `None` for true absence or plain entries. Never
+/// creates, ensures, or waits: a present-but-not-ready entry
 /// surfaces the genuine git failure instead of reading as absent,
 /// so malformed notebooks are never mistaken for missing ones.
+/// The fallback requires the directory's own `.git` marker and
+/// never lets git resolve through an ancestor repository.
 pub(super) async fn notebook_dir_from_env(
     notebook: &str,
 ) -> Result<Option<PathBuf>, NbError> {
     let root = notebook_root_dir()?;
     match probe_notebook_dir(&root, notebook)? {
         Probe::Ready(path) => Ok(Some(path)),
-        Probe::Absent | Probe::NotADirectory => Ok(None),
+        Probe::Absent | Probe::NotADirectory | Probe::NotANotebook => Ok(None),
         Probe::Pending => {
             let path = root.join(notebook);
+            match std::fs::symlink_metadata(path.join(".git")) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    return Ok(None);
+                },
+                Err(e) => {
+                    return Err(NbError::Io {
+                        path: path.join(".git"),
+                        source: e.into(),
+                    });
+                },
+                Ok(_) => {},
+            }
             crate::git::git_capture(
                 &path,
                 &["rev-parse".into(), "HEAD".into()],
@@ -266,8 +363,10 @@ pub(super) async fn notebook_dir_from_env(
 
 /// Ensures the notebook exists, creating it when allowed.
 /// Converges idempotently on concurrent winners; disabled creation
-/// refuses missing notebooks without touching anything. Plain
-/// non-directory entries are refused, never initialized.
+/// refuses only truly missing notebooks. Present entries
+/// (plain or malformed) surface their own refusal or git failure
+/// instead of reading as creation-disabled. Plain entries are
+/// refused, never initialized.
 pub(super) async fn ensure_notebook_dir(
     notebook: &str,
     allow_create: bool,
@@ -275,8 +374,10 @@ pub(super) async fn ensure_notebook_dir(
     let root = notebook_root_dir()?;
     match probe_notebook_dir(&root, notebook)? {
         Probe::Ready(path) => Ok(path),
-        Probe::NotADirectory => Err(not_a_notebook(&root.join(notebook))),
-        Probe::Absent | Probe::Pending => {
+        Probe::NotADirectory | Probe::NotANotebook => {
+            Err(not_a_notebook(&root.join(notebook)))
+        },
+        Probe::Absent => {
             if !allow_create {
                 return Err(NbError::ValidationError {
                     reason: format!(
@@ -286,6 +387,20 @@ pub(super) async fn ensure_notebook_dir(
                 });
             }
             create_notebook_dir(notebook, CreateMode::Ensure).await
+        },
+        Probe::Pending => match await_ready(&root, notebook).await? {
+            Some(path) => Ok(path),
+            None => {
+                if !allow_create {
+                    return Err(NbError::ValidationError {
+                        reason: format!(
+                            "notebook `{notebook}` does not exist and automatic creation is disabled"
+                        ),
+                        location: None,
+                    });
+                }
+                create_notebook_dir(notebook, CreateMode::Ensure).await
+            },
         },
     }
 }
@@ -299,14 +414,26 @@ pub(super) async fn create_notebook_dir(
 ) -> Result<PathBuf, NbError> {
     validate_notebook_name(notebook)?;
     let root = notebook_root_dir()?;
-    if let Probe::Ready(existing) = probe_notebook_dir(&root, notebook)? {
-        return match mode {
-            CreateMode::Ensure => Ok(existing),
-            CreateMode::Exact => Err(NbError::ValidationError {
-                reason: format!("notebook `{notebook}` already exists"),
-                location: None,
-            }),
-        };
+    match probe_notebook_dir(&root, notebook)? {
+        Probe::Ready(existing) => {
+            return match mode {
+                CreateMode::Ensure => Ok(existing),
+                CreateMode::Exact => Err(NbError::ValidationError {
+                    reason: format!("notebook `{notebook}` already exists"),
+                    location: None,
+                }),
+            };
+        },
+        Probe::NotADirectory => {
+            return Err(not_a_notebook(&root.join(notebook)));
+        },
+        // Absent, Pending, and plain entries all reach the
+        // `mkdir` race: a plain entry here may be a concurrent
+        // winner between `mkdir` and `git init` rather than a
+        // pre-existing plain directory. Contenders that lose the
+        // race converge in `await_ready`; a truly plain entry
+        // settles as a refusal there.
+        Probe::Absent | Probe::Pending | Probe::NotANotebook => {},
     }
     let path = root.join(notebook);
     for _ in 0..3 {
@@ -352,7 +479,8 @@ pub(super) async fn create_notebook_dir(
 /// empty layout and verifies the result (causal barrier: creation
 /// is done only when the notebook resolves to exactly the created
 /// path). Cleans up owned artifacts on failure, never another
-/// writer's contents.
+/// writer's contents; preservation is reported in the error when
+/// the directory is retained for inspection.
 async fn finish_new_notebook_dir(
     root: &Path,
     notebook: &str,
@@ -361,20 +489,34 @@ async fn finish_new_notebook_dir(
     let ours = match crate::git::notebook_init_empty(path) {
         Ok(hash) => hash,
         Err(e) => {
-            remove_owned_notebook_dir(path, None);
+            if !remove_owned_notebook_dir(path, None) {
+                tracing::warn!(
+                    "notebook init failed; partial directory preserved at `{}` for inspection",
+                    path.display()
+                );
+            }
             return Err(e);
         },
     };
-    if head_resolvable(path)
+    if head_resolvable(path).unwrap_or(false)
         && let Ok(canonical) = confined_canonical(root, path)
         && canonical == root.join(notebook)
     {
         return Ok(canonical);
     }
-    remove_owned_notebook_dir(path, Some(&ours));
+    let removed = remove_owned_notebook_dir(path, Some(&ours));
+    if removed {
+        return Err(NbError::ValidationError {
+            reason: format!(
+                "created notebook `{notebook}` failed its validity probe; concurrent modification suspected; owned artifacts cleaned up"
+            ),
+            location: None,
+        });
+    }
     Err(NbError::ValidationError {
         reason: format!(
-            "created notebook `{notebook}` failed its validity probe; concurrent modification suspected"
+            "created notebook `{notebook}` failed its validity probe; concurrent modification suspected; partial directory preserved at `{}` for inspection",
+            path.display()
         ),
         location: None,
     })
@@ -385,21 +527,23 @@ async fn finish_new_notebook_dir(
 /// produced, ref state consistent with `ours` (`None` means no
 /// commit of ours exists), and a clean worktree. Anything else
 /// present means another writer arrived; it is left untouched and
-/// reported.
-fn remove_owned_notebook_dir(path: &Path, ours: Option<&str>) {
+/// reported. Returns whether the directory was removed.
+fn remove_owned_notebook_dir(path: &Path, ours: Option<&str>) -> bool {
     if !owned_for_cleanup(path, ours) {
         tracing::warn!(
             "refusing to clean notebook directory `{}`: ownership not established",
             path.display()
         );
-        return;
+        return false;
     }
     if let Err(e) = std::fs::remove_dir_all(path) {
         tracing::warn!(
             "failed to clean owned notebook directory `{}`: {e}",
             path.display()
         );
+        return false;
     }
+    true
 }
 
 fn owned_for_cleanup(path: &Path, ours: Option<&str>) -> bool {
@@ -429,7 +573,7 @@ fn owned_for_cleanup(path: &Path, ours: Option<&str>) -> bool {
         return false;
     }
     match ours {
-        None => !has_refs(path),
+        None => owned_fresh_for_cleanup(path),
         Some(hash) => {
             let Ok(head) = std::fs::read_to_string(path.join(".git/HEAD"))
             else {
@@ -439,12 +583,18 @@ fn owned_for_cleanup(path: &Path, ours: Option<&str>) -> bool {
                 return false;
             };
             let r = r.trim();
+            if !is_valid_ref_name(r) {
+                return false;
+            }
             let Ok(content) =
                 std::fs::read_to_string(path.join(".git").join(r))
             else {
                 return false;
             };
             if content.trim() != hash {
+                return false;
+            }
+            if !is_valid_hex_hash(hash) {
                 return false;
             }
             if has_other_refs(path, r) {
@@ -464,15 +614,74 @@ fn owned_for_cleanup(path: &Path, ours: Option<&str>) -> bool {
     }
 }
 
-/// Whether any refs exist under `.git/refs` at all.
+/// Ownership for a directory whose init never produced our commit:
+/// only the exact creation artifacts, no refs (unknown reads fail
+/// closed), no packed-refs, an unborn symbolic `HEAD`, an empty
+/// `.index`, and a status of exactly the staged `.index` addition.
+/// Any foreign edit, detached/packed state, or read failure
+/// preserves the directory.
+fn owned_fresh_for_cleanup(path: &Path) -> bool {
+    if has_refs(path) {
+        return false;
+    }
+    if path.join(".git/packed-refs").exists() {
+        return false;
+    }
+    let head = match std::fs::read_to_string(path.join(".git/HEAD")) {
+        Ok(head) => head,
+        Err(_) => return false,
+    };
+    let Some(r) = head.trim().strip_prefix("ref: ") else {
+        return false;
+    };
+    let r = r.trim();
+    if !is_valid_ref_name(r) {
+        return false;
+    }
+    if path.join(".git").join(r).exists() {
+        return false;
+    }
+    let index_len = match std::fs::metadata(path.join(".index")) {
+        Ok(meta) => {
+            if !meta.is_file() {
+                return false;
+            }
+            meta.len()
+        },
+        Err(_) => return false,
+    };
+    if index_len != 0 {
+        return false;
+    }
+    match crate::git::git_capture(
+        path,
+        &["status".into(), "--porcelain".into()],
+    ) {
+        Ok(status) => status.trim() == "A  .index",
+        Err(_) => false,
+    }
+}
+
+/// Whether any refs exist under `.git/refs` at all. Unknown read
+/// failures count as refs (unsafe), so cleanup preserves.
 fn has_refs(path: &Path) -> bool {
-    refs_files(&path.join(".git/refs")).is_some_and(|files| !files.is_empty())
+    match refs_files(&path.join(".git/refs")) {
+        Some(files) => !files.is_empty(),
+        None => true,
+    }
 }
 
 /// Whether `.git/refs` holds any file other than the given ref.
+/// Unknown read failures count as foreign (unsafe), so cleanup
+/// preserves. `allowed` is a full `refs/...` target; entries are
+/// relative to `.git/refs`, so the prefix is stripped before
+/// comparison.
 fn has_other_refs(path: &Path, allowed: &str) -> bool {
+    let allowed_rel = allowed.strip_prefix("refs/").unwrap_or(allowed);
     match refs_files(&path.join(".git/refs")) {
-        Some(files) => files.iter().any(|f| f.to_string_lossy() != allowed),
+        Some(files) => {
+            files.iter().any(|f| f.to_string_lossy() != allowed_rel)
+        },
         None => true,
     }
 }

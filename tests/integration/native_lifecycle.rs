@@ -2,10 +2,10 @@
 //! confinement, enumeration, concurrent creation, failure
 //! injection, and true-`nb` interoperability.
 //!
-//! The default suite is hermetic: fixtures are built natively
-//! (git only, no `nb` spawn including setup) and every
-//! unignored test passes with a dead `nb` on `PATH` (see the
-//! tripwire below). The two interop tests need a real `nb` and
+//! The lifecycle default tests are hermetic: fixtures are built
+//! natively (git only, no `nb` spawn including setup) and every
+//! unignored lifecycle test passes with a dead `nb` on `PATH` (see
+//! the tripwire below). The two interop tests need a real `nb` and
 //! belong to the ignore-gated oracle set for the extended
 //! profile.
 
@@ -327,7 +327,9 @@ async fn concurrent_creates_converge_on_single_notebook() {
 
 /// A delayed initializer still converges: observers that arrive
 /// mid-init wait for the real `HEAD` instead of refusing the
-/// notebook as invalid.
+/// notebook as invalid. The observer proves immediate usability
+/// by committing right after ensure, not just constructing a
+/// transaction.
 #[tokio::test]
 async fn slow_initializer_still_converges() {
     let env = NbTestEnv::new_native().expect("native fixture");
@@ -362,7 +364,16 @@ async fn slow_initializer_still_converges() {
                 rt.block_on(async {
                     let client = NbClient::new(&config_for_create(&env))
                         .expect("client");
-                    client.transaction(Some("slow-race")).await.map(|_| ())
+                    let mut tx = client.transaction(Some("slow-race")).await?;
+                    tx.add_note(
+                        "observer.md",
+                        Some("Observer"),
+                        "observer\n",
+                        &[],
+                    )
+                    .unwrap();
+                    tx.commit().await?;
+                    Ok::<(), NbError>(())
                 })
             });
             (
@@ -371,11 +382,12 @@ async fn slow_initializer_still_converges() {
             )
         });
         winner.expect("creator succeeds");
-        observer.expect("observer converges instead of refusing");
+        observer.expect("observer commits immediately after ensure");
+        assert!(root.join("observer.md").is_file(), "observer note landed");
         assert_eq!(
             git(&root, &["rev-list", "--count", "HEAD"]).trim(),
-            "1",
-            "exactly one initial commit"
+            "2",
+            "creator init plus observer commit"
         );
     })
     .await;
@@ -515,64 +527,95 @@ async fn symlink_root_is_refused() {
     .await;
 }
 
-/// Dead-`nb` tripwire: with an `nb` stub that fails loudly first
-/// on `PATH` while git stays alive, the full native lifecycle
-/// still passes — proving zero `nb` attempts rather than mere
-/// lookup absence. Unix-only: the stub relies on executable-bit
+/// Dead-`nb` tripwire: with a logging `nb` stub first on `PATH`
+/// while git stays alive, the full native lifecycle still passes.
+/// The counter log must never appear, proving zero `nb` attempts
+/// (not merely zero successful spawns). Fixture setup itself runs
+/// under the tripwire. Unix-only: the stub relies on executable-bit
 /// script dispatch.
 #[cfg(unix)]
+#[allow(clippy::await_holding_lock)]
 #[tokio::test]
 async fn native_lifecycle_spawns_no_nb() {
     use std::os::unix::fs::PermissionsExt;
-    let env = NbTestEnv::new_native().expect("native fixture");
-    with_isolated_env(&env, false, || async {
-        let stub_dir = tempfile::Builder::new()
-            .prefix("nb-dead-")
-            .tempdir()
-            .expect("stub dir");
-        std::fs::write(
-            stub_dir.path().join("nb"),
-            "#!/usr/bin/env bash\necho 'dead-nb tripwire invoked' >&2\nexit 127\n",
-        )
-        .expect("stub script");
-        std::fs::set_permissions(
-            stub_dir.path().join("nb"),
-            std::fs::Permissions::from_mode(0o755),
-        )
+
+    use crate::common::{EnvSnapshot, lock_env};
+    let stub_holder = tempfile::Builder::new()
+        .prefix("nb-dead-")
+        .tempdir()
+        .expect("stub dir");
+    let log = stub_holder.path().join("calls.log");
+    let shim = stub_holder.path().join("nb");
+    std::fs::write(
+        &shim,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> {}\nexit 127\n",
+            log.display()
+        ),
+    )
+    .expect("stub script");
+    std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755))
         .expect("chmod stub");
-        // SAFETY: serialized by ENV_LOCK inside `with_isolated_env`;
-        // `EnvSnapshot` restores `PATH` on scope exit.
-        let path_var = std::env::var_os("PATH").unwrap_or_default();
-        let mut paths = vec![stub_dir.path().to_path_buf()];
-        paths.extend(std::env::split_paths(&path_var));
-        unsafe {
-            std::env::set_var(
-                "PATH",
-                std::env::join_paths(paths).expect("join PATH"),
-            );
-        }
-        let client =
-            NbClient::new(&config_for_create(&env)).expect("client");
-        let root = client
-            .create_notebook(Some("tripwire"))
-            .await
-            .expect("create with dead nb");
-        let mut tx = client
-            .transaction(Some("tripwire"))
-            .await
-            .expect("tx with dead nb");
-        tx.add_note("hello.md", Some("Hello"), "hello\n", &[])
-            .unwrap();
-        tx.commit().await.expect("commit with dead nb");
-        assert!(root.join("hello.md").is_file(), "note landed");
-        let names = client.list_notebook_names().await.expect("enumerate");
-        assert!(names.contains(&"tripwire".to_string()), "{names:?}");
-        client
-            .show_notebook_path(Some("tripwire"))
-            .await
-            .expect("path with dead nb");
-    })
-    .await;
+
+    let _guard = lock_env();
+    let _snap = EnvSnapshot::capture(&[
+        "NB_DIR",
+        "HOME",
+        "PATH",
+        "NB_API_PAUSE_BEFORE_INIT_COMMIT_MS",
+        "NB_API_NOTEBOOK_INIT_FAIL",
+    ]);
+    let path_var = std::env::var_os("PATH").unwrap_or_default();
+    let mut paths = vec![stub_holder.path().to_path_buf()];
+    paths.extend(std::env::split_paths(&path_var));
+    unsafe {
+        std::env::set_var(
+            "PATH",
+            std::env::join_paths(paths).expect("join PATH"),
+        );
+    }
+    // Fixture setup itself runs under the tripwire.
+    let env = NbTestEnv::new_native().expect("native fixture");
+    assert!(
+        !log.exists(),
+        "fixture setup spawned nb: {:?}",
+        std::fs::read_to_string(&log).unwrap_or_default()
+    );
+    unsafe {
+        std::env::set_var("NB_DIR", env.nb_dir());
+        std::env::set_var("HOME", env.home_dir());
+    }
+    let assert_quiet = |stage: &str| {
+        assert!(
+            !log.exists(),
+            "stage {stage} spawned nb: {:?}",
+            std::fs::read_to_string(&log).unwrap_or_default()
+        );
+    };
+    let client = NbClient::new(&config_for_create(&env)).expect("client");
+    let root = client
+        .create_notebook(Some("tripwire"))
+        .await
+        .expect("create with dead nb");
+    assert_quiet("create");
+    let mut tx = client
+        .transaction(Some("tripwire"))
+        .await
+        .expect("tx with dead nb");
+    assert_quiet("ensure");
+    tx.add_note("hello.md", Some("Hello"), "hello\n", &[])
+        .unwrap();
+    tx.commit().await.expect("commit with dead nb");
+    assert_quiet("commit");
+    assert!(root.join("hello.md").is_file(), "note landed");
+    let names = client.list_notebook_names().await.expect("enumerate");
+    assert_quiet("enumerate");
+    assert!(names.contains(&"tripwire".to_string()), "{names:?}");
+    client
+        .show_notebook_path(Some("tripwire"))
+        .await
+        .expect("path with dead nb");
+    assert_quiet("path");
 }
 
 /// An `nb`-created notebook resolves natively (no `nb` spawned for
