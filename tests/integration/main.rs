@@ -16,6 +16,7 @@ mod eol_model;
 mod git_env_scrub;
 mod native_lifecycle;
 mod native_lifecycle_hardening;
+mod native_lifecycle_isolation;
 mod native_lists;
 mod native_reads;
 mod native_reads_guard;

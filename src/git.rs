@@ -61,6 +61,27 @@ pub fn git_rev_parse_in(cwd: &Path, args: &[&str]) -> Option<PathBuf> {
 
 /// Run git in `cwd` with scrubbed `GIT_*` routing vars. Returns stdout on success.
 pub fn git_capture(cwd: &Path, args: &[String]) -> Result<String, NbError> {
+    git_capture_inner(cwd, args, None)
+}
+
+/// Run git bound to the notebook at `cwd`: `GIT_DIR` is set to
+/// `cwd/.git` and `GIT_WORK_TREE` to `cwd` after scrubbing, so a
+/// malformed local repository can never resolve an ancestor's
+/// `HEAD` through parent discovery. Used by readiness and
+/// fallback verification, where the marker check alone does not
+/// bind Git identity.
+pub fn git_capture_local(
+    cwd: &Path,
+    args: &[String],
+) -> Result<String, NbError> {
+    git_capture_inner(cwd, args, Some(cwd))
+}
+
+fn git_capture_inner(
+    cwd: &Path,
+    args: &[String],
+    local: Option<&Path>,
+) -> Result<String, NbError> {
     let mut command = Command::new("git");
     crate::git_env::scrub_git_env_std(&mut command);
     // Preserve fixture git identity / signing overrides after scrub.
@@ -75,6 +96,10 @@ pub fn git_capture(cwd: &Path, args: &[String]) -> Result<String, NbError> {
     }
     if let Ok(v) = std::env::var("GIT_COMMITTER_EMAIL") {
         command.env("GIT_COMMITTER_EMAIL", v);
+    }
+    if let Some(root) = local {
+        command.env("GIT_DIR", root.join(".git"));
+        command.env("GIT_WORK_TREE", root);
     }
     command.current_dir(cwd);
     command.args(args);

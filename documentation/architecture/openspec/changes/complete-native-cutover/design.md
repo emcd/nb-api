@@ -28,7 +28,7 @@ Operator direction is pre-1.0 no-compat: no shims, no phased flags. `git` subpro
 ## Decisions
 
 **D1 — Lifecycle against `NB_DIR` layout, not through `nb`.**
-`$NB_DIR/<name>` is a git worktree with `.git` (the existing validity probe) and a resolvable `HEAD` (initial commit at create; required because `Transaction::commit` reads `HEAD`). `.index` files stay lazy as today. Concurrent creation is atomic single-winner with owned-only cleanup; pre-existing unrelated contents are never initialized or removed. Verified by native structural tests by default plus two-way interop in the extended profile (native-created opens in true `nb` and vice versa), which is the only detector for upstream layout drift.
+`$NB_DIR/<name>` is a git worktree with `.git` (the existing validity probe) and a usable `HEAD` verified with git to peel to a commit (initial commit at create; required because `Transaction::commit` reads `HEAD`). `.index` files stay lazy as today. Concurrent creation is atomic single-winner with retain-on-failure; pre-existing unrelated contents are never initialized, and failed creates retain the partial directory for inspection instead of recursively deleting. Verified by native structural tests by default plus two-way interop in the extended profile (native-created opens in true `nb` and vice versa), which is the only detector for upstream layout drift.
 *Alternative (keep ensure via `nb`): rejected — preserves the auto-checkpoint race the cutover exists to kill.*
 
 **D2 — Import reuses the transaction pipeline, file-only v1.**

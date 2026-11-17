@@ -218,11 +218,13 @@ fn head_resolvable(root: &Path) -> Result<bool, NbError> {
     head_commit_usable(root)
 }
 
-/// Whether `HEAD` peels to an existing commit object. A git
+/// Whether `HEAD` peels to an existing commit object. Runs bound
+/// to the notebook's own Git directory, so a malformed local
+/// repository can never resolve an ancestor's `HEAD`. A git
 /// failure (bogus/missing/non-commit) reads as not-ready; spawn
 /// and I/O failures propagate instead of collapsing.
 fn head_commit_usable(root: &Path) -> Result<bool, NbError> {
-    match crate::git::git_capture(
+    match crate::git::git_capture_local(
         root,
         &[
             "rev-parse".to_string(),
@@ -342,7 +344,7 @@ async fn settle_pending(
                 },
                 Ok(_) => {},
             }
-            crate::git::git_capture(
+            crate::git::git_capture_local(
                 &path,
                 &[
                     "rev-parse".into(),
@@ -393,7 +395,7 @@ pub(super) async fn notebook_dir_from_env(
                 },
                 Ok(_) => {},
             }
-            crate::git::git_capture(
+            crate::git::git_capture_local(
                 &path,
                 &[
                     "rev-parse".into(),

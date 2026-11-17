@@ -98,9 +98,9 @@ Directory creation is atomic. A creator that did not create the directory SHALL 
 - **WHEN** two creators race to create the same notebook
 - **THEN** exactly one SHALL succeed and the other SHALL observe the valid notebook (ensure) or receive already-exists (explicit create), with no clobbering
 
-#### Scenario: Partial-init failure cleans up owned paths only
+#### Scenario: Partial-init failure retains for inspection
 - **WHEN** creation fails after creating the directory but before the initial commit
-- **THEN** the system SHALL remove only what this call created and SHALL leave pre-existing contents untouched
+- **THEN** the system SHALL retain the partial directory for inspection and report its location, and SHALL never recursively delete it
 
 #### Scenario: Slow initializer still converges
 - **WHEN** creation takes longer than one convergence interval to reach a resolvable `HEAD`
@@ -111,7 +111,7 @@ The system SHALL provide typed notebook enumeration returning the sorted names o
 
 #### Scenario: Enumerate notebooks
 - **WHEN** a caller enumerates notebooks
-- **THEN** the system SHALL return the sorted valid notebook names with zero subprocesses
+- **THEN** the system SHALL return the sorted valid notebook names with zero `nb` subprocesses (git verification permitted)
 
 ### Requirement: Two-way lifecycle interop (extended profile)
 The retained oracle SHALL verify that native-created layouts open in true `nb` and `nb`-created layouts are recognized natively, since self-authored structural assertions cannot detect upstream layout drift.

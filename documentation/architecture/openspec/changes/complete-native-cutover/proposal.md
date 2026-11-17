@@ -15,7 +15,7 @@
 
 ### New Capabilities
 
-- `native-notebook-lifecycle`: create, ensure/exists, and path resolution for notebooks directly against `NB_DIR` and the filesystem, with typed errors (`NotFound` for missing, no auto-create on read paths) and no subprocess.
+- `native-notebook-lifecycle`: create, ensure/exists, and path resolution for notebooks directly against `NB_DIR` and the filesystem, with typed errors (`NotFound` for missing, no auto-create on read paths) and no `nb` subprocesses (git verification permitted).
 - `native-import`: import a local file into a notebook folder as a committed note, under the process-shared gate with single-checkpoint semantics and a typed outcome; race containment equivalent to `Transaction::commit`. File-only v1; URL sources are refused (tracked as `nb-api:todos/4`).
 - `string-surface-retirement`: removal schedule and migration notes for the retired String APIs (what to call instead for each one).
 
