@@ -654,21 +654,22 @@ async fn unusable_commit_objects_never_read_as_ready() {
         )
         .expect("full-width bogus OID");
 
-        let blob_host = client
-            .create_notebook(Some("blob-host"))
-            .await
-            .expect("create blob-host");
-        let input = env.nb_dir().join("blob-input.txt");
-        std::fs::write(&input, "blob\n").expect("blob input");
-        let blob_oid =
-            git(&blob_host, &["hash-object", "-w", &input.to_string_lossy()])
-                .trim()
-                .to_string();
-        assert_eq!(blob_oid.len(), 40, "blob OID created");
         let blob = client
             .create_notebook(Some("blob-oid"))
             .await
             .expect("create blob-oid");
+        let input = env.nb_dir().join("blob-input.txt");
+        std::fs::write(&input, "blob\n").expect("blob input");
+        let blob_oid =
+            git(&blob, &["hash-object", "-w", &input.to_string_lossy()])
+                .trim()
+                .to_string();
+        assert_eq!(blob_oid.len(), 40, "blob OID created");
+        assert_eq!(
+            git(&blob, &["cat-file", "-t", &blob_oid]).trim(),
+            "blob",
+            "object is a blob in the target repo"
+        );
         let r = current_ref(&blob);
         std::fs::write(blob.join(".git").join(&r), format!("{blob_oid}\n"))
             .expect("blob OID as ref");
@@ -840,6 +841,148 @@ async fn injected_failure_preserves_config_only_change() {
         assert!(
             contents.contains("foreign.git") && contents.contains("marker"),
             "foreign config survives cleanup: {contents:?}"
+        );
+    })
+    .await;
+}
+
+/// A foreign core-key-only config edit survives: a second `[core]`
+/// section with different keys is still foreign state, with no
+/// extra top-level files or refs.
+#[tokio::test]
+async fn injected_failure_preserves_core_key_edit() {
+    let env = NbTestEnv::new_native().expect("native fixture");
+    with_isolated_env(&env, false, || async {
+        unsafe {
+            std::env::set_var("NB_API_PAUSE_BEFORE_INIT_COMMIT_MS", "1000");
+            std::env::set_var("NB_API_NOTEBOOK_INIT_FAIL", "1");
+        }
+        let root = env.nb_dir().join("core-key-foreign");
+        let outcome = std::thread::scope(|s| {
+            let creator = s.spawn(|| {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("runtime");
+                rt.block_on(async {
+                    let client = NbClient::new(&config_for_create(&env))
+                        .expect("client");
+                    client.create_notebook(Some("core-key-foreign")).await
+                })
+            });
+            let mut poll = 0;
+            while !root.join(".index").exists() {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                poll += 1;
+                assert!(poll < 500, "creator never reached its pause point");
+            }
+            let config = root.join(".git/config");
+            let mut contents =
+                std::fs::read_to_string(&config).expect("read config");
+            contents.push_str("[core]\n\tlogAllRefUpdates = false\n");
+            std::fs::write(&config, &contents).expect("foreign core key");
+            creator.join().expect("creator thread")
+        });
+        outcome.expect_err("injected failure must fail");
+        let contents =
+            std::fs::read_to_string(root.join(".git/config")).expect("config");
+        assert!(
+            contents.contains("logAllRefUpdates = false"),
+            "foreign core key survives: {contents:?}"
+        );
+    })
+    .await;
+}
+
+/// A foreign hook accepted by suffix alone survives: creating or
+/// editing `.git/hooks/foreign.sample` changes no refs or status.
+#[tokio::test]
+async fn injected_failure_preserves_hook_sample_change() {
+    let env = NbTestEnv::new_native().expect("native fixture");
+    with_isolated_env(&env, false, || async {
+        unsafe {
+            std::env::set_var("NB_API_PAUSE_BEFORE_INIT_COMMIT_MS", "1000");
+            std::env::set_var("NB_API_NOTEBOOK_INIT_FAIL", "1");
+        }
+        let root = env.nb_dir().join("hook-foreign");
+        let outcome = std::thread::scope(|s| {
+            let creator = s.spawn(|| {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("runtime");
+                rt.block_on(async {
+                    let client = NbClient::new(&config_for_create(&env))
+                        .expect("client");
+                    client.create_notebook(Some("hook-foreign")).await
+                })
+            });
+            let mut poll = 0;
+            while !root.join(".index").exists() {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                poll += 1;
+                assert!(poll < 500, "creator never reached its pause point");
+            }
+            std::fs::write(
+                root.join(".git/hooks/foreign.sample"),
+                "foreign hook\n",
+            )
+            .expect("foreign hook");
+            creator.join().expect("creator thread")
+        });
+        outcome.expect_err("injected failure must fail");
+        assert_eq!(
+            std::fs::read_to_string(root.join(".git/hooks/foreign.sample"))
+                .expect("hook"),
+            "foreign hook\n",
+            "foreign hook bytes survive"
+        );
+    })
+    .await;
+}
+
+/// Foreign object-store metadata survives: bytes under
+/// `.git/objects/info` change no refs, index, or status.
+#[tokio::test]
+async fn injected_failure_preserves_object_store_metadata() {
+    let env = NbTestEnv::new_native().expect("native fixture");
+    with_isolated_env(&env, false, || async {
+        unsafe {
+            std::env::set_var("NB_API_PAUSE_BEFORE_INIT_COMMIT_MS", "1000");
+            std::env::set_var("NB_API_NOTEBOOK_INIT_FAIL", "1");
+        }
+        let root = env.nb_dir().join("objects-foreign");
+        let outcome = std::thread::scope(|s| {
+            let creator = s.spawn(|| {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("runtime");
+                rt.block_on(async {
+                    let client = NbClient::new(&config_for_create(&env))
+                        .expect("client");
+                    client.create_notebook(Some("objects-foreign")).await
+                })
+            });
+            let mut poll = 0;
+            while !root.join(".index").exists() {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                poll += 1;
+                assert!(poll < 500, "creator never reached its pause point");
+            }
+            std::fs::write(
+                root.join(".git/objects/info/foreign"),
+                "foreign objects\n",
+            )
+            .expect("foreign objects metadata");
+            creator.join().expect("creator thread")
+        });
+        outcome.expect_err("injected failure must fail");
+        assert_eq!(
+            std::fs::read_to_string(root.join(".git/objects/info/foreign"))
+                .expect("objects metadata"),
+            "foreign objects\n",
+            "foreign object-store bytes survive"
         );
     })
     .await;

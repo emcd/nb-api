@@ -254,9 +254,10 @@ fn confined_canonical(root: &Path, path: &Path) -> Result<PathBuf, NbError> {
     Ok(canonical)
 }
 
-/// Fast readiness probe with no waiting and no subprocesses.
-/// Callers decide convergence: waits belong to creation paths,
-/// never to point-in-time reads.
+/// Fast readiness probe with no waiting and no `nb` subprocesses
+/// (git verification runs for usable-`HEAD` checks). Callers
+/// decide convergence: waits belong to creation paths, never to
+/// point-in-time reads.
 #[derive(PartialEq, Eq)]
 pub(super) enum Probe {
     Ready(PathBuf),
@@ -532,30 +533,31 @@ pub(super) async fn create_notebook_dir(
 /// Completes a freshly created notebook directory: initializes the
 /// empty layout and verifies the result (causal barrier: creation
 /// is done only when the notebook resolves to exactly the created
-/// path). Cleans up owned artifacts on failure, never another
-/// writer's contents; preservation is reported in the error when
-/// the directory is retained for inspection.
+/// path). Failures retain the partial directory for inspection and
+/// report its location; no recursive deletion runs, so foreign
+/// state can never be destroyed by a failed create.
 async fn finish_new_notebook_dir(
     root: &Path,
     notebook: &str,
     path: &Path,
 ) -> Result<PathBuf, NbError> {
-    let ours = match crate::git::notebook_init_empty(path) {
+    let _ours = match crate::git::notebook_init_empty(path) {
         Ok(hash) => hash,
         Err(e) => {
-            if !remove_owned_notebook_dir(path, None) {
-                tracing::warn!(
-                    "notebook init failed; partial directory preserved at `{}` for inspection",
-                    path.display()
-                );
-            }
+            tracing::warn!(
+                "notebook init failed; partial directory preserved at `{}` for inspection",
+                path.display()
+            );
             return Err(e);
         },
     };
     let ready = match head_resolvable(path) {
         Ok(ready) => ready,
         Err(e) => {
-            remove_owned_notebook_dir(path, Some(&ours));
+            tracing::warn!(
+                "notebook verification failed; partial directory preserved at `{}` for inspection",
+                path.display()
+            );
             return Err(e);
         },
     };
@@ -565,15 +567,6 @@ async fn finish_new_notebook_dir(
     {
         return Ok(canonical);
     }
-    let removed = remove_owned_notebook_dir(path, Some(&ours));
-    if removed {
-        return Err(NbError::ValidationError {
-            reason: format!(
-                "created notebook `{notebook}` failed its validity probe; concurrent modification suspected; owned artifacts cleaned up"
-            ),
-            location: None,
-        });
-    }
     Err(NbError::ValidationError {
         reason: format!(
             "created notebook `{notebook}` failed its validity probe; concurrent modification suspected; partial directory preserved at `{}` for inspection",
@@ -581,273 +574,4 @@ async fn finish_new_notebook_dir(
         ),
         location: None,
     })
-}
-
-/// Removes a just-created notebook directory only when ownership is
-/// established: no symlinks, exactly the artifacts creation
-/// produced, ref state consistent with `ours` (`None` means no
-/// commit of ours exists), and a clean worktree. Anything else
-/// present means another writer arrived; it is left untouched and
-/// reported. Returns whether the directory was removed.
-fn remove_owned_notebook_dir(path: &Path, ours: Option<&str>) -> bool {
-    if !owned_for_cleanup(path, ours) {
-        tracing::warn!(
-            "refusing to clean notebook directory `{}`: ownership not established",
-            path.display()
-        );
-        return false;
-    }
-    if let Err(e) = std::fs::remove_dir_all(path) {
-        tracing::warn!(
-            "failed to clean owned notebook directory `{}`: {e}",
-            path.display()
-        );
-        return false;
-    }
-    true
-}
-
-fn owned_for_cleanup(path: &Path, ours: Option<&str>) -> bool {
-    let Ok(meta) = std::fs::symlink_metadata(path) else {
-        return false;
-    };
-    if meta.file_type().is_symlink() || !meta.is_dir() {
-        return false;
-    }
-    let entries: Vec<std::ffi::OsString> = match std::fs::read_dir(path) {
-        Ok(entries) => {
-            let mut names = Vec::new();
-            for entry in entries {
-                let Ok(entry) = entry else {
-                    return false;
-                };
-                names.push(entry.file_name());
-            }
-            names
-        },
-        Err(_) => return false,
-    };
-    if entries
-        .iter()
-        .any(|name| name != ".git" && name != ".index")
-    {
-        return false;
-    }
-    match ours {
-        None => owned_fresh_for_cleanup(path),
-        Some(hash) => {
-            let Ok(head) = std::fs::read_to_string(path.join(".git/HEAD"))
-            else {
-                return false;
-            };
-            let Some(r) = head.trim().strip_prefix("ref: ") else {
-                return false;
-            };
-            let r = r.trim();
-            if !is_valid_ref_name(r) {
-                return false;
-            }
-            let Ok(content) =
-                std::fs::read_to_string(path.join(".git").join(r))
-            else {
-                return false;
-            };
-            if content.trim() != hash {
-                return false;
-            }
-            if !is_valid_hex_hash(hash) {
-                return false;
-            }
-            if has_other_refs(path, r) {
-                return false;
-            }
-            if path.join(".git/packed-refs").exists() {
-                return false;
-            }
-            if !git_internal_metadata_owned(path) {
-                return false;
-            }
-            match crate::git::git_capture(
-                path,
-                &["status".into(), "--porcelain".into()],
-            ) {
-                Ok(status) => status.trim().is_empty(),
-                Err(_) => false,
-            }
-        },
-    }
-}
-
-/// Git-internal metadata ownership: `.git/config` carries only the
-/// init `[core]` section and `.git/hooks` holds only sample files.
-/// Any foreign remote, marker section, or hook changes unknown
-/// provenance, so cleanup preserves instead of deleting.
-fn git_internal_metadata_owned(path: &Path) -> bool {
-    let config = match std::fs::read_to_string(path.join(".git/config")) {
-        Ok(config) => config,
-        Err(_) => return false,
-    };
-    for line in config.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with('[') && trimmed != "[core]" {
-            return false;
-        }
-    }
-    let hooks = match std::fs::read_dir(path.join(".git/hooks")) {
-        Ok(hooks) => hooks,
-        Err(_) => return false,
-    };
-    for entry in hooks {
-        let Ok(entry) = entry else {
-            return false;
-        };
-        let Ok(file_type) = entry.file_type() else {
-            return false;
-        };
-        if !file_type.is_file() {
-            return false;
-        }
-        if entry.file_name().to_string_lossy().ends_with(".sample") {
-            continue;
-        }
-        return false;
-    }
-    true
-}
-
-/// Loose object files under `.git/objects`, excluding the
-/// `info`/`pack` bookkeeping dirs. `None` on any read failure
-/// (unknown, therefore unsafe).
-fn loose_object_files(path: &Path) -> Option<Vec<PathBuf>> {
-    let mut out = Vec::new();
-    let mut stack = vec![path.join(".git/objects")];
-    while let Some(current) = stack.pop() {
-        let entries = std::fs::read_dir(&current).ok()?;
-        for entry in entries {
-            let entry = entry.ok()?;
-            let name = entry.file_name();
-            if current.ends_with(".git/objects")
-                && (name == "info" || name == "pack")
-            {
-                continue;
-            }
-            let file_type = entry.file_type().ok()?;
-            if file_type.is_dir() {
-                stack.push(entry.path());
-            } else if file_type.is_file() {
-                out.push(entry.path());
-            } else {
-                return None;
-            }
-        }
-    }
-    Some(out)
-}
-
-/// Ownership for a directory whose init never produced our commit:
-/// only the exact creation artifacts, no refs (unknown reads fail
-/// closed), no packed-refs, an unborn symbolic `HEAD`, an empty
-/// `.index`, init-only git metadata (core config, sample hooks,
-/// one staged blob), and a status of exactly the staged `.index`
-/// addition. Any foreign edit, detached/packed state, metadata
-/// change, or read failure preserves the directory.
-fn owned_fresh_for_cleanup(path: &Path) -> bool {
-    if has_refs(path) {
-        return false;
-    }
-    if path.join(".git/packed-refs").exists() {
-        return false;
-    }
-    let head = match std::fs::read_to_string(path.join(".git/HEAD")) {
-        Ok(head) => head,
-        Err(_) => return false,
-    };
-    let Some(r) = head.trim().strip_prefix("ref: ") else {
-        return false;
-    };
-    let r = r.trim();
-    if !is_valid_ref_name(r) {
-        return false;
-    }
-    if path.join(".git").join(r).exists() {
-        return false;
-    }
-    let index_len = match std::fs::metadata(path.join(".index")) {
-        Ok(meta) => {
-            if !meta.is_file() {
-                return false;
-            }
-            meta.len()
-        },
-        Err(_) => return false,
-    };
-    if index_len != 0 {
-        return false;
-    }
-    if !git_internal_metadata_owned(path) {
-        return false;
-    }
-    match loose_object_files(path) {
-        Some(files) => {
-            if files.len() != 1 {
-                return false;
-            }
-        },
-        None => return false,
-    }
-    match crate::git::git_capture(
-        path,
-        &["status".into(), "--porcelain".into()],
-    ) {
-        Ok(status) => status.trim() == "A  .index",
-        Err(_) => false,
-    }
-}
-
-/// Whether any refs exist under `.git/refs` at all. Unknown read
-/// failures count as refs (unsafe), so cleanup preserves.
-fn has_refs(path: &Path) -> bool {
-    match refs_files(&path.join(".git/refs")) {
-        Some(files) => !files.is_empty(),
-        None => true,
-    }
-}
-
-/// Whether `.git/refs` holds any file other than the given ref.
-/// Unknown read failures count as foreign (unsafe), so cleanup
-/// preserves. `allowed` is a full `refs/...` target; entries are
-/// relative to `.git/refs`, so the prefix is stripped before
-/// comparison.
-fn has_other_refs(path: &Path, allowed: &str) -> bool {
-    let allowed_rel = allowed.strip_prefix("refs/").unwrap_or(allowed);
-    match refs_files(&path.join(".git/refs")) {
-        Some(files) => {
-            files.iter().any(|f| f.to_string_lossy() != allowed_rel)
-        },
-        None => true,
-    }
-}
-
-/// Relative file paths under a refs directory; `None` on any
-/// read failure (treated as unknown, therefore unsafe).
-fn refs_files(dir: &Path) -> Option<Vec<PathBuf>> {
-    let mut out = Vec::new();
-    let mut stack = vec![dir.to_path_buf()];
-    while let Some(current) = stack.pop() {
-        let entries = std::fs::read_dir(&current).ok()?;
-        for entry in entries {
-            let entry = entry.ok()?;
-            let file_type = entry.file_type().ok()?;
-            if file_type.is_dir() {
-                stack.push(entry.path());
-            } else if file_type.is_file() {
-                let full = entry.path();
-                let rel = full.strip_prefix(dir).ok()?;
-                out.push(rel.to_path_buf());
-            } else {
-                return None;
-            }
-        }
-    }
-    Some(out)
 }

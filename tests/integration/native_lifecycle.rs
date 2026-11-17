@@ -393,9 +393,11 @@ async fn slow_initializer_still_converges() {
     .await;
 }
 
-/// An injected init failure removes only the owned directory.
+/// An injected init failure retains the partial directory for
+/// inspection instead of recursively deleting it: ownership of
+/// git-internal state is never assumed from names or shapes.
 #[tokio::test]
-async fn injected_failure_removes_owned_only() {
+async fn injected_failure_preserves_owned_directory() {
     let env = NbTestEnv::new_native().expect("native fixture");
     with_isolated_env(&env, false, || async {
         unsafe {
@@ -411,8 +413,8 @@ async fn injected_failure_removes_owned_only() {
             "expected injected Io failure, got: {err:?}"
         );
         assert!(
-            !env.nb_dir().join("doomed").exists(),
-            "owned directory cleaned up"
+            env.nb_dir().join("doomed/.git/HEAD").is_file(),
+            "partial directory retained for inspection"
         );
     })
     .await;
