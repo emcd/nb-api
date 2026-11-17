@@ -43,12 +43,18 @@
 //!
 //! # `nb` binary resolution
 //!
-//! The fixture spawns the `nb` CLI during initialization via an
-//! **absolute path** discovered once per process (see
-//! [`nb_binary`]). Child processes receive a **safe `PATH`** that
-//! always includes system directories so `#!/usr/bin/env bash` on
-//! the `nb` script can resolve `bash` even when a concurrent test
-//! has poisoned the parent process `PATH` (see `nb-api:issues/api/7`).
+//! The `nb`-backed builder ([`NbTestEnvBuilder::build`]) spawns the
+//! `nb` CLI during initialization via an **absolute path**
+//! discovered once per process (see [`nb_binary`]). Child
+//! processes receive a **safe `PATH`** that always includes system
+//! directories so `#!/usr/bin/env bash` on the `nb` script can
+//! resolve `bash` even when a concurrent test has poisoned the
+//! parent process `PATH` (see `nb-api:issues/api/7`).
+//!
+//! [`NbTestEnvBuilder::build_native`] (and [`NbTestEnv::new_native`])
+//! never spawns `nb`: the notebook is initialized natively with
+//! only `git` subprocesses, so hermetic default-suite tests prove
+//! zero `nb` dependence including setup.
 //!
 //! The repository's `qa` workflow installs `nb` (pinned to the
 //! `7.24.0` tag) before running tests. Override discovery with

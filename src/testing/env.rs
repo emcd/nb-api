@@ -137,8 +137,45 @@ impl NbTestEnvBuilder {
         self
     }
 
-    /// Build the fixture, initialize its notebook, and return it.
+    /// Build the fixture, initialize its notebook via the `nb`
+    /// CLI, and return it. Tests exercising only native behavior
+    /// should prefer [`build_native`](Self::build_native), which
+    /// never spawns `nb`.
     pub fn build(self) -> Result<NbTestEnv, NbTestError> {
+        let scaffold = self.scaffold()?;
+        let env = NbTestEnv {
+            root: scaffold.root,
+            nb_dir: scaffold.nb_dir,
+            working_dir: scaffold.working_dir,
+            home_dir: scaffold.home_dir,
+            notebook: scaffold.notebook,
+        };
+        env.initialize_notebook()?;
+        Ok(env)
+    }
+
+    /// Build the fixture without spawning `nb`: isolated dirs,
+    /// deterministic git identity, the `.current` marker, and a
+    /// natively initialized notebook (production creation shape:
+    /// git worktree, empty `.index`, `[nb] Initialize` commit).
+    /// Only `git` subprocesses run.
+    pub fn build_native(self) -> Result<NbTestEnv, NbTestError> {
+        let scaffold = self.scaffold()?;
+        let env = NbTestEnv {
+            root: scaffold.root,
+            nb_dir: scaffold.nb_dir,
+            working_dir: scaffold.working_dir,
+            home_dir: scaffold.home_dir,
+            notebook: scaffold.notebook,
+        };
+        env.initialize_notebook_native()?;
+        Ok(env)
+    }
+
+    /// Shared scaffold: isolated root tempdir, `nb_dir`, working
+    /// dir, fixture `HOME`, and the configured notebook name.
+    /// Creates no notebooks and spawns nothing.
+    fn scaffold(self) -> Result<ScaffoldedEnv, NbTestError> {
         let root = tempfile::Builder::new()
             .prefix("nb-api-test-")
             .tempdir()
@@ -175,16 +212,24 @@ impl NbTestEnvBuilder {
         let notebook = self
             .notebook
             .unwrap_or_else(|| DEFAULT_NOTEBOOK.to_string());
-        let env = NbTestEnv {
+        Ok(ScaffoldedEnv {
             root,
             nb_dir,
             working_dir,
             home_dir,
             notebook,
-        };
-        env.initialize_notebook()?;
-        Ok(env)
+        })
     }
+}
+
+/// Fixture directories and notebook name, assembled without
+/// spawning anything. Consumed by `build` and `build_native`.
+struct ScaffoldedEnv {
+    root: tempfile::TempDir,
+    nb_dir: PathBuf,
+    working_dir: PathBuf,
+    home_dir: PathBuf,
+    notebook: String,
 }
 
 /// Hermetic fixture for integration tests that exercise the `nb` CLI.
@@ -222,6 +267,13 @@ impl NbTestEnv {
     /// disabled).
     pub fn new() -> Result<Self, NbTestError> {
         Self::builder().build()
+    }
+
+    /// Build a hermetic fixture without spawning `nb` (see
+    /// [`NbTestEnvBuilder::build_native`]). Prefer this for tests
+    /// exercising native behavior; only `git` runs during setup.
+    pub fn new_native() -> Result<Self, NbTestError> {
+        Self::builder().build_native()
     }
 
     /// Begin building a fixture with non-default knobs.
@@ -309,6 +361,117 @@ impl NbTestEnv {
         self.configure_tokio(&mut cmd);
         cmd.stdin(Stdio::null());
         cmd
+    }
+
+    /// Native counterpart to `initialize_notebook`: writes the
+    /// deterministic gitconfig, initializes the notebook with the
+    /// production layout (`git init`, empty `.index`,
+    /// `[nb] Initialize` commit, local `core.autocrlf=false`), and
+    /// points `.current` at it. Spawns only `git`, never `nb`, so
+    /// default-suite tests built on this fixture prove zero `nb`
+    /// dependence including setup.
+    fn initialize_notebook_native(&self) -> Result<(), NbTestError> {
+        let gitconfig = self.home_dir.join(".gitconfig");
+        let gitconfig_contents = format!(
+            "[user]\n\tname = {GIT_AUTHOR_NAME}\n\temail = {GIT_AUTHOR_EMAIL}\n",
+        );
+        std::fs::write(&gitconfig, gitconfig_contents).map_err(|e| {
+            NbTestError::Io {
+                context: format!(
+                    "write .gitconfig to {}",
+                    gitconfig.display()
+                ),
+                source: e,
+            }
+        })?;
+
+        let notebook_root = self.nb_dir.join(&self.notebook);
+        std::fs::create_dir_all(&notebook_root).map_err(|e| {
+            NbTestError::Io {
+                context: format!(
+                    "create notebook dir at {}",
+                    notebook_root.display()
+                ),
+                source: e,
+            }
+        })?;
+        self.fixture_git(&notebook_root, &["init"])?;
+        std::fs::write(notebook_root.join(".index"), b"").map_err(|e| {
+            NbTestError::Io {
+                context: format!(
+                    "write .index in {}",
+                    notebook_root.display()
+                ),
+                source: e,
+            }
+        })?;
+        self.fixture_git(&notebook_root, &["add", "--", ".index"])?;
+        // Byte-identical LF handling across platforms, matching the
+        // `nb`-path baseline (`todos/api/9`).
+        self.fixture_git(
+            &notebook_root,
+            &["config", "core.autocrlf", "false"],
+        )?;
+        self.fixture_git(
+            &notebook_root,
+            &["commit", "--no-gpg-sign", "-m", "[nb] Initialize"],
+        )?;
+        std::fs::write(self.nb_dir.join(".current"), &self.notebook).map_err(
+            |e| NbTestError::Io {
+                context: format!(
+                    "write .current to {}",
+                    self.nb_dir.join(".current").display()
+                ),
+                source: e,
+            },
+        )?;
+        Ok(())
+    }
+
+    /// Run `git` in `dir` with the fixture's hermetic env (scrubbed
+    /// `GIT_*`, fixture `HOME`, deterministic author identity,
+    /// signing off, LF handling). Non-success exits become typed
+    /// `Nb` failures carrying all three streams.
+    fn fixture_git(
+        &self,
+        dir: &Path,
+        args: &[&str],
+    ) -> Result<String, NbTestError> {
+        let mut cmd = StdCommand::new("git");
+        scrub_git_env_std(&mut cmd);
+        cmd.env("HOME", &self.home_dir);
+        cmd.env("GIT_AUTHOR_NAME", GIT_AUTHOR_NAME);
+        cmd.env("GIT_AUTHOR_EMAIL", GIT_AUTHOR_EMAIL);
+        cmd.env("GIT_COMMITTER_NAME", GIT_AUTHOR_NAME);
+        cmd.env("GIT_COMMITTER_EMAIL", GIT_AUTHOR_EMAIL);
+        apply_git_config_env(&mut cmd);
+        cmd.current_dir(dir);
+        cmd.args(args);
+        let output = cmd.output().map_err(|e| NbTestError::Io {
+            context: format!(
+                "spawn `git {}` in {}",
+                args.join(" "),
+                dir.display()
+            ),
+            source: e,
+        })?;
+        if !output.status.success() {
+            return Err(NbTestError::Nb {
+                context: format!(
+                    "fixture `git {}` in {}",
+                    args.join(" "),
+                    dir.display()
+                ),
+                failure: NbFailure {
+                    status: output.status,
+                    stdout: String::from_utf8_lossy(&output.stdout)
+                        .into_owned(),
+                    stderr: String::from_utf8_lossy(&output.stderr)
+                        .into_owned(),
+                },
+            });
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     }
 
     fn initialize_notebook(&self) -> Result<(), NbTestError> {

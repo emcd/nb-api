@@ -5,7 +5,7 @@
 - [x] 1.3 Enforce name/root confinement (dot-segment, absolute/drive, separator rejection; symlink roots refused) before any mutation
 - [x] 1.4 Implement atomic concurrent create (single winner, idempotent ensure) with owned-only failure cleanup
 - [x] 1.5 Add typed notebook enumeration (`list_notebook_names`, sorted valid names)
-- [x] 1.6 Add purely-native layout/validity/matrix/concurrency tests plus extended two-way `nb`/native interop tests
+- [x] 1.6 Add purely-native layout/validity/matrix/concurrency tests (hermetic default suite: native fixture setup, dead-`nb` tripwire) plus two-way `nb`/native interop checks classified into the ignore-gated oracle set for the extended profile
 - [x] 1.7 Gate validity on resolvable `HEAD` with convergence waits, post-init barrier, owned-only cleanup with foreign-change preservation, and deterministic pause/fail injection hooks
 - [x] 1.8 Separate query-only paths from explicit create; centralize `NB_DIR` validation with canonical paths; skip non-notebooks in enumeration; suppress signing on init
 

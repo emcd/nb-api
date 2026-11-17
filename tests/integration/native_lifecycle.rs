@@ -2,10 +2,12 @@
 //! confinement, enumeration, concurrent creation, failure
 //! injection, and true-`nb` interoperability.
 //!
-//! Default-suite tests never spawn `nb` themselves; the fixture
-//! notebook is still provisioned by `nb` (native fixture setup
-//! arrives separately). The ignored oracle test belongs to the
-//! extended suite.
+//! The default suite is hermetic: fixtures are built natively
+//! (git only, no `nb` spawn including setup) and every
+//! unignored test passes with a dead `nb` on `PATH` (see the
+//! tripwire below). The two interop tests need a real `nb` and
+//! belong to the ignore-gated oracle set for the extended
+//! profile.
 
 use nb_api::testing::NbTestEnv;
 use nb_api::{Config, NbClient, NbError};
@@ -43,7 +45,7 @@ fn git(root: &std::path::Path, args: &[&str]) -> String {
 /// is immediately committable.
 #[tokio::test]
 async fn create_resolves_layout_and_transacts_immediately() {
-    let env = NbTestEnv::new().expect("fixture");
+    let env = NbTestEnv::new_native().expect("native fixture");
     with_isolated_env(&env, false, || async {
         let client = NbClient::new(&config_for_create(&env)).expect("client");
         let root = client
@@ -80,7 +82,7 @@ async fn create_resolves_layout_and_transacts_immediately() {
 /// converging onto it.
 #[tokio::test]
 async fn explicit_create_refuses_existing() {
-    let env = NbTestEnv::new().expect("fixture");
+    let env = NbTestEnv::new_native().expect("native fixture");
     with_isolated_env(&env, false, || async {
         let client = NbClient::new(&config_for_create(&env)).expect("client");
         let first = client
@@ -110,7 +112,7 @@ async fn explicit_create_refuses_existing() {
 /// A missing notebook is ensured on write paths when allowed.
 #[tokio::test]
 async fn missing_notebook_write_path_ensures_when_allowed() {
-    let env = NbTestEnv::new().expect("fixture");
+    let env = NbTestEnv::new_native().expect("native fixture");
     with_isolated_env(&env, false, || async {
         let client = NbClient::new(&config_for_create(&env)).expect("client");
         client
@@ -127,7 +129,7 @@ async fn missing_notebook_write_path_ensures_when_allowed() {
 /// creating nothing.
 #[tokio::test]
 async fn missing_notebook_write_path_refuses_when_disabled() {
-    let env = NbTestEnv::new().expect("fixture");
+    let env = NbTestEnv::new_native().expect("native fixture");
     with_isolated_env(&env, false, || async {
         let client = NbClient::new(&config_for(&env)).expect("client");
         let err = client
@@ -158,7 +160,7 @@ async fn missing_notebook_write_path_refuses_when_disabled() {
 /// when creation is enabled.
 #[tokio::test]
 async fn missing_notebook_read_path_is_not_found() {
-    let env = NbTestEnv::new().expect("fixture");
+    let env = NbTestEnv::new_native().expect("native fixture");
     with_isolated_env(&env, false, || async {
         let client = NbClient::new(&config_for_create(&env)).expect("client");
         let err = client
@@ -177,7 +179,7 @@ async fn missing_notebook_read_path_is_not_found() {
 /// A plain directory is never git-initialized, on any write path.
 #[tokio::test]
 async fn plain_directory_is_never_initialized() {
-    let env = NbTestEnv::new().expect("fixture");
+    let env = NbTestEnv::new_native().expect("native fixture");
     with_isolated_env(&env, false, || async {
         std::fs::create_dir(env.nb_dir().join("plain")).expect("plain dir");
         let client = NbClient::new(&config_for_create(&env)).expect("client");
@@ -209,7 +211,7 @@ async fn plain_directory_is_never_initialized() {
 /// Dot-segment names are not notebook names on any path.
 #[tokio::test]
 async fn dot_names_refused() {
-    let env = NbTestEnv::new().expect("fixture");
+    let env = NbTestEnv::new_native().expect("native fixture");
     with_isolated_env(&env, false, || async {
         let client = NbClient::new(&config_for_create(&env)).expect("client");
         for name in [".", ".."] {
@@ -231,7 +233,7 @@ async fn dot_names_refused() {
 /// invalid names are left untouched.
 #[tokio::test]
 async fn enumeration_lists_valid_notebooks_sorted() {
-    let env = NbTestEnv::new().expect("fixture");
+    let env = NbTestEnv::new_native().expect("native fixture");
     with_isolated_env(&env, false, || async {
         let client = NbClient::new(&config_for_create(&env)).expect("client");
         client
@@ -273,7 +275,7 @@ async fn enumeration_lists_valid_notebooks_sorted() {
 /// losers are refused without touching the winner.
 #[tokio::test]
 async fn concurrent_creates_converge_on_single_notebook() {
-    let env = NbTestEnv::new().expect("fixture");
+    let env = NbTestEnv::new_native().expect("native fixture");
     with_isolated_env(&env, false, || async {
         let results = std::thread::scope(|s| {
             let handles: Vec<_> = (0..4)
@@ -328,7 +330,7 @@ async fn concurrent_creates_converge_on_single_notebook() {
 /// notebook as invalid.
 #[tokio::test]
 async fn slow_initializer_still_converges() {
-    let env = NbTestEnv::new().expect("fixture");
+    let env = NbTestEnv::new_native().expect("native fixture");
     with_isolated_env(&env, false, || async {
         unsafe {
             std::env::set_var("NB_API_PAUSE_BEFORE_INIT_COMMIT_MS", "1000");
@@ -382,7 +384,7 @@ async fn slow_initializer_still_converges() {
 /// An injected init failure removes only the owned directory.
 #[tokio::test]
 async fn injected_failure_removes_owned_only() {
-    let env = NbTestEnv::new().expect("fixture");
+    let env = NbTestEnv::new_native().expect("native fixture");
     with_isolated_env(&env, false, || async {
         unsafe {
             std::env::set_var("NB_API_NOTEBOOK_INIT_FAIL", "1");
@@ -408,7 +410,7 @@ async fn injected_failure_removes_owned_only() {
 /// deleting them: a foreign file and a foreign commit survive.
 #[tokio::test]
 async fn injected_failure_preserves_foreign_changes() {
-    let env = NbTestEnv::new().expect("fixture");
+    let env = NbTestEnv::new_native().expect("native fixture");
     with_isolated_env(&env, false, || async {
         unsafe {
             std::env::set_var("NB_API_PAUSE_BEFORE_INIT_COMMIT_MS", "1000");
@@ -468,7 +470,7 @@ async fn injected_failure_preserves_foreign_changes() {
 /// when the isolated git config requires it.
 #[tokio::test]
 async fn init_commit_bypasses_required_signing() {
-    let env = NbTestEnv::new().expect("fixture");
+    let env = NbTestEnv::new_native().expect("native fixture");
     with_isolated_env(&env, false, || async {
         std::fs::write(
             env.home_dir().join(".gitconfig"),
@@ -494,7 +496,7 @@ async fn init_commit_bypasses_required_signing() {
 #[cfg(unix)]
 #[tokio::test]
 async fn symlink_root_is_refused() {
-    let env = NbTestEnv::new().expect("fixture");
+    let env = NbTestEnv::new_native().expect("native fixture");
     with_isolated_env(&env, false, || async {
         let target = env.nb_dir().join(env.notebook());
         std::os::unix::fs::symlink(&target, env.nb_dir().join("alias"))
@@ -513,8 +515,71 @@ async fn symlink_root_is_refused() {
     .await;
 }
 
+/// Dead-`nb` tripwire: with an `nb` stub that fails loudly first
+/// on `PATH` while git stays alive, the full native lifecycle
+/// still passes — proving zero `nb` attempts rather than mere
+/// lookup absence. Unix-only: the stub relies on executable-bit
+/// script dispatch.
+#[cfg(unix)]
+#[tokio::test]
+async fn native_lifecycle_spawns_no_nb() {
+    use std::os::unix::fs::PermissionsExt;
+    let env = NbTestEnv::new_native().expect("native fixture");
+    with_isolated_env(&env, false, || async {
+        let stub_dir = tempfile::Builder::new()
+            .prefix("nb-dead-")
+            .tempdir()
+            .expect("stub dir");
+        std::fs::write(
+            stub_dir.path().join("nb"),
+            "#!/usr/bin/env bash\necho 'dead-nb tripwire invoked' >&2\nexit 127\n",
+        )
+        .expect("stub script");
+        std::fs::set_permissions(
+            stub_dir.path().join("nb"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .expect("chmod stub");
+        // SAFETY: serialized by ENV_LOCK inside `with_isolated_env`;
+        // `EnvSnapshot` restores `PATH` on scope exit.
+        let path_var = std::env::var_os("PATH").unwrap_or_default();
+        let mut paths = vec![stub_dir.path().to_path_buf()];
+        paths.extend(std::env::split_paths(&path_var));
+        unsafe {
+            std::env::set_var(
+                "PATH",
+                std::env::join_paths(paths).expect("join PATH"),
+            );
+        }
+        let client =
+            NbClient::new(&config_for_create(&env)).expect("client");
+        let root = client
+            .create_notebook(Some("tripwire"))
+            .await
+            .expect("create with dead nb");
+        let mut tx = client
+            .transaction(Some("tripwire"))
+            .await
+            .expect("tx with dead nb");
+        tx.add_note("hello.md", Some("Hello"), "hello\n", &[])
+            .unwrap();
+        tx.commit().await.expect("commit with dead nb");
+        assert!(root.join("hello.md").is_file(), "note landed");
+        let names = client.list_notebook_names().await.expect("enumerate");
+        assert!(names.contains(&"tripwire".to_string()), "{names:?}");
+        client
+            .show_notebook_path(Some("tripwire"))
+            .await
+            .expect("path with dead nb");
+    })
+    .await;
+}
+
 /// An `nb`-created notebook resolves natively (no `nb` spawned for
 /// resolution itself; only fixture setup uses `nb` here).
+/// Oracle set: requires the `nb`-provisioned fixture, so it runs
+/// only in the extended profile.
+#[ignore]
 #[tokio::test]
 async fn interop_nb_created_notebook_resolves_natively() {
     let env = NbTestEnv::new().expect("fixture");
@@ -542,7 +607,7 @@ async fn interop_nb_created_notebook_resolves_natively() {
 #[ignore]
 #[tokio::test]
 async fn interop_native_created_notebook_opens_in_nb() {
-    let env = NbTestEnv::new().expect("fixture");
+    let env = NbTestEnv::new_native().expect("native fixture");
     with_isolated_env(&env, false, || async {
         let client = NbClient::new(&config_for_create(&env)).expect("client");
         let root = client
