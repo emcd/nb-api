@@ -35,6 +35,12 @@ surface; BLAKE3 fingerprints; `.index` numeric identity.
   2026-11-12.)
 - Release rule: CI must be green before tagging. (Bundle-wide,
   operator-endorsed 2026-11-10; closes `todos/api/11`.)
+- Commit subjects are descriptive of the change, never of the
+  review process: no tier or reviewer names (Tier-1/Tier-2,
+  model or seat names), no proposal nicknames, no "address
+  feedback" phrasing pointing at vanished conversations. Rationale
+  belongs in the body in technical terms. (Operator directive
+  2026-11-17.)
 - Rolling handoff and team organization:
   `nb-api:coordination/general/5`.
 - This project uses Nbspec (notebook-resident change orchestration),
