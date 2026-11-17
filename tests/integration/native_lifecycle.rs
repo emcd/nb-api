@@ -563,6 +563,7 @@ async fn native_lifecycle_spawns_no_nb() {
         "HOME",
         "PATH",
         "NB_API_PAUSE_BEFORE_INIT_COMMIT_MS",
+        "NB_API_PAUSE_AFTER_MKDIR_MS",
         "NB_API_NOTEBOOK_INIT_FAIL",
     ]);
     let path_var = std::env::var_os("PATH").unwrap_or_default();

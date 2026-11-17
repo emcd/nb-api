@@ -102,9 +102,12 @@ fn readiness(path: &Path) -> Result<Readiness, NbError> {
     }
 }
 
-/// Whether a symbolic-ref target is a confined notebook ref:
-/// under `refs/`, without escapes or git-special sequences, so
-/// unvalidated paths are never joined outside `.git`.
+/// Whether a symbolic-ref target is confined enough to join
+/// under `.git` without escaping: under `refs/`, without parent
+/// traversal or control characters. Git-grammar validity itself
+/// (including `+` and non-ASCII names) is left to `git`, which
+/// verifies the ref during readiness; this gate only ensures an
+/// unvalidated path can never leave `.git`.
 fn is_valid_ref_name(r: &str) -> bool {
     if !r.starts_with("refs/") || r.len() <= "refs/".len() {
         return false;
@@ -113,14 +116,21 @@ fn is_valid_ref_name(r: &str) -> bool {
         || r.contains("//")
         || r.starts_with('/')
         || r.ends_with('/')
-        || r.ends_with(".lock")
-        || r.contains("@{")
+        || r.contains('\0')
     {
         return false;
     }
-    r.chars().all(|c| {
-        c.is_ascii_alphanumeric() || matches!(c, '/' | '.' | '_' | '-')
-    })
+    if r.chars().any(|c| c.is_control()) {
+        return false;
+    }
+    // Path-risky and git-forbidden ASCII never joins: backslash
+    // (Windows separator), tilde/caret/colon/question/star/bracket
+    // and reflog syntax. `+`, `]` and non-ASCII pass through and
+    // are adjudicated by git during verification.
+    if r.contains(['~', '^', ':', '?', '*', '[', '\\']) || r.contains("@{") {
+        return false;
+    }
+    true
 }
 
 /// Whether a string is a full object hash (SHA-1 or SHA-256).
@@ -129,11 +139,13 @@ fn is_valid_hex_hash(s: &str) -> bool {
         && s.chars().all(|c| c.is_ascii_hexdigit())
 }
 
-/// Whether the notebook's `HEAD` resolves: a validated loose
-/// ref target, a validated packed-refs entry, or a full
-/// detached hash. Anything else means initialization has not
-/// finished or the repository is malformed. Read failures
-/// propagate as `Io` instead of collapsing into absence.
+/// Whether the notebook's `HEAD` resolves to a usable commit: a
+/// confined loose ref target, a packed-refs entry, or a full
+/// detached hash, each verified with `git rev-parse HEAD^{commit}`
+/// so bogus, missing, or non-commit objects never read as ready.
+/// Anything else means initialization has not finished or the
+/// repository is malformed. Read failures propagate as `Io`
+/// instead of collapsing into absence.
 fn head_resolvable(root: &Path) -> Result<bool, NbError> {
     let head = match std::fs::read_to_string(root.join(".git/HEAD")) {
         Ok(head) => head,
@@ -155,7 +167,10 @@ fn head_resolvable(root: &Path) -> Result<bool, NbError> {
         }
         match std::fs::read_to_string(root.join(".git").join(r)) {
             Ok(content) => {
-                return Ok(is_valid_hex_hash(content.trim()));
+                if !is_valid_hex_hash(content.trim()) {
+                    return Ok(false);
+                }
+                return head_commit_usable(root);
             },
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {},
             Err(e) => {
@@ -192,12 +207,33 @@ fn head_resolvable(root: &Path) -> Result<bool, NbError> {
                 _ => continue,
             };
             if name == r && is_valid_hex_hash(hash) {
-                return Ok(true);
+                return head_commit_usable(root);
             }
         }
         return Ok(false);
     }
-    Ok(is_valid_hex_hash(head))
+    if !is_valid_hex_hash(head) {
+        return Ok(false);
+    }
+    head_commit_usable(root)
+}
+
+/// Whether `HEAD` peels to an existing commit object. A git
+/// failure (bogus/missing/non-commit) reads as not-ready; spawn
+/// and I/O failures propagate instead of collapsing.
+fn head_commit_usable(root: &Path) -> Result<bool, NbError> {
+    match crate::git::git_capture(
+        root,
+        &[
+            "rev-parse".to_string(),
+            "--verify".to_string(),
+            "HEAD^{commit}".to_string(),
+        ],
+    ) {
+        Ok(_) => Ok(true),
+        Err(NbError::CommandFailed { .. }) => Ok(false),
+        Err(e) => Err(e),
+    }
 }
 
 /// Canonical path confined under `root`; anything escaping the
@@ -307,7 +343,11 @@ async fn settle_pending(
             }
             crate::git::git_capture(
                 &path,
-                &["rev-parse".into(), "HEAD".into()],
+                &[
+                    "rev-parse".into(),
+                    "--verify".into(),
+                    "HEAD^{commit}".into(),
+                ],
             )?;
             Ok(Some(confined_canonical(root, &path)?))
         },
@@ -354,7 +394,11 @@ pub(super) async fn notebook_dir_from_env(
             }
             crate::git::git_capture(
                 &path,
-                &["rev-parse".into(), "HEAD".into()],
+                &[
+                    "rev-parse".into(),
+                    "--verify".into(),
+                    "HEAD^{commit}".into(),
+                ],
             )?;
             Ok(Some(confined_canonical(&root, &path)?))
         },
@@ -362,11 +406,13 @@ pub(super) async fn notebook_dir_from_env(
 }
 
 /// Ensures the notebook exists, creating it when allowed.
-/// Converges idempotently on concurrent winners; disabled creation
-/// refuses only truly missing notebooks. Present entries
-/// (plain or malformed) surface their own refusal or git failure
-/// instead of reading as creation-disabled. Plain entries are
-/// refused, never initialized.
+/// Converges idempotently on concurrent winners, including the
+/// earliest mkdir-to-init window where the winner has exposed an
+/// empty directory without `.git` yet; disabled creation refuses
+/// only truly missing notebooks. Present entries (plain or
+/// malformed) surface their own refusal or git failure instead of
+/// reading as creation-disabled. Plain entries are refused, never
+/// initialized.
 pub(super) async fn ensure_notebook_dir(
     notebook: &str,
     allow_create: bool,
@@ -374,9 +420,7 @@ pub(super) async fn ensure_notebook_dir(
     let root = notebook_root_dir()?;
     match probe_notebook_dir(&root, notebook)? {
         Probe::Ready(path) => Ok(path),
-        Probe::NotADirectory | Probe::NotANotebook => {
-            Err(not_a_notebook(&root.join(notebook)))
-        },
+        Probe::NotADirectory => Err(not_a_notebook(&root.join(notebook))),
         Probe::Absent => {
             if !allow_create {
                 return Err(NbError::ValidationError {
@@ -388,19 +432,21 @@ pub(super) async fn ensure_notebook_dir(
             }
             create_notebook_dir(notebook, CreateMode::Ensure).await
         },
-        Probe::Pending => match await_ready(&root, notebook).await? {
-            Some(path) => Ok(path),
-            None => {
-                if !allow_create {
-                    return Err(NbError::ValidationError {
-                        reason: format!(
-                            "notebook `{notebook}` does not exist and automatic creation is disabled"
-                        ),
-                        location: None,
-                    });
-                }
-                create_notebook_dir(notebook, CreateMode::Ensure).await
-            },
+        Probe::Pending | Probe::NotANotebook => {
+            match await_ready(&root, notebook).await? {
+                Some(path) => Ok(path),
+                None => {
+                    if !allow_create {
+                        return Err(NbError::ValidationError {
+                            reason: format!(
+                                "notebook `{notebook}` does not exist and automatic creation is disabled"
+                            ),
+                            location: None,
+                        });
+                    }
+                    create_notebook_dir(notebook, CreateMode::Ensure).await
+                },
+            }
         },
     }
 }
@@ -439,6 +485,14 @@ pub(super) async fn create_notebook_dir(
     for _ in 0..3 {
         match std::fs::create_dir(&path) {
             Ok(()) => {
+                #[cfg(feature = "testing")]
+                if let Some(ms) =
+                    std::env::var_os("NB_API_PAUSE_AFTER_MKDIR_MS")
+                    && let Ok(ms) = ms.to_string_lossy().parse::<u64>()
+                    && ms > 0
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(ms));
+                }
                 return finish_new_notebook_dir(&root, notebook, &path).await;
             },
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
@@ -498,7 +552,14 @@ async fn finish_new_notebook_dir(
             return Err(e);
         },
     };
-    if head_resolvable(path).unwrap_or(false)
+    let ready = match head_resolvable(path) {
+        Ok(ready) => ready,
+        Err(e) => {
+            remove_owned_notebook_dir(path, Some(&ours));
+            return Err(e);
+        },
+    };
+    if ready
         && let Ok(canonical) = confined_canonical(root, path)
         && canonical == root.join(notebook)
     {
@@ -603,6 +664,9 @@ fn owned_for_cleanup(path: &Path, ours: Option<&str>) -> bool {
             if path.join(".git/packed-refs").exists() {
                 return false;
             }
+            if !git_internal_metadata_owned(path) {
+                return false;
+            }
             match crate::git::git_capture(
                 path,
                 &["status".into(), "--porcelain".into()],
@@ -614,12 +678,79 @@ fn owned_for_cleanup(path: &Path, ours: Option<&str>) -> bool {
     }
 }
 
+/// Git-internal metadata ownership: `.git/config` carries only the
+/// init `[core]` section and `.git/hooks` holds only sample files.
+/// Any foreign remote, marker section, or hook changes unknown
+/// provenance, so cleanup preserves instead of deleting.
+fn git_internal_metadata_owned(path: &Path) -> bool {
+    let config = match std::fs::read_to_string(path.join(".git/config")) {
+        Ok(config) => config,
+        Err(_) => return false,
+    };
+    for line in config.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && trimmed != "[core]" {
+            return false;
+        }
+    }
+    let hooks = match std::fs::read_dir(path.join(".git/hooks")) {
+        Ok(hooks) => hooks,
+        Err(_) => return false,
+    };
+    for entry in hooks {
+        let Ok(entry) = entry else {
+            return false;
+        };
+        let Ok(file_type) = entry.file_type() else {
+            return false;
+        };
+        if !file_type.is_file() {
+            return false;
+        }
+        if entry.file_name().to_string_lossy().ends_with(".sample") {
+            continue;
+        }
+        return false;
+    }
+    true
+}
+
+/// Loose object files under `.git/objects`, excluding the
+/// `info`/`pack` bookkeeping dirs. `None` on any read failure
+/// (unknown, therefore unsafe).
+fn loose_object_files(path: &Path) -> Option<Vec<PathBuf>> {
+    let mut out = Vec::new();
+    let mut stack = vec![path.join(".git/objects")];
+    while let Some(current) = stack.pop() {
+        let entries = std::fs::read_dir(&current).ok()?;
+        for entry in entries {
+            let entry = entry.ok()?;
+            let name = entry.file_name();
+            if current.ends_with(".git/objects")
+                && (name == "info" || name == "pack")
+            {
+                continue;
+            }
+            let file_type = entry.file_type().ok()?;
+            if file_type.is_dir() {
+                stack.push(entry.path());
+            } else if file_type.is_file() {
+                out.push(entry.path());
+            } else {
+                return None;
+            }
+        }
+    }
+    Some(out)
+}
+
 /// Ownership for a directory whose init never produced our commit:
 /// only the exact creation artifacts, no refs (unknown reads fail
 /// closed), no packed-refs, an unborn symbolic `HEAD`, an empty
-/// `.index`, and a status of exactly the staged `.index` addition.
-/// Any foreign edit, detached/packed state, or read failure
-/// preserves the directory.
+/// `.index`, init-only git metadata (core config, sample hooks,
+/// one staged blob), and a status of exactly the staged `.index`
+/// addition. Any foreign edit, detached/packed state, metadata
+/// change, or read failure preserves the directory.
 fn owned_fresh_for_cleanup(path: &Path) -> bool {
     if has_refs(path) {
         return false;
@@ -652,6 +783,17 @@ fn owned_fresh_for_cleanup(path: &Path) -> bool {
     };
     if index_len != 0 {
         return false;
+    }
+    if !git_internal_metadata_owned(path) {
+        return false;
+    }
+    match loose_object_files(path) {
+        Some(files) => {
+            if files.len() != 1 {
+                return false;
+            }
+        },
+        None => return false,
     }
     match crate::git::git_capture(
         path,

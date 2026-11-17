@@ -90,6 +90,7 @@ const ENV_VARS_OF_INTEREST: &[&str] = &[
     "NB_API_FAIL_RESTORE_DIRTY",
     // Notebook-initialization fault-injection (testing feature only).
     "NB_API_PAUSE_BEFORE_INIT_COMMIT_MS",
+    "NB_API_PAUSE_AFTER_MKDIR_MS",
     "NB_API_NOTEBOOK_INIT_FAIL",
     // Deterministic external-writer simulation (testing feature only).
     "NB_API_SIMULATE_EXTERNAL_WRITER",

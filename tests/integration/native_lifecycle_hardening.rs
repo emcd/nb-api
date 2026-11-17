@@ -159,6 +159,14 @@ async fn unreadable_head_propagates_io() {
             std::fs::Permissions::from_mode(0o000),
         )
         .expect("chmod HEAD");
+        if std::fs::read_to_string(root.join(".git/HEAD")).is_ok() {
+            std::fs::set_permissions(
+                root.join(".git/HEAD"),
+                std::fs::Permissions::from_mode(0o644),
+            )
+            .expect("restore HEAD");
+            return;
+        }
         let err = format!(
             "{:?}",
             client
@@ -201,6 +209,28 @@ async fn plain_child_inside_ancestor_git_is_refused() {
     nb_api::scrub_git_env_std(&mut init);
     init.current_dir(ancestor.path()).arg("init");
     assert!(init.output().expect("git init runs").status.success());
+    let mut commit = std::process::Command::new("git");
+    nb_api::scrub_git_env_std(&mut commit);
+    commit.current_dir(ancestor.path()).args([
+        "-c",
+        "user.name=nb-api-test",
+        "-c",
+        "user.email=nb-api-test@example.invalid",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "--allow-empty",
+        "-q",
+        "-m",
+        "ancestor",
+    ]);
+    assert!(
+        commit
+            .output()
+            .expect("ancestor commit runs")
+            .status
+            .success()
+    );
     let store = ancestor.path().join("nbstore");
     std::fs::create_dir_all(&store).expect("nb store");
     std::fs::create_dir(store.join("plainchild")).expect("plain child");
@@ -362,13 +392,7 @@ async fn injected_failure_preserves_detached_head() {
                     .is_empty(),
                 "foreign commit lands"
             );
-            assert!(
-                git(&root, &["checkout", "--detach", "HEAD"])
-                    .trim()
-                    .is_empty()
-                    || true,
-                "detach attempted"
-            );
+            git(&root, &["checkout", "--detach", "HEAD"]);
             creator.join().expect("creator thread")
         });
         outcome.expect_err("injected failure must fail");
@@ -470,14 +494,26 @@ async fn injected_failure_preserves_ref_read_failure() {
                 std::fs::Permissions::from_mode(0o000),
             )
             .expect("chmod refs");
+            if std::fs::read_dir(root.join(".git/refs")).is_ok() {
+                std::fs::set_permissions(
+                    root.join(".git/refs"),
+                    std::fs::Permissions::from_mode(0o755),
+                )
+                .expect("restore refs");
+                let _ = creator.join().expect("creator thread");
+                return None;
+            }
             let joined = creator.join().expect("creator thread");
             std::fs::set_permissions(
                 root.join(".git/refs"),
                 std::fs::Permissions::from_mode(0o755),
             )
             .expect("restore refs");
-            joined
+            Some(joined)
         });
+        let Some(outcome) = outcome else {
+            return;
+        };
         outcome.expect_err("injected failure must fail");
         assert!(root.is_dir(), "directory preserved on unknown refs state");
     })
@@ -573,6 +609,14 @@ async fn root_validation_cases() {
             std::fs::Permissions::from_mode(0o000),
         )
         .expect("chmod nb dir");
+        if std::fs::read_dir(env.nb_dir()).is_ok() {
+            std::fs::set_permissions(
+                env.nb_dir(),
+                std::fs::Permissions::from_mode(0o755),
+            )
+            .expect("restore nb dir");
+            return;
+        }
         let err = format!(
             "{:?}",
             client
@@ -587,4 +631,216 @@ async fn root_validation_cases() {
         .expect("restore nb dir");
         assert!(err.contains("Io"), "unreadable root propagates Io: {err:?}");
     }
+}
+
+/// Full-width bogus OIDs and real non-commit objects never read
+/// as ready: syntax-valid but unusable commits surface the git
+/// failure instead of enumerating or transacting.
+#[tokio::test]
+async fn unusable_commit_objects_never_read_as_ready() {
+    let env = NbTestEnv::new_native().expect("native fixture");
+    with_isolated_env(&env, false, || async {
+        let client = NbClient::new(&config_for_create(&env)).expect("client");
+        let disabled = NbClient::new(&config_for(&env)).expect("disabled");
+
+        let bogus = client
+            .create_notebook(Some("bogus-oid"))
+            .await
+            .expect("create bogus-oid");
+        let r = current_ref(&bogus);
+        std::fs::write(
+            bogus.join(".git").join(&r),
+            "0123456789abcdef0123456789abcdef01234567\n",
+        )
+        .expect("full-width bogus OID");
+
+        let blob_host = client
+            .create_notebook(Some("blob-host"))
+            .await
+            .expect("create blob-host");
+        let input = env.nb_dir().join("blob-input.txt");
+        std::fs::write(&input, "blob\n").expect("blob input");
+        let blob_oid =
+            git(&blob_host, &["hash-object", "-w", &input.to_string_lossy()])
+                .trim()
+                .to_string();
+        assert_eq!(blob_oid.len(), 40, "blob OID created");
+        let blob = client
+            .create_notebook(Some("blob-oid"))
+            .await
+            .expect("create blob-oid");
+        let r = current_ref(&blob);
+        std::fs::write(blob.join(".git").join(&r), format!("{blob_oid}\n"))
+            .expect("blob OID as ref");
+
+        for name in ["bogus-oid", "blob-oid"] {
+            client
+                .show_notebook_path(Some(name))
+                .await
+                .expect_err("unusable commit must not resolve");
+            disabled
+                .transaction(Some(name))
+                .await
+                .map(|_| ())
+                .expect_err("unusable commit must fail ensure");
+        }
+        let names = client.list_notebook_names().await.expect("enumerate");
+        assert!(
+            !names.contains(&"bogus-oid".to_string()),
+            "bogus OID must not enumerate: {names:?}"
+        );
+        assert!(
+            !names.contains(&"blob-oid".to_string()),
+            "blob OID must not enumerate: {names:?}"
+        );
+    })
+    .await;
+}
+
+/// A valid branch name containing `+` initializes and is
+/// recognized: git-grammar names are not rejected by an invented
+/// whitelist, and enumeration includes them.
+#[tokio::test]
+async fn plus_branch_initializes_and_enumerates() {
+    let env = NbTestEnv::new_native().expect("native fixture");
+    with_isolated_env(&env, false, || async {
+        std::fs::write(
+            env.home_dir().join(".gitconfig"),
+            "[user]\n\tname = nb-api tests\n\temail = nb-api@localhost\n[init]\n\tdefaultBranch = topic+work\n",
+        )
+        .expect("default branch config");
+        let client = NbClient::new(&config_for_create(&env)).expect("client");
+        let root = client
+            .create_notebook(Some("plus-branch"))
+            .await
+            .expect("init on topic+work must succeed");
+        let head = std::fs::read_to_string(root.join(".git/HEAD"))
+            .expect("HEAD");
+        assert!(
+            head.contains("topic+work"),
+            "branch preserved: {head:?}"
+        );
+        let names = client.list_notebook_names().await.expect("enumerate");
+        assert!(
+            names.contains(&"plus-branch".to_string()),
+            "plus-branch enumerates: {names:?}"
+        );
+        client
+            .show_notebook_path(Some("plus-branch"))
+            .await
+            .expect("plus-branch resolves");
+    })
+    .await;
+}
+
+/// An ensure arriving in the mkdir-to-init window converges: the
+/// winner exposes an empty directory first, the observer waits
+/// through git init, then commits immediately on the real HEAD.
+/// Pre-existing plain directories are still refused elsewhere.
+#[tokio::test]
+async fn ensure_converges_through_mkdir_window() {
+    let env = NbTestEnv::new_native().expect("native fixture");
+    with_isolated_env(&env, false, || async {
+        unsafe {
+            std::env::set_var("NB_API_PAUSE_AFTER_MKDIR_MS", "1000");
+        }
+        let root = env.nb_dir().join("mkdir-race");
+        let (winner, observer) = std::thread::scope(|s| {
+            let creator = s.spawn(|| {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("runtime");
+                rt.block_on(async {
+                    let client = NbClient::new(&config_for_create(&env))
+                        .expect("client");
+                    client.create_notebook(Some("mkdir-race")).await
+                })
+            });
+            let mut poll = 0;
+            while !root.exists() {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                poll += 1;
+                assert!(poll < 500, "creator never exposed mkdir");
+            }
+            let waiter = s.spawn(|| {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("runtime");
+                rt.block_on(async {
+                    let client = NbClient::new(&config_for_create(&env))
+                        .expect("client");
+                    let mut tx =
+                        client.transaction(Some("mkdir-race")).await?;
+                    tx.add_note("early.md", Some("Early"), "early\n", &[])
+                        .unwrap();
+                    tx.commit().await?;
+                    Ok::<(), NbError>(())
+                })
+            });
+            (
+                creator.join().expect("creator thread"),
+                waiter.join().expect("waiter thread"),
+            )
+        });
+        winner.expect("creator succeeds");
+        observer.expect("ensure converges through mkdir window");
+        assert!(root.join("early.md").is_file(), "observer note landed");
+    })
+    .await;
+}
+
+/// An injected init failure preserves a foreign-only
+/// `.git/config` change (remote/marker): staged status and empty
+/// index do not prove git metadata belongs to this call.
+#[tokio::test]
+async fn injected_failure_preserves_config_only_change() {
+    let env = NbTestEnv::new_native().expect("native fixture");
+    with_isolated_env(&env, false, || async {
+        unsafe {
+            std::env::set_var("NB_API_PAUSE_BEFORE_INIT_COMMIT_MS", "1000");
+            std::env::set_var("NB_API_NOTEBOOK_INIT_FAIL", "1");
+        }
+        let root = env.nb_dir().join("config-foreign");
+        let outcome = std::thread::scope(|s| {
+            let creator = s.spawn(|| {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("runtime");
+                rt.block_on(async {
+                    let client = NbClient::new(&config_for_create(&env))
+                        .expect("client");
+                    client.create_notebook(Some("config-foreign")).await
+                })
+            });
+            let mut poll = 0;
+            while !root.join(".index").exists() {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                poll += 1;
+                assert!(poll < 500, "creator never reached its pause point");
+            }
+            let config = root.join(".git/config");
+            let mut contents =
+                std::fs::read_to_string(&config).expect("read config");
+            contents.push_str(
+                "[remote \"origin\"]\n\turl = https://example.invalid/foreign.git\n[foreign]\n\tmarker = true\n",
+            );
+            std::fs::write(&config, &contents).expect("foreign config");
+            creator.join().expect("creator thread")
+        });
+        let err = outcome.expect_err("injected failure must fail");
+        assert!(
+            matches!(err, NbError::Io { .. }),
+            "expected injected Io failure, got: {err:?}"
+        );
+        let contents =
+            std::fs::read_to_string(root.join(".git/config")).expect("config");
+        assert!(
+            contents.contains("foreign.git") && contents.contains("marker"),
+            "foreign config survives cleanup: {contents:?}"
+        );
+    })
+    .await;
 }
