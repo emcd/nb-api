@@ -17,7 +17,7 @@ The system SHALL create a notebook by initializing its on-disk layout under `NB_
 - **THEN** the system SHALL return a typed already-exists failure and SHALL NOT alter the existing notebook
 
 ### Requirement: Native notebook existence check
-The system SHALL determine notebook existence by probing the `NB_DIR` directory entry, returning a typed result without spawning any subprocess.
+The system SHALL determine notebook existence by probing the `NB_DIR` directory entry, returning a typed result without spawning the `nb` CLI (git verification permitted).
 
 #### Scenario: Existing notebook resolves
 - **WHEN** a caller ensures a notebook that exists under `NB_DIR`
@@ -32,7 +32,7 @@ The system SHALL resolve a notebook's path from the `NB_DIR` layout without spaw
 
 #### Scenario: Path of existing notebook
 - **WHEN** a caller requests the path of an existing notebook
-- **THEN** the system SHALL return `$NB_DIR/<name>` without invoking any subprocess
+- **THEN** the system SHALL return `$NB_DIR/<name>` without invoking the `nb` CLI (git verification permitted)
 
 #### Scenario: Path of missing notebook
 - **WHEN** a caller requests the path of a missing notebook
@@ -92,7 +92,7 @@ Notebook names SHALL pass the existing field validation plus explicit dot-segmen
 - **THEN** the system SHALL refuse with `UnsupportedStructure` and follow nothing
 
 ### Requirement: Concurrent creation safety
-Directory creation is atomic. A creator that did not create the directory SHALL NOT initialize or remove anything; simultaneous explicit creates resolve to exactly one winner with the rest refused as already-exists; ensure stays idempotent. On init/commit failure only paths this call created are removed.
+Directory creation is atomic. A creator that did not create the directory SHALL NOT initialize or remove anything; simultaneous explicit creates resolve to exactly one winner with the rest refused as already-exists; ensure stays idempotent. On init/commit failure the partial directory is retained for inspection and reported; nothing is recursively deleted.
 
 #### Scenario: Competing creators
 - **WHEN** two creators race to create the same notebook
