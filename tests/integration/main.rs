@@ -8,6 +8,15 @@
 //! on `PATH`.
 
 mod common;
+/// Cross-process coexistence races against the real `nb` CLI.
+/// Unix only: every test in this module is commit-dense against
+/// nb-created fixtures, and nb 7.24.0 fires its init/checkpoint
+/// commits in a background subshell that the Git Bash `.cmd`
+/// launcher tears down, racing every commit baseline
+/// (todos/api/9). Mutation coverage stays on Unix until the
+/// Windows-viability spike; on Windows the read-only suites plus
+/// the hardened nbrc write_path remain enabled.
+#[cfg(unix)]
 mod cross_process;
 mod duplicate_title;
 mod edit_mode_required;

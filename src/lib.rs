@@ -71,6 +71,17 @@ pub struct Config {
     /// Refuse the file default when `NB_DIR` is unset: embedders
     /// that assign the notebook store themselves set this to keep
     /// resolution explicit and never read `~/.nbrc`.
+    ///
+    /// With the default `false`, an unset or empty `NB_DIR` falls
+    /// back to the parsed `~/.nbrc` (`$NBRC_PATH`) value, else
+    /// `~/.nb`. The rc is parsed, never executed: supported
+    /// forms are unconditional top-level `NB_DIR` assignments
+    /// (bare and `export`, last wins, with `$NB_DIR` self-default
+    /// tracking); anything undeterminable without execution warns
+    /// and falls back to `~/.nb` instead of resolving elsewhere.
+    /// Spawned `nb` subprocesses keep their existing routing
+    /// (they inherit the process environment and source the rc
+    /// themselves); this flag only governs native resolution.
     pub require_explicit_nb_dir: bool,
     /// Allow new notes to be created at notebook root.
     pub allow_top_level_notes: bool,

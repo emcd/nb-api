@@ -9,7 +9,9 @@
 //! read; `require_explicit_nb_dir` restores strict resolution for
 //! embedders that assign the store themselves.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(unix)]
+use std::path::PathBuf;
 use std::process::Command as StdCommand;
 
 use nb_api::testing::NbTestEnv;
@@ -79,6 +81,18 @@ fn git_init_notebook(path: &Path) {
     }
 }
 
+/// Render an `export NB_DIR=<value>` rc line with the value
+/// single-quoted: the portable way to carry Windows backslashes
+/// (and spaces) through shell parsing. Unquoted backslashes are
+/// escape characters in `sh` and would be consumed, identically
+/// under a real shell and this parser.
+fn rc_export_nb_dir(path: &Path) -> String {
+    format!(
+        "export NB_DIR='{}'\n",
+        path.display().to_string().replace('\'', "'\\''")
+    )
+}
+
 /// Run `f` with `ENV_LOCK` held and `NB_DIR`/`HOME`/`NBRC_PATH`
 /// restored afterwards. Returns whatever `f` returns.
 #[allow(clippy::await_holding_lock)]
@@ -100,11 +114,8 @@ async fn rc_nb_dir_resolves_without_explicit_nb_dir() {
         .prefix("nb-home-")
         .tempdir()
         .expect("home");
-    std::fs::write(
-        home.path().join(".nbrc"),
-        format!("export NB_DIR={}\n", env.nb_dir().display()),
-    )
-    .expect("rc");
+    std::fs::write(home.path().join(".nbrc"), rc_export_nb_dir(env.nb_dir()))
+        .expect("rc");
     with_store_env(|| async {
         unsafe {
             std::env::remove_var("NB_DIR");
@@ -204,8 +215,8 @@ async fn rc_last_assignment_wins() {
     std::fs::write(
         home.path().join(".nbrc"),
         format!(
-            "# comment\nNB_DIR=/nonexistent-store\nNB_DIR={}\n",
-            env.nb_dir().display()
+            "# comment\nNB_DIR=/nonexistent-store\n{}",
+            rc_export_nb_dir(env.nb_dir())
         ),
     )
     .expect("rc");
@@ -225,6 +236,88 @@ async fn rc_last_assignment_wins() {
     .await;
 }
 
+/// Settle a notebook created through a real `nb` spawn the way
+/// `NbTestEnv` does: `nb notebooks add` fires its init commit in
+/// a background subshell that Windows tears down on wrapper
+/// exit, leaving `.index` untracked for the next
+/// `Transaction::commit` (`DirtyBaseline`). Touch a missing
+/// `.index` (what `nb` would have created), pin repo-local
+/// `core.autocrlf false` (byte-identical LF handling —
+/// production git calls scrub config env), then stage and commit
+/// synchronously until two consecutive clean status checks so a
+/// not-yet-staged orphan cannot slip through.
+fn settle_notebook_baseline(home: &Path, root: &Path) {
+    fn git(home: &Path, root: &Path, args: &[&str]) -> StdCommand {
+        let mut cmd = StdCommand::new("git");
+        nb_api::scrub_git_env_std(&mut cmd);
+        cmd.env("HOME", home);
+        cmd.current_dir(root).args(args);
+        cmd
+    }
+    if !root.join(".index").exists() {
+        std::fs::write(root.join(".index"), b"").expect("empty index");
+    }
+    let identity = [
+        "-c",
+        "user.name=nb-api-test",
+        "-c",
+        "user.email=nb-api-test@example.invalid",
+        "-c",
+        "commit.gpgsign=false",
+    ];
+    let cfg = git(home, root, &["config", "core.autocrlf", "false"])
+        .output()
+        .expect("git config runs");
+    assert!(cfg.status.success(), "git config failed: {cfg:?}");
+    let mut consecutive_clean = 0u32;
+    for _ in 0..50 {
+        let status = git(
+            home,
+            root,
+            &["status", "--porcelain", "-uall", "--ignored=no"],
+        )
+        .output()
+        .expect("git status runs");
+        assert!(status.status.success(), "git status failed: {status:?}");
+        if String::from_utf8_lossy(&status.stdout).trim().is_empty() {
+            consecutive_clean += 1;
+            if consecutive_clean >= 2 {
+                return;
+            }
+        } else {
+            consecutive_clean = 0;
+        }
+        let mut add_args = identity.to_vec();
+        add_args.extend(["add", "-A"]);
+        let add = git(home, root, &add_args).output().expect("git add runs");
+        assert!(add.status.success(), "git add failed: {add:?}");
+        let mut commit_args = identity.to_vec();
+        commit_args.extend([
+            "commit",
+            "-m",
+            "[nb] Initialize",
+            "--no-gpg-sign",
+        ]);
+        let commit = git(home, root, &commit_args)
+            .output()
+            .expect("git commit runs");
+        if !commit.status.success() {
+            let stdout = String::from_utf8_lossy(&commit.stdout);
+            let stderr = String::from_utf8_lossy(&commit.stderr);
+            assert!(
+                stdout.contains("nothing to commit")
+                    || stderr.contains("nothing to commit"),
+                "git commit failed: {stdout} {stderr}"
+            );
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    panic!(
+        "notebook baseline did not settle clean in {}",
+        root.display()
+    );
+}
+
 /// A write path creates inside the resolved store, not the cwd.
 #[tokio::test]
 async fn write_path_creates_inside_resolved_store() {
@@ -239,11 +332,8 @@ async fn write_path_creates_inside_resolved_store() {
         "[user]\n\tname = nb-api tests\n\temail = nb-api@localhost\n",
     )
     .expect("git identity for nb");
-    std::fs::write(
-        home.path().join(".nbrc"),
-        format!("NB_DIR={}\n", store.display()),
-    )
-    .expect("rc");
+    std::fs::write(home.path().join(".nbrc"), rc_export_nb_dir(&store))
+        .expect("rc");
     with_store_env(|| async {
         unsafe {
             std::env::remove_var("NB_DIR");
@@ -255,17 +345,26 @@ async fn write_path_creates_inside_resolved_store() {
             ..Config::default()
         })
         .expect("client");
-        client
-            .transaction(Some("fresh"))
-            .await
-            .expect("ensure creates")
-            .commit()
-            .await
-            .expect("commit");
-        assert!(
-            store.join("fresh/.git").is_dir(),
-            "notebook created in rc store"
-        );
+        // Prove absent→created through `transaction` itself:
+        // `nb`'s first-run init can swallow the first spawn in a
+        // fresh HOME (welcome screen instead of the requested
+        // command), so a single ensure may report success without
+        // creating anything. Retry the transaction; unexpected
+        // errors abort immediately instead of being swallowed.
+        // Then settle the background-checkpoint race before
+        // committing.
+        for _ in 0..120 {
+            client.transaction(Some("fresh")).await.expect("tx");
+            if store.join("fresh/.git").is_dir() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        let root = store.join("fresh");
+        assert!(root.join(".git").is_dir(), "notebook created in rc store");
+        settle_notebook_baseline(home.path(), &root);
+        let tx = client.transaction(Some("fresh")).await.expect("tx");
+        tx.commit().await.expect("commit");
     })
     .await;
 }
@@ -308,15 +407,19 @@ async fn unreadable_rc_fails_visibly() {
         .expect("restore rc");
 }
 
-/// Unsupported `NB_DIR` syntax fails instead of falling through
-/// to the default store.
+/// Undeterminable `NB_DIR` syntax warns and falls back to the
+/// `~/.nb` default instead of resolving elsewhere: a default-store
+/// notebook resolves, and nothing outside the default is touched.
 #[tokio::test]
-async fn unsupported_rc_syntax_fails_visibly() {
+async fn undeterminable_rc_syntax_falls_back_to_default() {
     for rc_text in [
         "export NB_DIR=$(hostname)\n",
         "NB_DIR=~/`hostname`\n",
         "if [ x ]; then NB_DIR=/x; fi\n",
         "NB_DIR =/x\n",
+        "readonly NB_DIR=/x\n",
+        "source other.rc\n",
+        "NB_DIR=$OTHER/x\n",
     ] {
         let home = tempfile::Builder::new()
             .prefix("nb-home-")
@@ -330,20 +433,48 @@ async fn unsupported_rc_syntax_fails_visibly() {
                 std::env::set_var("HOME", home.path());
             }
             let client = NbClient::new(&config_for("plain")).expect("client");
-            let err = format!(
-                "{:?}",
-                client
-                    .show_notebook_path(Some("plain"))
-                    .await
-                    .expect_err("unsupported rc must fail")
-            );
-            assert!(
-                err.contains("ValidationError"),
-                "rc {rc_text:?} must fail visibly, got: {err:?}"
-            );
+            let root = client
+                .show_notebook_path(Some("plain"))
+                .await
+                .expect("undeterminable rc falls back to default");
+            assert_eq!(root, home.path().join(".nb/plain"));
         })
         .await;
     }
+}
+
+/// `nb`-style self-defaults resolve end to end: with `NB_DIR`
+/// unset, `${NB_DIR:-<literal>}` selects the literal (the
+/// operator's `~/.nbrc` shape).
+#[tokio::test]
+async fn rc_self_default_resolves_without_explicit_nb_dir() {
+    let env = NbTestEnv::new().expect("fixture");
+    let home = tempfile::Builder::new()
+        .prefix("nb-home-")
+        .tempdir()
+        .expect("home");
+    std::fs::write(
+        home.path().join(".nbrc"),
+        format!(
+            "export NB_DIR=\"${{NB_DIR:-{}}}\" # Set by `nb`\n",
+            env.nb_dir().display()
+        ),
+    )
+    .expect("rc");
+    with_store_env(|| async {
+        unsafe {
+            std::env::remove_var("NB_DIR");
+            std::env::set_var("HOME", home.path());
+        }
+        let client =
+            NbClient::new(&config_for(env.notebook())).expect("client");
+        let root = client
+            .show_notebook_path(Some(env.notebook()))
+            .await
+            .expect("self-default rc resolves");
+        assert_eq!(root, env.nb_dir().join(env.notebook()));
+    })
+    .await;
 }
 
 /// A relative rc value is invalid, not a silent miss.
@@ -385,11 +516,8 @@ async fn nbrc_path_redirects_rc_lookup() {
     std::fs::write(home.path().join(".nbrc"), "export NB_DIR=$(hostname)\n")
         .expect("hostile default rc");
     let custom = home.path().join("custom.rc");
-    std::fs::write(
-        &custom,
-        format!("export NB_DIR={}\n", env.nb_dir().display()),
-    )
-    .expect("custom rc");
+    std::fs::write(&custom, rc_export_nb_dir(env.nb_dir()))
+        .expect("custom rc");
     with_store_env(|| async {
         unsafe {
             std::env::remove_var("NB_DIR");
@@ -443,11 +571,8 @@ async fn strict_mode_rejects_unset_nb_dir() {
         .prefix("nb-home-")
         .tempdir()
         .expect("home");
-    std::fs::write(
-        home.path().join(".nbrc"),
-        format!("export NB_DIR={}\n", env.nb_dir().display()),
-    )
-    .expect("rc");
+    std::fs::write(home.path().join(".nbrc"), rc_export_nb_dir(env.nb_dir()))
+        .expect("rc");
     with_store_env(|| async {
         unsafe {
             std::env::remove_var("NB_DIR");
@@ -508,9 +633,9 @@ async fn rc_commands_never_execute() {
     std::fs::write(
         home.path().join(".nbrc"),
         format!(
-            "touch {}\nexport NB_DIR={}\n",
+            "touch {}\n{}",
             marker.display(),
-            env.nb_dir().display()
+            rc_export_nb_dir(env.nb_dir())
         ),
     )
     .expect("rc");

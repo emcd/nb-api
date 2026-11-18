@@ -35,6 +35,14 @@ surface; BLAKE3 fingerprints; `.index` numeric identity.
   2026-11-12.)
 - Release rule: CI must be green before tagging. (Bundle-wide,
   operator-endorsed 2026-11-10; closes `todos/api/11`.)
+- Deterministic tests only: bound execution with timeouts, but the
+  execution sequence of a test must never depend on timing. A
+  test that passes or fails based on scheduling luck (e.g.,
+  racing an external background process) is broken no matter how
+  often it passes; fix the synchronization or remove the race,
+  do not widen settle windows or re-run until green.
+  (Operator directive 2026-11-19, from the 0.4.6 Windows CI
+  experience with nb's torn-down background checkpoints.)
 - Rolling handoff and team organization:
   `nb-api:coordination/general/5`.
 - This project uses Nbspec (notebook-resident change orchestration),

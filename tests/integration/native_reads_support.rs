@@ -2,8 +2,10 @@
 //! client config, frozen-oracle tree hashing, corpus seeding, and
 //! a thin live-`nb` oracle for resolution parity.
 
+use nb_api::Config;
+#[cfg(unix)]
+use nb_api::NbClient;
 use nb_api::testing::NbTestEnv;
-use nb_api::{Config, NbClient};
 
 pub(crate) fn config_for(env: &NbTestEnv) -> Config {
     Config {
@@ -19,12 +21,17 @@ pub(crate) fn config_for(env: &NbTestEnv) -> Config {
 /// and textual classification only. Native assertions compare path,
 /// bytes, and error shape against this oracle; structured fields
 /// carry explicit native expectations.
+///
+/// Unix only: `nb` is not reliable on Windows, so every oracle
+/// consumer is unix-gated.
+#[cfg(unix)]
 pub(crate) struct NbOracle {
     nb_dir: std::path::PathBuf,
     home: std::path::PathBuf,
     notebook: String,
 }
 
+#[cfg(unix)]
 impl NbOracle {
     pub(crate) fn new(env: &NbTestEnv) -> Self {
         Self {
@@ -100,6 +107,7 @@ impl NbOracle {
 
 /// Content-hash per relative path, for frozen-oracle snapshots
 /// and movement diagnostics.
+#[cfg(unix)]
 pub(crate) fn tree_listing(
     root: &std::path::Path,
 ) -> Result<Vec<(String, u64)>, String> {
@@ -210,6 +218,7 @@ pub(crate) fn tree_listing(
 /// then return the frozen listing. Fail-closed: an oracle error or
 /// a never-settling tree panics instead of letting the caller
 /// compare against a hole or a moving target.
+#[cfg(unix)]
 pub(crate) fn quiesce(root: &std::path::Path) -> Vec<(String, u64)> {
     let mut frozen = tree_listing(root)
         .unwrap_or_else(|e| panic!("oracle failed before quiesce: {e}"));
@@ -238,6 +247,7 @@ pub(crate) fn quiesce(root: &std::path::Path) -> Vec<(String, u64)> {
 /// eventually checkpoint them, but racing its cadence is flaky.
 /// Deterministic commit wins every time. A no-op tree (nothing to
 /// commit) is fine.
+#[cfg(unix)]
 pub(crate) fn git_commit_all(root: &std::path::Path, message: &str) {
     let add = std::process::Command::new("git")
         .current_dir(root)
@@ -278,6 +288,7 @@ pub(crate) fn git_commit_all(root: &std::path::Path, message: &str) {
 /// Raw files below are written straight to disk (no `.index`
 /// entries, no checkpoints): they exercise classification and exact
 /// paths without shifting numeric slots.
+#[cfg(unix)]
 pub(crate) async fn seed(client: &NbClient, root: &std::path::Path) {
     let mut tx = client.transaction(None).await.expect("tx");
     tx.add_note("hello_title.md", Some("Hello Title"), "body\n", &[])

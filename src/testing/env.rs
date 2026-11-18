@@ -215,6 +215,221 @@ pub struct NbTestEnv {
     notebook: String,
 }
 
+/// Settle a notebook baseline synchronously: `nb notebooks add`
+/// fires its init commit in a background subshell that Windows
+/// tears down on wrapper exit, leaving `.index` untracked and
+/// every later `Transaction::commit` rejected with
+/// `DirtyBaseline`. A clean tree is not enough — the background
+/// git may not have staged anything yet — so a baseline only
+/// counts when `HEAD` exists too; otherwise stage and commit
+/// synchronously (creating a missing `.index` first) until two
+/// consecutive clean-with-HEAD checks. Uses the fixture's
+/// deterministic git env so the baseline is identical on Unix
+/// and Windows. See `nb-api:todos/api/9`.
+fn settle_baseline(
+    home: &Path,
+    notebook_root: &Path,
+) -> Result<(), NbTestError> {
+    // Write the notebook repo's LOCAL config so every subsequent
+    // git invocation (including production `git::git_capture`,
+    // which scrubs GIT_CONFIG_* env) sees byte-identical LF
+    // handling. The GIT_CONFIG_COUNT env override only reaches
+    // fixture-spawned commands; repo-local config persists.
+    // See `nb-api:todos/api/9`.
+    if !notebook_root.join(".index").exists() {
+        std::fs::write(notebook_root.join(".index"), b"")
+            .expect("empty index");
+    }
+    let mut git_config = StdCommand::new("git");
+    scrub_git_env_std(&mut git_config);
+    git_config.env("HOME", home);
+    apply_git_config_env(&mut git_config);
+    git_config.current_dir(notebook_root);
+    git_config.args(["config", "core.autocrlf", "false"]);
+    let cfg = git_config.output().map_err(|e| NbTestError::Io {
+        context: format!(
+            "fixture baseline `git config core.autocrlf false` in {}",
+            notebook_root.display()
+        ),
+        source: e,
+    })?;
+    if !cfg.status.success() {
+        let stdout = String::from_utf8_lossy(&cfg.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&cfg.stderr).into_owned();
+        return Err(NbTestError::Nb {
+            context: format!(
+                "fixture baseline `git config core.autocrlf false` in {}",
+                notebook_root.display()
+            ),
+            failure: NbFailure {
+                status: cfg.status,
+                stdout,
+                stderr,
+            },
+        });
+    }
+    // nb 7.24.0 fires the notebook's init commit in a background
+    // subshell (`( _git_checkpoint_commit ... ) &`). Under the
+    // Git Bash `.cmd` launcher on Windows that orphaned git can
+    // keep staging `.index` after our synchronous baseline commit,
+    // racing the first `Transaction::commit`'s dirty check
+    // (intermittent `DirtyBaseline` — see todos/api/9). Worse, the
+    // background commit may never land at all, leaving no `HEAD`;
+    // a merely clean tree would then falsely settle. Settle by
+    // re-committing until the worktree/index is verifiably clean
+    // *and* `HEAD` exists. The window is generous (up to ~2.5s)
+    // because on Windows the orphaned background git can be
+    // delayed by job teardown.
+    let mut consecutive_clean = 0u32;
+    for _ in 0..50 {
+        let mut status = StdCommand::new("git");
+        scrub_git_env_std(&mut status);
+        status.env("HOME", home);
+        apply_git_config_env(&mut status);
+        status.current_dir(notebook_root);
+        status.args(["status", "--porcelain", "-uall", "--ignored=no"]);
+        let status_out = status.output().map_err(|e| NbTestError::Io {
+            context: format!(
+                "fixture baseline `git status --porcelain` in {}",
+                notebook_root.display()
+            ),
+            source: e,
+        })?;
+        if !status_out.status.success() {
+            let stdout =
+                String::from_utf8_lossy(&status_out.stdout).into_owned();
+            let stderr =
+                String::from_utf8_lossy(&status_out.stderr).into_owned();
+            return Err(NbTestError::Nb {
+                context: format!(
+                    "fixture baseline `git status --porcelain` in {}",
+                    notebook_root.display()
+                ),
+                failure: NbFailure {
+                    status: status_out.status,
+                    stdout,
+                    stderr,
+                },
+            });
+        }
+        let dirty = !String::from_utf8_lossy(&status_out.stdout)
+            .trim()
+            .is_empty();
+        let mut head = StdCommand::new("git");
+        scrub_git_env_std(&mut head);
+        head.env("HOME", home);
+        apply_git_config_env(&mut head);
+        head.current_dir(notebook_root);
+        head.args(["rev-parse", "HEAD"]);
+        let head_exists = head
+            .output()
+            .map_err(|e| NbTestError::Io {
+                context: format!(
+                    "fixture baseline `git rev-parse HEAD` in {}",
+                    notebook_root.display()
+                ),
+                source: e,
+            })?
+            .status
+            .success();
+        if !dirty && head_exists {
+            // Require two consecutive clean checks so an orphaned
+            // nb background git that has NOT yet staged `.index`
+            // cannot slip in after a single clean observation
+            // (Windows CI DirtyBaseline flake, see todos/api/9).
+            consecutive_clean += 1;
+            if consecutive_clean >= 2 {
+                return Ok(());
+            }
+        } else {
+            consecutive_clean = 0;
+        }
+
+        let mut git = StdCommand::new("git");
+        scrub_git_env_std(&mut git);
+        git.env("HOME", home);
+        git.env("GIT_AUTHOR_NAME", GIT_AUTHOR_NAME);
+        git.env("GIT_AUTHOR_EMAIL", GIT_AUTHOR_EMAIL);
+        git.env("GIT_COMMITTER_NAME", GIT_AUTHOR_NAME);
+        git.env("GIT_COMMITTER_EMAIL", GIT_AUTHOR_EMAIL);
+        apply_git_config_env(&mut git);
+        git.current_dir(notebook_root);
+        git.arg("add").arg("-A");
+        let add = git.output().map_err(|e| NbTestError::Io {
+            context: format!(
+                "fixture baseline `git add -A` in {}",
+                notebook_root.display()
+            ),
+            source: e,
+        })?;
+        if !add.status.success() {
+            let stdout = String::from_utf8_lossy(&add.stdout).into_owned();
+            let stderr = String::from_utf8_lossy(&add.stderr).into_owned();
+            return Err(NbTestError::Nb {
+                context: format!(
+                    "fixture baseline `git add -A` in {}",
+                    notebook_root.display()
+                ),
+                failure: NbFailure {
+                    status: add.status,
+                    stdout,
+                    stderr,
+                },
+            });
+        }
+        let mut git_commit = StdCommand::new("git");
+        scrub_git_env_std(&mut git_commit);
+        git_commit.env("HOME", home);
+        git_commit.env("GIT_AUTHOR_NAME", GIT_AUTHOR_NAME);
+        git_commit.env("GIT_AUTHOR_EMAIL", GIT_AUTHOR_EMAIL);
+        git_commit.env("GIT_COMMITTER_NAME", GIT_AUTHOR_NAME);
+        git_commit.env("GIT_COMMITTER_EMAIL", GIT_AUTHOR_EMAIL);
+        apply_git_config_env(&mut git_commit);
+        git_commit.current_dir(notebook_root);
+        git_commit.args(["commit", "-m", "[nb] Initialize"]);
+        let commit = git_commit.output().map_err(|e| NbTestError::Io {
+            context: format!(
+                "fixture baseline `git commit` in {}",
+                notebook_root.display()
+            ),
+            source: e,
+        })?;
+        if !commit.status.success() {
+            // A `nothing to commit` exit is not an error; the
+            // settle loop re-checks status next iteration. Git
+            // may write the message to stdout or stderr.
+            let stdout = String::from_utf8_lossy(&commit.stdout);
+            let stderr = String::from_utf8_lossy(&commit.stderr);
+            if !stdout.contains("nothing to commit")
+                && !stderr.contains("nothing to commit")
+            {
+                return Err(NbTestError::Nb {
+                    context: format!(
+                        "fixture baseline `git commit` in {}",
+                        notebook_root.display()
+                    ),
+                    failure: NbFailure {
+                        status: commit.status,
+                        stdout: stdout.into_owned(),
+                        stderr: stderr.into_owned(),
+                    },
+                });
+            }
+        }
+        // Let nb's background checkpoint finish before re-checking.
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    Err(NbTestError::Io {
+        context: format!(
+            "fixture baseline did not settle clean in {}",
+            notebook_root.display()
+        ),
+        source: std::io::Error::other(
+            "notebook repo never reached a clean baseline",
+        ),
+    })
+}
+
 impl NbTestEnv {
     /// Build a fixture with hermetic defaults (isolated root,
     /// default notebook name, separate `nb_dir` and `working_dir`,
@@ -420,191 +635,7 @@ impl NbTestEnv {
         // baseline is skipped — the poisoned test never runs a
         // transaction, so a missing baseline is harmless there.
         let notebook_root = self.nb_dir.join(&self.notebook);
-        let baseline_result: Result<(), NbTestError> = (|| {
-            // Write the notebook repo's LOCAL config so every subsequent
-            // git invocation (including production `git::git_capture`,
-            // which scrubs GIT_CONFIG_* env) sees byte-identical LF
-            // handling. The GIT_CONFIG_COUNT env override only reaches
-            // fixture-spawned commands; repo-local config persists.
-            // See `nb-api:todos/api/9`.
-            let mut git_config = StdCommand::new("git");
-            scrub_git_env_std(&mut git_config);
-            git_config.env("HOME", &self.home_dir);
-            apply_git_config_env(&mut git_config);
-            git_config.current_dir(&notebook_root);
-            git_config.args(["config", "core.autocrlf", "false"]);
-            let cfg = git_config.output().map_err(|e| NbTestError::Io {
-                context: format!(
-                    "fixture baseline `git config core.autocrlf false` in {}",
-                    notebook_root.display()
-                ),
-                source: e,
-            })?;
-            if !cfg.status.success() {
-                let stdout = String::from_utf8_lossy(&cfg.stdout).into_owned();
-                let stderr = String::from_utf8_lossy(&cfg.stderr).into_owned();
-                return Err(NbTestError::Nb {
-                    context: format!(
-                        "fixture baseline `git config core.autocrlf false` in {}",
-                        notebook_root.display()
-                    ),
-                    failure: NbFailure {
-                        status: cfg.status,
-                        stdout,
-                        stderr,
-                    },
-                });
-            }
-            // nb 7.24.0 fires the notebook's init commit in a background
-            // subshell (`( _git_checkpoint_commit ... ) &`). Under the
-            // Git Bash `.cmd` launcher on Windows that orphaned git can
-            // keep staging `.index` after our synchronous baseline commit,
-            // racing the first `Transaction::commit`'s dirty check
-            // (intermittent `DirtyBaseline` — see todos/api/9). Settle by
-            // re-committing until the worktree/index is verifiably clean.
-            // The window is generous (up to ~2.5s) because on Windows the
-            // orphaned background git can be delayed by job teardown.
-            let mut consecutive_clean = 0u32;
-            for _ in 0..50 {
-                let mut status = StdCommand::new("git");
-                scrub_git_env_std(&mut status);
-                status.env("HOME", &self.home_dir);
-                apply_git_config_env(&mut status);
-                status.current_dir(&notebook_root);
-                status.args([
-                    "status",
-                    "--porcelain",
-                    "-uall",
-                    "--ignored=no",
-                ]);
-                let status_out =
-                    status.output().map_err(|e| NbTestError::Io {
-                        context: format!(
-                            "fixture baseline `git status --porcelain` in {}",
-                            notebook_root.display()
-                        ),
-                        source: e,
-                    })?;
-                if !status_out.status.success() {
-                    let stdout = String::from_utf8_lossy(&status_out.stdout)
-                        .into_owned();
-                    let stderr = String::from_utf8_lossy(&status_out.stderr)
-                        .into_owned();
-                    return Err(NbTestError::Nb {
-                        context: format!(
-                            "fixture baseline `git status --porcelain` in {}",
-                            notebook_root.display()
-                        ),
-                        failure: NbFailure {
-                            status: status_out.status,
-                            stdout,
-                            stderr,
-                        },
-                    });
-                }
-                let dirty = !String::from_utf8_lossy(&status_out.stdout)
-                    .trim()
-                    .is_empty();
-                if !dirty {
-                    // Require two consecutive clean checks so an orphaned
-                    // nb background git that has NOT yet staged `.index`
-                    // cannot slip in after a single clean observation
-                    // (Windows CI DirtyBaseline flake, see todos/api/9).
-                    consecutive_clean += 1;
-                    if consecutive_clean >= 2 {
-                        return Ok(());
-                    }
-                } else {
-                    consecutive_clean = 0;
-                }
-
-                let mut git = StdCommand::new("git");
-                scrub_git_env_std(&mut git);
-                git.env("HOME", &self.home_dir);
-                git.env("GIT_AUTHOR_NAME", GIT_AUTHOR_NAME);
-                git.env("GIT_AUTHOR_EMAIL", GIT_AUTHOR_EMAIL);
-                git.env("GIT_COMMITTER_NAME", GIT_AUTHOR_NAME);
-                git.env("GIT_COMMITTER_EMAIL", GIT_AUTHOR_EMAIL);
-                apply_git_config_env(&mut git);
-                git.current_dir(&notebook_root);
-                git.arg("add").arg("-A");
-                let add = git.output().map_err(|e| NbTestError::Io {
-                    context: format!(
-                        "fixture baseline `git add -A` in {}",
-                        notebook_root.display()
-                    ),
-                    source: e,
-                })?;
-                if !add.status.success() {
-                    let stdout =
-                        String::from_utf8_lossy(&add.stdout).into_owned();
-                    let stderr =
-                        String::from_utf8_lossy(&add.stderr).into_owned();
-                    return Err(NbTestError::Nb {
-                        context: format!(
-                            "fixture baseline `git add -A` in {}",
-                            notebook_root.display()
-                        ),
-                        failure: NbFailure {
-                            status: add.status,
-                            stdout,
-                            stderr,
-                        },
-                    });
-                }
-                let mut git_commit = StdCommand::new("git");
-                scrub_git_env_std(&mut git_commit);
-                git_commit.env("HOME", &self.home_dir);
-                git_commit.env("GIT_AUTHOR_NAME", GIT_AUTHOR_NAME);
-                git_commit.env("GIT_AUTHOR_EMAIL", GIT_AUTHOR_EMAIL);
-                git_commit.env("GIT_COMMITTER_NAME", GIT_AUTHOR_NAME);
-                git_commit.env("GIT_COMMITTER_EMAIL", GIT_AUTHOR_EMAIL);
-                apply_git_config_env(&mut git_commit);
-                git_commit.current_dir(&notebook_root);
-                git_commit.args(["commit", "-m", "[nb] Initialize"]);
-                let commit =
-                    git_commit.output().map_err(|e| NbTestError::Io {
-                        context: format!(
-                            "fixture baseline `git commit` in {}",
-                            notebook_root.display()
-                        ),
-                        source: e,
-                    })?;
-                if !commit.status.success() {
-                    // A `nothing to commit` exit is not an error; the
-                    // settle loop re-checks status next iteration. Git
-                    // may write the message to stdout or stderr.
-                    let stdout = String::from_utf8_lossy(&commit.stdout);
-                    let stderr = String::from_utf8_lossy(&commit.stderr);
-                    if !stdout.contains("nothing to commit")
-                        && !stderr.contains("nothing to commit")
-                    {
-                        return Err(NbTestError::Nb {
-                            context: format!(
-                                "fixture baseline `git commit` in {}",
-                                notebook_root.display()
-                            ),
-                            failure: NbFailure {
-                                status: commit.status,
-                                stdout: stdout.into_owned(),
-                                stderr: stderr.into_owned(),
-                            },
-                        });
-                    }
-                }
-                // Let nb's background checkpoint finish before re-checking.
-                std::thread::sleep(std::time::Duration::from_millis(50));
-            }
-            Err(NbTestError::Io {
-                context: format!(
-                    "fixture baseline did not settle clean in {}",
-                    notebook_root.display()
-                ),
-                source: std::io::Error::other(
-                    "notebook repo never reached a clean baseline",
-                ),
-            })
-        })();
+        let baseline_result = settle_baseline(&self.home_dir, &notebook_root);
         if let Err(NbTestError::Io { source, .. }) = &baseline_result
             && source.kind() == std::io::ErrorKind::NotFound
         {
@@ -618,5 +649,31 @@ impl NbTestEnv {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod settle_baseline_tests {
+    use super::settle_baseline;
+
+    /// A repo with no baseline commit settles by committing one
+    /// synchronously instead of observing a merely clean tree.
+    #[test]
+    fn missing_head_commits_baseline() {
+        let home = tempfile::Builder::new()
+            .prefix("nb-settle-home-")
+            .tempdir()
+            .expect("home");
+        let root = home.path().join("nb");
+        std::fs::create_dir_all(&root).expect("notebook dir");
+        let mut init = std::process::Command::new("git");
+        crate::scrub_git_env_std(&mut init);
+        init.current_dir(&root).arg("init");
+        assert!(init.output().expect("git init runs").status.success());
+        settle_baseline(home.path(), &root).expect("settle creates HEAD");
+        let mut head = std::process::Command::new("git");
+        crate::scrub_git_env_std(&mut head);
+        head.current_dir(&root).args(["rev-parse", "HEAD"]);
+        assert!(head.output().expect("git runs").status.success());
     }
 }

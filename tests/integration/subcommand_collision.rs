@@ -5,6 +5,8 @@
 //! resolved via `nb show <sel> --path`. Existing filesystem entries
 //! must resolve directly without spawning `nb`.
 
+#![cfg(unix)]
+
 use nb_api::testing::NbTestEnv;
 use nb_api::{Config, NbClient};
 
@@ -20,6 +22,8 @@ fn config_for(env: &NbTestEnv) -> Config {
     }
 }
 
+/// Unix only: store mutation races nb's torn-down background checkpoint
+/// on Windows (DirtyBaseline); tracked in nb-api:issues.
 #[tokio::test]
 async fn subcommand_colliding_folders_resolve_directly() {
     let env = NbTestEnv::new().expect("fixture");

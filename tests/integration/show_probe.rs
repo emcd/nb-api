@@ -422,6 +422,9 @@ async fn show_rejects_zip_extension() {
     .await;
 }
 
+/// Unix only: store mutation races nb's torn-down background checkpoint
+/// on Windows (DirtyBaseline); tracked in nb-api:issues.
+#[cfg(unix)]
 #[tokio::test]
 async fn show_rejects_folder_selector() {
     let env = NbTestEnv::new().expect("fixture initialization");

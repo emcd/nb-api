@@ -9,6 +9,8 @@
 //! No project repository config used by this reproduction; the
 //! `NbTestEnv` fixture provides an isolated `NB_DIR`.
 
+#![cfg(unix)]
+
 use nb_api::testing::NbTestEnv;
 use nb_api::{Config, NbClient};
 
@@ -23,6 +25,8 @@ fn show_text(note: &nb_api::ShowNote) -> String {
 /// wrap width and contains no whitespace to wrap at.
 const LONG_LINE: &str = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
 
+/// Unix only: store mutation races nb's torn-down background checkpoint
+/// on Windows (DirtyBaseline); tracked in nb-api:issues.
 #[tokio::test]
 async fn show_preserves_long_unbroken_line_verbatim() {
     let env = NbTestEnv::new().expect("fixture initialization");

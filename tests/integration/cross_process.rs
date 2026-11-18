@@ -37,11 +37,6 @@ fn index_lines(root: &std::path::Path, folder: &str) -> Vec<String> {
     lines
 }
 
-/// Unix-only: nb 7.24.0's background auto-checkpoint (fired during fixture
-/// init) intermittently races commit dirty-baseline checks under the Git
-/// Bash `.cmd` launcher on Windows (`nb-api:todos/api/9`); this commit-dense
-/// test loses that race disproportionately often.
-#[cfg(unix)]
 #[tokio::test]
 async fn external_note_and_index_line_survive_our_commit() {
     let env = NbTestEnv::new().expect("fixture");
@@ -231,10 +226,6 @@ fn supports_collapse(dir: &std::path::Path) -> bool {
     false
 }
 
-/// Unix-only: nb 7.24.0's background auto-checkpoint (fired during fixture
-/// init) intermittently races commit dirty-baseline checks under the Git
-/// Bash `.cmd` launcher on Windows (`nb-api:todos/api/9`).
-#[cfg(unix)]
 #[tokio::test]
 async fn growing_in_folder_rename_is_refused() {
     let env = NbTestEnv::new().expect("fixture");
@@ -367,15 +358,18 @@ async fn stale_foreign_lock_is_reaped_but_live_lock_is_not() {
     .await;
 }
 
+/// Fixture git helper for the cross-process tests above.
 fn git_head(root: &std::path::Path) -> String {
     git_capture(root, &["rev-parse", "HEAD"]).trim().to_string()
 }
 
+/// Fixture git helper for the cross-process tests above.
 fn git_add_commit(root: &std::path::Path, message: &str) {
     git_capture(root, &["add", "-A"]);
     git_capture(root, &["commit", "-m", message, "--no-gpg-sign"]);
 }
 
+/// Fixture git helper for the cross-process tests above.
 fn git_capture(root: &std::path::Path, args: &[&str]) -> String {
     let mut cmd = std::process::Command::new("git");
     nb_api::scrub_git_env_std(&mut cmd);
