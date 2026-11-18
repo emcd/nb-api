@@ -57,12 +57,27 @@ A notebook SHALL be a `$NB_DIR/<name>` directory containing `.git` (the existing
 - **WHEN** probing the notebook directory hits an I/O error other than missing (permissions, etc.)
 - **THEN** the system SHALL return a typed `Io` failure rather than treating it as absence
 
-### Requirement: NB_DIR and create_notebook matrix
-`NB_DIR` unset or pointing at a non-directory SHALL be a configuration failure reported before any probe. Creation SHALL be explicit or write-path ensured per `Config.create_notebook`; reads SHALL never create.
+### Requirement: Notebook store resolution
+The notebook store directory SHALL resolve as explicit non-empty
+`NB_DIR`, else the parsed `~/.nbrc` `NB_DIR` value, else `~/.nb`.
+Empty `NB_DIR` counts as unset. With `require_explicit_nb_dir`
+set, an unset `NB_DIR` SHALL be a configuration failure and the rc
+file SHALL never be read. Missing `HOME`, an unreadable rc file,
+or an unsupported or relative rc `NB_DIR` value SHALL fail
+visibly instead of resolving elsewhere. Creation SHALL be explicit
+or write-path ensured per `Config.create_notebook`; reads SHALL
+never create.
 
-#### Scenario: Missing NB_DIR fails fast
-- **WHEN** `NB_DIR` is unset or not a directory
-- **THEN** every notebook operation SHALL fail with a typed configuration failure before probing anything
+#### Scenario: Missing NB_DIR falls back to the file default
+- **WHEN** `NB_DIR` is unset or empty and strict mode is off
+- **THEN** resolution SHALL consult `~/.nbrc` (parsed subset, no
+  shell) and fall back to `~/.nb`, probing the selected store
+  exactly like an explicit one
+
+#### Scenario: Strict mode requires explicit NB_DIR
+- **WHEN** `require_explicit_nb_dir` is set and `NB_DIR` is unset
+- **THEN** every notebook operation SHALL fail with a typed
+  configuration failure without reading any rc file
 
 #### Scenario: Write path ensures when allowed
 - **WHEN** `create_notebook` is true and a write path targets a missing notebook

@@ -50,6 +50,7 @@ impl NbClient {
         Ok(Self {
             default_notebook,
             create_notebook: config.create_notebook,
+            require_explicit_nb_dir: config.require_explicit_nb_dir,
             disable_git_signing: config.disable_git_signing,
             allow_top_level_notes: config.allow_top_level_notes,
             gate_timeout: config.gate_timeout,
@@ -69,7 +70,9 @@ impl NbClient {
         // Discovery I/O failures fall back to ensure here (legacy
         // behavior): only the native read path treats them as `Io`.
         // Only a genuine miss ensures (and possibly creates).
-        let existing = notebook_dir_from_env(&notebook).unwrap_or_default();
+        let existing =
+            notebook_dir_from_env(&notebook, self.require_explicit_nb_dir)
+                .unwrap_or_default();
         if existing.is_none() {
             self.ensure_notebook(&notebook).await?;
         }
@@ -95,7 +98,8 @@ impl NbClient {
         // Discovery I/O failures fall back to ensure here (legacy
         // behavior); only the native read path treats them as `Io`.
         let existing: Option<PathBuf> =
-            notebook_dir_from_env(&notebook).unwrap_or_default();
+            notebook_dir_from_env(&notebook, self.require_explicit_nb_dir)
+                .unwrap_or_default();
         if let Some(path) = existing {
             return Ok(path);
         }
@@ -338,7 +342,9 @@ impl NbClient {
         // Fast path: an existing `$NB_DIR/<notebook>` needs no
         // subprocess. Discovery I/O failures propagate; only a
         // genuine miss falls through to the `nb` check below.
-        if notebook_dir_from_env(notebook)?.is_some() {
+        if notebook_dir_from_env(notebook, self.require_explicit_nb_dir)?
+            .is_some()
+        {
             return Ok(());
         }
         let show_result = self

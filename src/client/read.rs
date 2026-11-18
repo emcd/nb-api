@@ -152,7 +152,7 @@ impl NbClient {
         &self,
         notebook: &str,
     ) -> Result<PathBuf, NbError> {
-        match notebook_dir_from_env(notebook)? {
+        match notebook_dir_from_env(notebook, self.require_explicit_nb_dir)? {
             Some(path) => Ok(path),
             None => Err(NbError::NotFound {
                 selector: format!("{notebook}:"),
@@ -799,16 +799,19 @@ impl NbClient {
     }
 }
 
-/// Notebook dir from the environment: `$NB_DIR/<notebook>` when
-/// present, without creating, ensuring, or spawning. Genuine
-/// filesystem failures propagate; only true absence maps to `None`.
+/// Notebook dir from the environment: `<store>/<notebook>`
+/// when present, without creating, ensuring, or spawning. The
+/// store resolves as explicit `NB_DIR`, else the parsed `~/.nbrc`
+/// value, else `~/.nb` (see [`crate::nbrc`]); strict mode skips the
+/// file fallback and fails unset `NB_DIR` as a configuration
+/// error. Genuine filesystem failures propagate; only true absence
+/// maps to `None`.
 pub(super) fn notebook_dir_from_env(
     notebook: &str,
+    strict: bool,
 ) -> Result<Option<PathBuf>, NbError> {
-    let Some(nb_dir) = std::env::var_os("NB_DIR") else {
-        return Ok(None);
-    };
-    let path = PathBuf::from(nb_dir).join(notebook);
+    let nb_dir = crate::nbrc::resolve_store_dir(strict)?;
+    let path = nb_dir.join(notebook);
     // `metadata` follows symlinks exactly like the previous
     // `is_dir` check; only genuine misses map to `None` while
     // permission and I/O failures propagate instead of collapsing

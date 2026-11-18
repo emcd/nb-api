@@ -6,6 +6,7 @@
 - [ ] 1.4 Implement atomic concurrent create (single winner, idempotent ensure) with owned-only failure cleanup
 - [ ] 1.5 Add typed notebook enumeration (`list_notebook_names`, sorted valid names)
 - [ ] 1.6 Add purely-native layout/validity/matrix/concurrency tests plus extended two-way `nb`/native interop tests
+- [x] 1.9 (0.4.6 hotfix) Resolve the notebook store as explicit `NB_DIR`, else parsed `~/.nbrc` `NB_DIR`, else `~/.nb`, with strict mode, no shell, and visible failures for unsupported rc syntax
 
 ## 2. Native import
 

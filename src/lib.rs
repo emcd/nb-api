@@ -24,6 +24,7 @@ mod git_signing;
 mod lines;
 mod native;
 mod nb_program;
+mod nbrc;
 mod output;
 pub mod parser;
 pub(crate) mod scope;
@@ -67,6 +68,10 @@ pub struct Config {
     pub notebook: Option<String>,
     /// Automatically create missing notebooks.
     pub create_notebook: bool,
+    /// Refuse the file default when `NB_DIR` is unset: embedders
+    /// that assign the notebook store themselves set this to keep
+    /// resolution explicit and never read `~/.nbrc`.
+    pub require_explicit_nb_dir: bool,
     /// Allow new notes to be created at notebook root.
     pub allow_top_level_notes: bool,
     /// Disable Git commit and tag signing for `nb` subprocesses.
@@ -80,6 +85,7 @@ impl Default for Config {
         Self {
             notebook: None,
             create_notebook: true,
+            require_explicit_nb_dir: false,
             allow_top_level_notes: false,
             disable_git_signing: false,
             gate_timeout: gate::DEFAULT_GATE_TIMEOUT,
@@ -94,6 +100,8 @@ pub struct NbClient {
     default_notebook: Option<String>,
     /// Automatically create missing notebooks.
     create_notebook: bool,
+    /// Refuse the file default when `NB_DIR` is unset.
+    require_explicit_nb_dir: bool,
     /// Disable Git commit and tag signing for `nb` subprocesses.
     disable_git_signing: bool,
     /// Allow new notes to be created at notebook root.

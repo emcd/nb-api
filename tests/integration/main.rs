@@ -18,6 +18,7 @@ mod native_lists;
 mod native_reads;
 mod native_reads_guard;
 mod native_reads_support;
+mod nbrc_defaults;
 mod note_identity;
 mod show_line_wrap;
 mod show_probe;
