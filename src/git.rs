@@ -98,8 +98,8 @@ fn git_capture_inner(
         command.env("GIT_COMMITTER_EMAIL", v);
     }
     if let Some(root) = local {
-        command.env("GIT_DIR", root.join(".git"));
-        command.env("GIT_WORK_TREE", root);
+        command.env("GIT_DIR", git_env_path(&root.join(".git")));
+        command.env("GIT_WORK_TREE", git_env_path(root));
     }
     command.current_dir(cwd);
     command.args(args);
@@ -132,6 +132,30 @@ fn git_capture_inner(
             exit_code: output.status.code(),
         })
     }
+}
+
+/// Path form suitable for `GIT_DIR`/`GIT_WORK_TREE`: Rust
+/// `canonicalize` yields verbatim `\\?\` paths on Windows, which
+/// msysgit does not parse, so a bound git invocation would fail
+/// even for a valid repository. The OS APIs behind `current_dir`
+/// accept verbatim paths; only the env values need the win32 form.
+#[cfg(windows)]
+fn git_env_path(path: &Path) -> PathBuf {
+    let text = path.to_string_lossy();
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        PathBuf::from(format!(r"\\{rest}"))
+    } else if let Some(rest) = text.strip_prefix(r"\\?\") {
+        PathBuf::from(rest)
+    } else {
+        path.to_path_buf()
+    }
+}
+
+/// Path form suitable for `GIT_DIR`/`GIT_WORK_TREE`. Only Windows
+/// produces verbatim paths; elsewhere the path passes through.
+#[cfg(not(windows))]
+fn git_env_path(path: &Path) -> PathBuf {
+    path.to_path_buf()
 }
 
 /// HEAD revision (`git rev-parse HEAD`) for a notebook worktree.
