@@ -1,9 +1,8 @@
-//! Hermetic regression tests for `GIT_*` env scrub at every spawn
-//! site in `nb-api`. Each test sets every `GIT_*` routing var to a
-//! poison (non-existent, non-repo) path, then verifies the spawned
-//! subprocess does NOT inherit them — only possible if
-//! `nb_api::git_env::scrub_git_env` (or `scrub_git_env_std`) ran
-//! before spawn.
+//! Hermetic regression tests for child-env canonicalization at
+//! every spawn site in `nb-api`. `GIT_*` routing vars are stripped
+//! so hook/CI environments cannot redirect the child's repository;
+//! `TERM` is canonicalized so `nb` emits plain output regardless of
+//! the deployment terminal (see `nb-mcp-server:todos/mcp/64`).
 //!
 //! Per the test-infrastructure specification, every subprocess
 //! spawn site in the crate requires a regression test. Currently
@@ -104,4 +103,70 @@ fn git_rev_parse_does_not_inherit_leaked_git_dir() {
             toplevel.display()
         );
     });
+}
+
+/// `NbClient::exec` canonicalizes the child terminal: even with a
+/// color-advertising `TERM` in the parent process, the spawned `nb`
+/// observes `TERM=dumb`, so its output never depends on the
+/// deployment terminal. The `--no-color` flags and ANSI stripper
+/// remain as defense in depth; this test pins the spawn contract
+/// directly via a shim that echoes its own `TERM`.
+///
+/// Unix-only: relies on `PATH` lookup of `nb` plus an
+/// executable-bit shell shim.
+#[cfg(unix)]
+#[tokio::test]
+async fn nb_client_exec_canonicalizes_child_term() {
+    use std::os::unix::fs::PermissionsExt;
+
+    use crate::common::{EnvSnapshot, with_isolated_env};
+    let env = NbTestEnv::new().expect("fixture initialization");
+    with_isolated_env(&env, false, || async {
+        let _term_snap = EnvSnapshot::capture(&["TERM"]);
+        let shim_dir = tempfile::Builder::new()
+            .prefix("nb-term-")
+            .tempdir()
+            .expect("shim dir");
+        std::fs::write(
+            shim_dir.path().join("nb"),
+            "#!/bin/sh\nprintf 'TERM=%s\\n' \"$TERM\"\n",
+        )
+        .expect("shim script");
+        std::fs::set_permissions(
+            shim_dir.path().join("nb"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .expect("chmod shim");
+        let path_var = std::env::var_os("PATH").unwrap_or_default();
+        let mut paths = vec![shim_dir.path().to_path_buf()];
+        paths.extend(std::env::split_paths(&path_var));
+        // SAFETY: serialized by ENV_LOCK inside `with_isolated_env`;
+        // both snapshots restore on scope exit.
+        unsafe {
+            std::env::set_var(
+                "PATH",
+                std::env::join_paths(paths).expect("join PATH"),
+            );
+            std::env::set_var("TERM", "xterm-256color");
+        }
+        let client = NbClient::new(&Config {
+            notebook: Some(env.notebook().to_string()),
+            create_notebook: false,
+            ..Config::default()
+        })
+        .expect("client construction");
+        let output = client
+            .list_notebooks()
+            .await
+            .expect("shimmed exec succeeds");
+        assert!(
+            output.contains("TERM=dumb"),
+            "child must observe canonical TERM=dumb, got: {output:?}"
+        );
+        assert!(
+            !output.contains("xterm"),
+            "parent TERM leaked into child: {output:?}"
+        );
+    })
+    .await;
 }

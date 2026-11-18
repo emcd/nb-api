@@ -278,6 +278,17 @@ impl NbClient {
         // GIT_* redirect vars without requiring a code change.
         // See `nb-api:issues/3`. Do not remove.
         scrub_git_env(&mut command);
+        // Canonicalize the child terminal: real `nb` 7.24.0 emits
+        // SGR sequences plus an `ESC ( B` residue on some code
+        // paths when `TERM` advertises color (e.g.
+        // `TERM=xterm-256color`), despite trailing `--no-color`
+        // flags, and it does not honor `NO_COLOR`. `TERM` unset
+        // and `TERM=dumb` both yield plain output; `dumb` is set
+        // (rather than removed) because it stays a valid terminfo
+        // entry for children that require `TERM` to exist. The
+        // `--no-color` flags and the ANSI stripper stay as defense
+        // in depth. See `nb-mcp-server:todos/mcp/64`.
+        command.env("TERM", "dumb");
         command
             .args(args)
             .stdin(Stdio::null()) // Prevent TTY hangs
