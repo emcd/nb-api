@@ -35,6 +35,15 @@ surface; BLAKE3 fingerprints; `.index` numeric identity.
   2026-11-12.)
 - Release rule: CI must be green before tagging. (Bundle-wide,
   operator-endorsed 2026-11-10; closes `todos/api/11`.)
+- Release branches are built from `hotfix-*`, never worked on directly:
+  do release-targeted work (including `fixup!` chains) on a `hotfix-*`
+  branch, then create `release-*` fresh from the base tag by cherry-pick
+  after finalization. The release branch is protected (no force-push),
+  Tier-1 holds it hash-stable from approval to tag, and the whitespace
+  gate diffs `event.before..HEAD`, so a rewrite also orphans the base
+  SHA and reds the next QA run. Verify tree identity between the
+  reviewed tip and the release tip. (Operator directive 2026-11-19;
+  learned from 0.4.6.)
 - Commit subjects are descriptive of the change, never of the
   review process: no tier or reviewer names (Tier-1/Tier-2,
   model or seat names), no proposal nicknames, no "address
