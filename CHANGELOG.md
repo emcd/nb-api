@@ -7,6 +7,20 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.4.6] - 2026-11-19
+
+### Fixed
+
+- Child `TERM` is canonicalized to `dumb` for `nb` spawns, so
+  terminal color sequences no longer leak into command output.
+- Notebook store resolution with an unset `NB_DIR`: the store
+  now resolves from explicit `NB_DIR`, else the parsed `~/.nbrc`
+  (`$NBRC_PATH`) value, else `~/.nb`. The rc file is parsed
+  with a real shell grammar (never executed), honoring quoting,
+  comments, and `nb`-style `NB_DIR` self-defaults; content that
+  cannot be determined without execution warns and falls back
+  to `~/.nb` instead of failing.
+
 ## [0.4.5] - 2026-11-14
 
 ### Fixed
