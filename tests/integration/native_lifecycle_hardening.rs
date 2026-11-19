@@ -489,6 +489,9 @@ async fn root_validation_cases() {
     unsafe {
         std::env::remove_var("NB_DIR");
     }
+    // Unset NB_DIR resolves the default store: the error below
+    // proves resolution fell through to `~/.nb` (missing here)
+    // instead of failing closed.
     let err = format!(
         "{:?}",
         client
@@ -497,8 +500,8 @@ async fn root_validation_cases() {
             .expect_err("unset root must fail")
     );
     assert!(
-        err.contains("not configured"),
-        "unset root is configuration failure: {err:?}"
+        err.contains("does not exist"),
+        "unset root resolves the (missing) default store: {err:?}"
     );
 
     let file = env.nb_dir().join("not-a-dir");

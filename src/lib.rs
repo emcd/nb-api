@@ -24,6 +24,7 @@ mod git_signing;
 mod lines;
 mod native;
 mod nb_program;
+mod nbrc;
 mod output;
 pub mod parser;
 pub(crate) mod scope;
@@ -42,6 +43,7 @@ pub use error::{IoError, IoErrorKind, NbError, ParseErrorKind};
 pub use fingerprint::{Fingerprint, fingerprint as compute_fingerprint};
 pub use git::{derive_git_notebook_name, git_rev_parse};
 pub use git_env::{leaked_git_names, scrub_git_env, scrub_git_env_std};
+pub use nbrc::ResolutionMode;
 pub use parser::{
     BodyFragments, DocumentKind, NoteDocument, ParseContext,
     SUPPORTED_DOCUMENT_EXTENSIONS, TagsIter, TagsStrIter, TodoState, parse,
@@ -71,6 +73,12 @@ pub struct Config {
     pub allow_top_level_notes: bool,
     /// Disable Git commit and tag signing for `nb` subprocesses.
     pub disable_git_signing: bool,
+    /// How the notebook store is resolved from the environment and
+    /// `~/.nbrc` (default: parse the rc when present, never execute).
+    pub nbrc_mode: ResolutionMode,
+    /// Refuse to resolve when `NB_DIR` is unset instead of falling
+    /// back to the parsed rc value or `~/.nb`.
+    pub require_explicit_nb_dir: bool,
     /// Maximum time to wait on the process-shared gate queue.
     pub gate_timeout: Duration,
 }
@@ -82,6 +90,8 @@ impl Default for Config {
             create_notebook: true,
             allow_top_level_notes: false,
             disable_git_signing: false,
+            nbrc_mode: ResolutionMode::default(),
+            require_explicit_nb_dir: false,
             gate_timeout: gate::DEFAULT_GATE_TIMEOUT,
         }
     }
@@ -96,6 +106,12 @@ pub struct NbClient {
     create_notebook: bool,
     /// Disable Git commit and tag signing for `nb` subprocesses.
     disable_git_signing: bool,
+    /// How the notebook store is resolved from the environment and
+    /// `~/.nbrc` (default: parse the rc when present, never execute).
+    nbrc_mode: ResolutionMode,
+    /// Refuse to resolve when `NB_DIR` is unset instead of falling
+    /// back to the parsed rc value or `~/.nb`.
+    require_explicit_nb_dir: bool,
     /// Allow new notes to be created at notebook root.
     allow_top_level_notes: bool,
     /// Gate queue timeout.

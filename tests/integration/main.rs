@@ -18,6 +18,7 @@ mod native_lifecycle;
 mod native_lifecycle_hardening;
 mod native_lifecycle_isolation;
 mod native_lists;
+mod native_nbrc;
 mod native_reads;
 mod native_reads_guard;
 mod native_reads_support;
@@ -27,6 +28,7 @@ mod show_probe;
 mod subcommand_collision;
 mod tasks_tags;
 mod transaction;
+mod transaction_pinning;
 
 #[cfg(feature = "testing-tokio")]
 #[path = "async_helpers.rs"]

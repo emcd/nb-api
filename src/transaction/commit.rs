@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use crate::error::NbError;
 use crate::gate;
 use crate::git;
+use crate::git::git_capture_local;
 use crate::types::{CommitOutcome, OpOutcome};
 
 use super::apply::{OpMeta, PlanEffects, validate_and_apply_virtual};
@@ -18,15 +19,95 @@ use super::virtual_tree::{
 
 use super::plan::Transaction;
 
+/// Revalidate the pinned notebook path without re-resolving the
+/// store: no rc read, no discovery. A notebook swapped for a
+/// symlink would redirect writes elsewhere; a symlinked parent
+/// would drift the canonical path; a lost or corrupt `.git`
+/// would let git rediscover an ancestor repository. The HEAD
+/// check is bound to the pinned `.git` (`git_capture_local`),
+/// so it can never resolve an ancestor. Anything but a ready,
+/// unchanged notebook refuses instead of committing.
+fn revalidate_pinned_notebook(
+    notebook_path: &Path,
+) -> Result<PathBuf, NbError> {
+    let meta = std::fs::symlink_metadata(notebook_path).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            NbError::ValidationError {
+                reason: format!(
+                    "notebook changed during transaction: `{}` vanished",
+                    notebook_path.display()
+                ),
+                location: None,
+            }
+        } else {
+            NbError::Io {
+                path: notebook_path.to_path_buf(),
+                source: e.into(),
+            }
+        }
+    })?;
+    if meta.file_type().is_symlink() {
+        return Err(NbError::UnsupportedStructure {
+            reason: format!(
+                "refusing to commit through symlinked notebook `{}`",
+                notebook_path.display()
+            ),
+        });
+    }
+    if !meta.is_dir() {
+        return Err(NbError::ValidationError {
+            reason: format!(
+                "notebook changed during transaction: `{}` is no longer a directory",
+                notebook_path.display()
+            ),
+            location: None,
+        });
+    }
+    let canonical = std::fs::canonicalize(notebook_path).map_err(|e| {
+        NbError::ValidationError {
+            reason: format!(
+                "notebook changed during transaction: `{}`: {e}",
+                notebook_path.display()
+            ),
+            location: None,
+        }
+    })?;
+    if canonical.as_path() != notebook_path {
+        return Err(NbError::ValidationError {
+            reason: format!(
+                "notebook changed during transaction: `{}` canonicalized away (symlinked parent?)",
+                notebook_path.display()
+            ),
+            location: None,
+        });
+    }
+    git_capture_local(
+        &canonical,
+        &[
+            "rev-parse".into(),
+            "--verify".into(),
+            "HEAD^{commit}".into(),
+        ],
+    )
+    .map_err(|_| NbError::ValidationError {
+        reason: format!(
+            "notebook changed during transaction: `{}` has no resolvable HEAD",
+            notebook_path.display()
+        ),
+        location: None,
+    })?;
+    Ok(canonical)
+}
+
 impl Transaction {
-    /// Validate-all, apply-all, at most one Git checkpoint.
+    /// Validate-all, apply-all, at most one Git checkpoint. The
+    /// store root was pinned when the transaction was built and is
+    /// revalidated here without re-resolving: a notebook replaced
+    /// by a symlink, a drifted canonical path, or a lost `.git`
+    /// (which would let git rediscover an ancestor repo) refuses
+    /// instead of writing through or across stores.
     pub async fn commit(self) -> Result<CommitOutcome, NbError> {
-        // Resolve root without invoking `nb` when possible (avoids nb
-        // auto-checkpoint clearing dirty state before the baseline check).
-        let notebook_root = self
-            .client
-            .show_notebook_path_unguarded(Some(&self.notebook))
-            .await?;
+        let notebook_root = revalidate_pinned_notebook(&self.notebook_path)?;
         let gate_key = gate::git_common_dir_realpath(&notebook_root)?;
         let _hold =
             gate::acquire_notebook(gate_key, self.gate_timeout, false).await?;

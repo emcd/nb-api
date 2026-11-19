@@ -1,7 +1,6 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
-use crate::NbClient;
 use crate::error::NbError;
 use crate::fingerprint::Fingerprint;
 use crate::types::{LineEdit, NoteTarget, Occurrence};
@@ -10,9 +9,12 @@ use std::path::Path;
 use super::virtual_tree::normalize_rel;
 
 /// In-memory plan bound to one notebook. Drop discards; no begin/rollback.
+/// The store root is pinned at construction: commit must not re-resolve.
 pub struct Transaction {
-    pub(super) client: NbClient,
     pub(super) notebook: String,
+    /// Pinned notebook path: resolved once at build, revalidated
+    /// (not re-resolved) at commit.
+    pub(super) notebook_path: std::path::PathBuf,
     pub(super) plan: Vec<PlanOp>,
     pub(super) gate_timeout: Duration,
 }
@@ -93,13 +95,13 @@ pub(super) enum PlanOp {
 }
 impl Transaction {
     pub(crate) fn new(
-        client: NbClient,
         notebook: String,
+        notebook_path: std::path::PathBuf,
         gate_timeout: Duration,
     ) -> Self {
         Self {
-            client,
             notebook,
+            notebook_path,
             plan: Vec::new(),
             gate_timeout,
         }

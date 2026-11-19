@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use super::lifecycle::{
-    CreateMode, Probe, create_notebook_dir, notebook_dir_from_env,
+    CreateMode, Probe, create_notebook_dir_at, notebook_dir_from_env,
     notebook_root_dir, probe_notebook_dir,
 };
 use crate::argv::search_command_args;
@@ -60,7 +60,9 @@ impl NbClient {
     /// A mid-initialization notebook is skipped until ready.
     pub async fn list_notebook_names(&self) -> Result<Vec<String>, NbError> {
         let _g = gate::acquire_global(self.gate_timeout).await?;
-        let root = notebook_root_dir()?;
+        let root =
+            notebook_root_dir(self.nbrc_mode, self.require_explicit_nb_dir)
+                .await?;
         let mut names = Vec::new();
         let entries = std::fs::read_dir(&root).map_err(|e| NbError::Io {
             path: root.clone(),
@@ -102,12 +104,14 @@ impl NbClient {
         &self,
         notebook: Option<&str>,
     ) -> Result<PathBuf, NbError> {
-        let notebook = self.resolve_notebook_name(notebook)?;
-        self.with_notebook_gate(
-            &notebook,
-            self.show_notebook_path_unguarded(Some(&notebook)),
-        )
-        .await
+        // Single resolution pinned across gate and lookup: the
+        // unguarded lookup below must not re-resolve.
+        let root = self
+            .native_notebook_root(&self.resolve_notebook_name(notebook)?)
+            .await?;
+        let held = root.clone();
+        self.with_notebook_gate_native(&held, async move { Ok(root) })
+            .await
     }
 
     /// Creates a notebook explicitly, returning its canonical path.
@@ -120,7 +124,8 @@ impl NbClient {
         notebook: Option<&str>,
     ) -> Result<PathBuf, NbError> {
         let name = self.resolve_notebook_name(notebook)?;
-        create_notebook_dir(&name, CreateMode::Exact).await
+        let root = self.resolve_store_root().await?;
+        create_notebook_dir_at(&root, &name, CreateMode::Exact).await
     }
 
     /// Shows a note as a structured [`ShowNote`] (gate-held).
@@ -213,7 +218,13 @@ impl NbClient {
         &self,
         notebook: &str,
     ) -> Result<PathBuf, NbError> {
-        match notebook_dir_from_env(notebook).await? {
+        match notebook_dir_from_env(
+            notebook,
+            self.nbrc_mode,
+            self.require_explicit_nb_dir,
+        )
+        .await?
+        {
             Some(path) => Ok(path),
             None => Err(NbError::NotFound {
                 selector: format!("{notebook}:"),
@@ -623,7 +634,7 @@ impl NbClient {
         let mut args = Vec::new();
         validate_folder_option(folder)?;
 
-        let notebook = self.resolve_notebook(notebook).await?;
+        let (notebook, _root) = self.resolve_notebook(notebook).await?;
         let cmd = match folder {
             Some(f) => format!("{}:{}/", notebook, f),
             None => format!("{}:", notebook),
@@ -680,7 +691,7 @@ impl NbClient {
             });
         }
 
-        let notebook = self.resolve_notebook(notebook).await?;
+        let (notebook, _root) = self.resolve_notebook(notebook).await?;
         let scope = match folder {
             Some(f) => format!("{}:{}/", notebook, f),
             None => format!("{}:", notebook),

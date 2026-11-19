@@ -324,6 +324,11 @@ impl NbTestEnv {
     /// to [`working_dir`](Self::working_dir).
     pub fn configure_std(&self, cmd: &mut StdCommand) {
         scrub_git_env_std(cmd);
+        // The harness owns the child environment: a leaked
+        // `NBRC_PATH` from a concurrent test would redirect the
+        // child's store resolution. Tests that need an rc pass it
+        // explicitly.
+        cmd.env_remove("NBRC_PATH");
         cmd.env("PATH", fixture_child_path());
         cmd.env("NB_DIR", &self.nb_dir);
         cmd.env("HOME", &self.home_dir);
@@ -340,6 +345,8 @@ impl NbTestEnv {
     #[cfg(feature = "testing-tokio")]
     pub fn configure_tokio(&self, cmd: &mut TokioCommand) {
         crate::git_env::scrub_git_env(cmd);
+        // See `configure_std`: the harness owns the child env.
+        cmd.env_remove("NBRC_PATH");
         cmd.env("PATH", fixture_child_path());
         cmd.env("NB_DIR", &self.nb_dir);
         cmd.env("HOME", &self.home_dir);
@@ -534,6 +541,7 @@ impl NbTestEnv {
         // poisoned by a concurrent harness test (`issues/api/7`).
         let mut cmd = StdCommand::new(nb_binary());
         scrub_git_env_std(&mut cmd);
+        cmd.env_remove("NBRC_PATH");
         cmd.env("PATH", fixture_child_path());
         cmd.env("NB_DIR", &self.nb_dir);
         cmd.env("NB_NOTEBOOK_PATH", &init_stub);

@@ -5,6 +5,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::error::NbError;
+use crate::nbrc::{ResolutionMode, resolve_nbrc_store};
 use crate::validate::validate_notebook_name;
 
 /// Creation semantics: idempotent ensure converges on the winner;
@@ -15,19 +16,18 @@ pub(super) enum CreateMode {
     Exact,
 }
 
-/// Central `NB_DIR` root: canonical directory or typed failure. A
-/// missing, unset, or non-directory root is a configuration
-/// failure; genuine I/O failures propagate instead of collapsing
-/// into absence.
-pub(super) fn notebook_root_dir() -> Result<PathBuf, NbError> {
-    let Some(nb_dir) = std::env::var_os("NB_DIR") else {
-        return Err(NbError::ValidationError {
-            reason: "notebook root is not configured (`NB_DIR` is unset)."
-                .to_string(),
-            location: None,
-        });
-    };
-    let nb_dir = PathBuf::from(nb_dir);
+/// Central `NB_DIR` root: canonical directory or typed failure. The
+/// store is resolved per the caller-selected [`ResolutionMode`]
+/// (always parsing the rc when present, unless ignored or strict)
+/// and validated the same afterwards: a missing, unset,
+/// non-directory, or unresolvable root is a configuration failure;
+/// genuine I/O failures propagate instead of collapsing into
+/// absence.
+pub(super) async fn notebook_root_dir(
+    mode: ResolutionMode,
+    strict: bool,
+) -> Result<PathBuf, NbError> {
+    let nb_dir = resolve_nbrc_store(mode, strict).await?;
     match std::fs::metadata(&nb_dir) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             Err(NbError::ValidationError {
@@ -376,9 +376,20 @@ fn not_a_notebook(path: &Path) -> NbError {
 /// never lets git resolve through an ancestor repository.
 pub(super) async fn notebook_dir_from_env(
     notebook: &str,
+    mode: ResolutionMode,
+    strict: bool,
 ) -> Result<Option<PathBuf>, NbError> {
-    let root = notebook_root_dir()?;
-    match probe_notebook_dir(&root, notebook)? {
+    let root = notebook_root_dir(mode, strict).await?;
+    notebook_dir_from_env_at(&root, notebook).await
+}
+
+/// Probe mapping against an already-resolved store root: no
+/// second resolution. The caller pins the store once.
+pub(super) async fn notebook_dir_from_env_at(
+    root: &Path,
+    notebook: &str,
+) -> Result<Option<PathBuf>, NbError> {
+    match probe_notebook_dir(root, notebook)? {
         Probe::Ready(path) => Ok(Some(path)),
         Probe::Absent | Probe::NotADirectory | Probe::NotANotebook => Ok(None),
         Probe::Pending => {
@@ -403,25 +414,21 @@ pub(super) async fn notebook_dir_from_env(
                     "HEAD^{commit}".into(),
                 ],
             )?;
-            Ok(Some(confined_canonical(&root, &path)?))
+            Ok(Some(confined_canonical(root, &path)?))
         },
     }
 }
 
-/// Ensures the notebook exists, creating it when allowed.
-/// Converges idempotently on concurrent winners, including the
-/// earliest mkdir-to-init window where the winner has exposed an
-/// empty directory without `.git` yet; disabled creation refuses
-/// only truly missing notebooks. Present entries (plain or
-/// malformed) surface their own refusal or git failure instead of
-/// reading as creation-disabled. Plain entries are refused, never
-/// initialized.
-pub(super) async fn ensure_notebook_dir(
+/// Ensure against an already-resolved store root: no second
+/// resolution. Creation converges under the same root that was
+/// probed, so a concurrent rc or env change cannot split the
+/// operation across stores.
+pub(super) async fn ensure_notebook_dir_at(
+    root: &Path,
     notebook: &str,
     allow_create: bool,
 ) -> Result<PathBuf, NbError> {
-    let root = notebook_root_dir()?;
-    match probe_notebook_dir(&root, notebook)? {
+    match probe_notebook_dir(root, notebook)? {
         Probe::Ready(path) => Ok(path),
         Probe::NotADirectory => Err(not_a_notebook(&root.join(notebook))),
         Probe::Absent => {
@@ -433,10 +440,10 @@ pub(super) async fn ensure_notebook_dir(
                     location: None,
                 });
             }
-            create_notebook_dir(notebook, CreateMode::Ensure).await
+            create_notebook_dir_at(root, notebook, CreateMode::Ensure).await
         },
         Probe::Pending | Probe::NotANotebook => {
-            match await_ready(&root, notebook).await? {
+            match await_ready(root, notebook).await? {
                 Some(path) => Ok(path),
                 None => {
                     if !allow_create {
@@ -447,23 +454,25 @@ pub(super) async fn ensure_notebook_dir(
                             location: None,
                         });
                     }
-                    create_notebook_dir(notebook, CreateMode::Ensure).await
+                    create_notebook_dir_at(root, notebook, CreateMode::Ensure)
+                        .await
                 },
             }
         },
     }
 }
 
-/// Native notebook creation under `NB_DIR`. Ensure mode converges
-/// idempotently on a concurrent winner; exact mode refuses an
-/// existing notebook. Refusals never initialize or remove anything.
-pub(super) async fn create_notebook_dir(
+/// Native notebook creation under `NB_DIR`, against an
+/// already-resolved store root: no discovery, no second
+/// resolution. Ensure mode converges idempotently on a concurrent
+/// winner; exact mode refuses an existing notebook. Refusals never
+/// initialize or remove anything.
+pub(super) async fn create_notebook_dir_at(
+    root: &std::path::Path,
     notebook: &str,
     mode: CreateMode,
 ) -> Result<PathBuf, NbError> {
-    validate_notebook_name(notebook)?;
-    let root = notebook_root_dir()?;
-    match probe_notebook_dir(&root, notebook)? {
+    match probe_notebook_dir(root, notebook)? {
         Probe::Ready(existing) => {
             return match mode {
                 CreateMode::Ensure => Ok(existing),
@@ -496,10 +505,10 @@ pub(super) async fn create_notebook_dir(
                 {
                     std::thread::sleep(std::time::Duration::from_millis(ms));
                 }
-                return finish_new_notebook_dir(&root, notebook, &path).await;
+                return finish_new_notebook_dir(root, notebook, &path).await;
             },
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                match await_ready(&root, notebook).await? {
+                match await_ready(root, notebook).await? {
                     Some(existing) => {
                         return match mode {
                             CreateMode::Ensure => Ok(existing),

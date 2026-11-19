@@ -82,10 +82,12 @@ impl NbClient {
         id: &str,
         notebook: Option<&str>,
     ) -> Result<CommitOutcome, NbError> {
-        let (nb, selector) =
+        let (nb, selector, notebook_path) =
             self.resolve_target_selector(id, notebook).await?;
-        let target = self.note_target_for_selector(&nb, &selector).await?;
-        let mut tx = self.transaction(Some(&nb)).await?;
+        let target = self
+            .note_target_for_selector(&selector, &notebook_path)
+            .await?;
+        let mut tx = self.transaction_in(&nb, notebook_path);
         tx.delete_note(target)?;
         tx.commit().await
     }
@@ -101,10 +103,12 @@ impl NbClient {
         recursive: bool,
         notebook: Option<&str>,
     ) -> Result<CommitOutcome, NbError> {
-        let (nb, selector) =
+        let (nb, selector, notebook_path) =
             self.resolve_target_selector(id, notebook).await?;
-        let target = self.note_target_for_selector(&nb, &selector).await?;
-        let mut tx = self.transaction(Some(&nb)).await?;
+        let target = self
+            .note_target_for_selector(&selector, &notebook_path)
+            .await?;
+        let mut tx = self.transaction_in(&nb, notebook_path);
         tx.delete_folder(target, recursive)?;
         tx.commit().await
     }
@@ -117,10 +121,12 @@ impl NbClient {
         notebook: Option<&str>,
     ) -> Result<CommitOutcome, NbError> {
         validate_destination(destination)?;
-        let (nb, selector) =
+        let (nb, selector, notebook_path) =
             self.resolve_target_selector(id, notebook).await?;
-        let target = self.note_target_for_selector(&nb, &selector).await?;
-        let mut tx = self.transaction(Some(&nb)).await?;
+        let target = self
+            .note_target_for_selector(&selector, &notebook_path)
+            .await?;
+        let mut tx = self.transaction_in(&nb, notebook_path);
         tx.move_note(target, destination)?;
         tx.commit().await
     }
@@ -128,15 +134,16 @@ impl NbClient {
     /// Resolve a write one-shot selector to a [`NoteTarget`]:
     /// direct filesystem hit first, else the native pinned table
     /// (numeric id, then root title) inside one no-ensure gate hold.
-    /// Spawns zero `nb` subprocesses; notebook existence is ensured
-    /// upstream by the caller. Missing inputs are terminal
+    /// Spawns zero `nb` subprocesses; the store `root` is pinned by
+    /// the caller (no re-resolution: the selector and the later
+    /// transaction must share one store); notebook existence is
+    /// ensured upstream by the caller. Missing inputs are terminal
     /// `NotFound` with the original selector.
     async fn note_target_for_selector(
         &self,
-        notebook: &str,
         selector: &str,
+        root: &std::path::Path,
     ) -> Result<NoteTarget, NbError> {
-        let root = self.show_notebook_path_unguarded(Some(notebook)).await?;
         let stripped = selector
             .rsplit_once(':')
             .map(|(_, rest)| rest)
@@ -147,13 +154,13 @@ impl NbClient {
         // Lexically confined exact hit first (symlinks never
         // followed); anything else goes through the pinned table
         // inside one gate hold.
-        match crate::native::resolve_exact(&root, stripped) {
+        match crate::native::resolve_exact(root, stripped) {
             Ok(rel) => return Ok(NoteTarget::path(rel)),
             Err(NbError::NotFound { .. }) => {},
             Err(other) => return Err(other),
         }
-        self.with_notebook_gate_native(&root, async {
-            let rel = crate::native::resolve_selector(&root, stripped)
+        self.with_notebook_gate_native(root, async {
+            let rel = crate::native::resolve_selector(root, stripped)
                 .map_err(|e| match e {
                     NbError::NotFound { .. } => NbError::NotFound {
                         selector: selector.to_string(),
@@ -191,10 +198,12 @@ impl NbClient {
         task_number: Option<u32>,
         notebook: Option<&str>,
     ) -> Result<CommitOutcome, NbError> {
-        let (nb, selector) =
+        let (nb, selector, notebook_path) =
             self.resolve_target_selector(id, notebook).await?;
-        let target = self.note_target_for_selector(&nb, &selector).await?;
-        let mut tx = self.transaction(Some(&nb)).await?;
+        let target = self
+            .note_target_for_selector(&selector, &notebook_path)
+            .await?;
+        let mut tx = self.transaction_in(&nb, notebook_path);
         tx.mark_task_done(target, task_number)?;
         tx.commit().await
     }
@@ -206,10 +215,12 @@ impl NbClient {
         task_number: Option<u32>,
         notebook: Option<&str>,
     ) -> Result<CommitOutcome, NbError> {
-        let (nb, selector) =
+        let (nb, selector, notebook_path) =
             self.resolve_target_selector(id, notebook).await?;
-        let target = self.note_target_for_selector(&nb, &selector).await?;
-        let mut tx = self.transaction(Some(&nb)).await?;
+        let target = self
+            .note_target_for_selector(&selector, &notebook_path)
+            .await?;
+        let mut tx = self.transaction_in(&nb, notebook_path);
         tx.unmark_task_done(target, task_number)?;
         tx.commit().await
     }
@@ -306,7 +317,7 @@ impl NbClient {
         notebook: Option<&str>,
     ) -> Result<String, NbError> {
         validate_folder_option(folder)?;
-        let notebook = self.resolve_notebook(notebook).await?;
+        let (notebook, _root) = self.resolve_notebook(notebook).await?;
         let folder = folder.map(normalize_folder);
         let scopes = if recursive {
             self.tasks_scopes_recursive(&notebook, folder.as_deref())
@@ -577,7 +588,7 @@ impl NbClient {
         let mut args = vec!["list".to_string()];
         validate_folder_option(parent)?;
 
-        let notebook = self.resolve_notebook(notebook).await?;
+        let (notebook, _root) = self.resolve_notebook(notebook).await?;
         let path = match parent {
             Some(p) => format!("{}:{}/", notebook, p),
             None => format!("{}:", notebook),
@@ -652,6 +663,13 @@ impl NbClient {
     /// Containment waits on 0.5.0 (native import with proper
     /// locking); meanwhile the commit guard absorbs index-only
     /// droppings and note-content leftovers still refuse loudly.
+    ///
+    /// Deferred route: the gate below is held on the pinned root,
+    /// but the `nb import` subprocess resolves the store itself
+    /// (inheriting the process environment, including its own rc
+    /// sourcing). In `IgnoreNbrc` mode the two resolutions can
+    /// disagree; full pinning of the nb-backed path is deferred
+    /// work, not part of this change.
     pub async fn import_note(
         &self,
         source: &str,
@@ -664,8 +682,8 @@ impl NbClient {
         self.require_folder_for_new_note(folder)?;
         validate_folder_option(folder)?;
 
-        let notebook = self.resolve_notebook(notebook).await?;
-        self.with_notebook_gate(&notebook, async {
+        let (notebook, root) = self.resolve_notebook(notebook).await?;
+        self.with_notebook_gate_native(&root, async {
             let cmd = format!("{}:import", notebook);
             args.push(cmd);
             args.push(source.to_string());

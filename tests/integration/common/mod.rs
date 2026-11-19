@@ -76,6 +76,7 @@ exec "${REAL_NB:-__REAL_NB__}" "$@"
 const ENV_VARS_OF_INTEREST: &[&str] = &[
     "NB_DIR",
     "HOME",
+    "NBRC_PATH",
     "GIT_DIR",
     "GIT_INDEX_FILE",
     "GIT_COMMON_DIR",

@@ -16,7 +16,9 @@ use crate::transaction::Transaction;
 use crate::validate::{parse_qualified_selector, validate_notebook_name};
 use crate::{Config, NbClient};
 
-use super::lifecycle::{ensure_notebook_dir, notebook_dir_from_env};
+use super::lifecycle::{
+    ensure_notebook_dir_at, notebook_dir_from_env_at, notebook_root_dir,
+};
 
 /// Regex to match ANSI/ISO 2022 escape sequences.
 ///
@@ -51,6 +53,8 @@ impl NbClient {
             default_notebook,
             create_notebook: config.create_notebook,
             disable_git_signing: config.disable_git_signing,
+            nbrc_mode: config.nbrc_mode,
+            require_explicit_nb_dir: config.require_explicit_nb_dir,
             allow_top_level_notes: config.allow_top_level_notes,
             gate_timeout: config.gate_timeout,
         })
@@ -65,43 +69,33 @@ impl NbClient {
     ) -> Result<Transaction, NbError> {
         let notebook = self.resolve_notebook_name(notebook)?;
         // Native ensure converges on concurrent creators and refuses
-        // cleanly; no subprocess runs on this path.
-        self.ensure_notebook(&notebook).await?;
-        Ok(Transaction::new(self.clone(), notebook, self.gate_timeout))
+        // cleanly; no subprocess runs on this path. The resolved
+        // root is pinned in the transaction: commit must not
+        // re-resolve.
+        let root = self.ensure_notebook(&notebook).await?;
+        Ok(Transaction::new(notebook, root, self.gate_timeout))
+    }
+
+    /// Begin a [`Transaction`] against an already-ensured notebook
+    /// root: no discovery, no second resolution. The caller must
+    /// have ensured this exact root (e.g. via
+    /// [`Self::resolve_target_selector`]); the transaction pins it
+    /// through commit.
+    pub(super) fn transaction_in(
+        &self,
+        notebook: &str,
+        notebook_path: PathBuf,
+    ) -> Transaction {
+        Transaction::new(
+            notebook.to_string(),
+            notebook_path,
+            self.gate_timeout,
+        )
     }
 
     /// Process-shared gate queue timeout configured on this client.
     pub fn gate_timeout(&self) -> std::time::Duration {
         self.gate_timeout
-    }
-
-    /// Notebook path without acquiring the notebook gate (caller holds gate or
-    /// is still resolving identity). Pure `NB_DIR` probe; never
-    /// creates, ensures, or spawns `nb`. Present-but-not-ready
-    /// entries surface the genuine git failure instead of reading
-    /// as absent.
-    pub(crate) async fn show_notebook_path_unguarded(
-        &self,
-        notebook: Option<&str>,
-    ) -> Result<PathBuf, NbError> {
-        let notebook = self.resolve_notebook_name(notebook)?;
-        notebook_dir_from_env(&notebook)
-            .await?
-            .ok_or(NbError::NotFound {
-                selector: format!("{notebook}:"),
-            })
-    }
-
-    pub(super) async fn with_notebook_gate<F, T>(
-        &self,
-        notebook: &str,
-        f: F,
-    ) -> Result<T, NbError>
-    where
-        F: std::future::Future<Output = Result<T, NbError>>,
-    {
-        let root = self.show_notebook_path_unguarded(Some(notebook)).await?;
-        self.with_notebook_gate_native(&root, f).await
     }
 
     /// Gate hold over an already-resolved notebook root: no
@@ -159,7 +153,7 @@ impl NbClient {
         &self,
         id: &str,
         notebook: Option<&str>,
-    ) -> Result<(String, String), NbError> {
+    ) -> Result<(String, String, PathBuf), NbError> {
         if let Some((embedded_notebook, path)) = parse_qualified_selector(id)?
         {
             let notebook = match notebook {
@@ -177,11 +171,15 @@ impl NbClient {
                 },
                 _ => embedded_notebook.to_string(),
             };
-            self.ensure_existing_notebook(&notebook).await?;
-            return Ok((notebook, format!("{}:{}", embedded_notebook, path)));
+            let root = self.ensure_existing_notebook(&notebook).await?;
+            return Ok((
+                notebook,
+                format!("{}:{}", embedded_notebook, path),
+                root,
+            ));
         }
-        let notebook = self.resolve_notebook(notebook).await?;
-        Ok((notebook.clone(), format!("{}:{}", notebook, id)))
+        let (notebook, root) = self.resolve_notebook(notebook).await?;
+        Ok((notebook.clone(), format!("{}:{}", notebook, id), root))
     }
 
     pub(super) fn append_notebook_warning(
@@ -227,20 +225,26 @@ impl NbClient {
     pub(super) async fn resolve_notebook(
         &self,
         notebook: Option<&str>,
-    ) -> Result<String, NbError> {
+    ) -> Result<(String, PathBuf), NbError> {
         let name = self.resolve_notebook_name(notebook)?;
-        self.ensure_notebook(&name).await?;
-        Ok(name)
+        let root = self.ensure_notebook(&name).await?;
+        Ok((name, root))
     }
 
     /// Ensures the notebook exists, creating it natively when allowed.
+    /// The store root, resolved exactly once per call. Every
+    /// ensure/create/existence check in an operation must derive
+    /// from this root (via the `_at` variants), never re-resolve.
+    pub(super) async fn resolve_store_root(&self) -> Result<PathBuf, NbError> {
+        notebook_root_dir(self.nbrc_mode, self.require_explicit_nb_dir).await
+    }
+
     pub(super) async fn ensure_notebook(
         &self,
         notebook: &str,
-    ) -> Result<(), NbError> {
-        ensure_notebook_dir(notebook, self.create_notebook)
-            .await
-            .map(|_| ())
+    ) -> Result<PathBuf, NbError> {
+        let root = self.resolve_store_root().await?;
+        ensure_notebook_dir_at(&root, notebook, self.create_notebook).await
     }
 
     /// Ensures the notebook exists without creating it; a missing
@@ -250,13 +254,13 @@ impl NbClient {
     pub(super) async fn ensure_existing_notebook(
         &self,
         notebook: &str,
-    ) -> Result<(), NbError> {
-        notebook_dir_from_env(notebook)
-            .await?
-            .ok_or(NbError::NotFound {
+    ) -> Result<PathBuf, NbError> {
+        let root = self.resolve_store_root().await?;
+        notebook_dir_from_env_at(&root, notebook).await?.ok_or(
+            NbError::NotFound {
                 selector: format!("{notebook}:"),
-            })?;
-        Ok(())
+            },
+        )
     }
 
     /// Executes an nb command and returns stdout.

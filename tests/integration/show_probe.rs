@@ -704,14 +704,17 @@ async fn show_note_qualified_selector_nonexistent_notebook_propagates_typed_not_
 async fn show_notebook_path_without_nb_dir_refuses_natively() {
     let env = NbTestEnv::new().expect("fixture initialization");
     with_isolated_env(&env, false, || async {
-        // Drop NB_DIR so discovery finds nothing: resolution
-        // must refuse natively. Restored by the harness on exit.
+        // Drop NB_DIR so discovery finds nothing: strict
+        // resolution must refuse natively (non-strict would fall
+        // back to the default store instead). Restored by the
+        // harness on exit.
         // SAFETY: serialized by ENV_LOCK; restored on drop.
         unsafe { std::env::remove_var("NB_DIR") };
         let client = NbClient::new(&Config {
             notebook: Some(env.notebook().to_string()),
             create_notebook: false,
             allow_top_level_notes: true,
+            require_explicit_nb_dir: true,
             ..Config::default()
         })
         .expect("client construction");
