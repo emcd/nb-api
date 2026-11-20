@@ -6,20 +6,21 @@
 
 **Goals:**
 
-- One control (`ResolutionMode`) governs store resolution; unset `NB_DIR` uniformly falls back to `~/.nb`.
+- One control (`ResolutionMode`) governs store resolution; after mode-specific resolution, a still-unselected store falls back to `~/.nb` when home is computable.
 - Remove the public `Config.require_explicit_nb_dir` field and every `strict` parameter.
 
 **Non-Goals:**
 
 - No replacement refusal mechanism (explicitly declined by the operator).
-- No changes to the three resolution modes' semantics.
-- No spec changes (no spec pins this behavior).
+- No change to how each mode resolves a configured or rc-supplied store, how rc failures surface, or how uncomputable fallbacks and non-directory selections fail. Only the unset-with-nothing-selected outcome changes.
+- No spec changes beyond the added `nbrc-resolution` contract.
 
 ## Decisions
 
 - **Delete the strict arm, keep the Ignore arm as-is.** The strict arm was `Ignore` + refusal; deleting it leaves the existing `IgnoreNbrc` arm (preset-or-default) as the only unset-handling. No merge of behaviors, no new branches.
-- **Remove parameters, don't deprecate.** Pre-1.0 policy forbids compat shims; the field default was `false`, so default-constructed callers are behaviorally unaffected and only explicit `require_explicit_nb_dir: true` users break at compile time with a clear error.
-- **Update the three integration users in place** (`show_probe.rs`, `native_nbrc.rs`, `native_reads_guard.rs`) rather than deleting their tests: their coverage (probe behavior, NBRC matrix, guard refusal) remains valid under default resolution; only the strict setup goes away.
+- **Remove parameters, don't deprecate.** Pre-1.0 policy forbids compat shims; the field default was `false`, so default-constructed callers are behaviorally unaffected. Any use of the field breaks at compile time with a clear error — even a `false` literal, since the field no longer exists.
+- **Update the three integration users in place** (`show_probe.rs`, `native_nbrc.rs`, `native_reads_guard.rs`): remove the field literal entirely (even `false` breaks once the field is gone) and repurpose strict-only assertions into default-fallback assertions.
+- **Supersede, don't duplicate, the cutover matrix.** The in-flight `complete-native-cutover` lifecycle spec said unset `NB_DIR` fails fast; amended at proposal stage (reviews/95) so the repo never holds two contradictory specs regardless of landing order. The nbspec-repo proposal needs its own follow-up (coordination task 3.2).
 
 ## Risks / Trade-offs
 

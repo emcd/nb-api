@@ -5,7 +5,7 @@ Native NBRC resolution now selects the store through the `ResolutionMode` enum (
 ## What Changes
 
 - **BREAKING**: Remove `Config.require_explicit_nb_dir` and all `strict: bool` resolution parameters (`resolve_nbrc_store`, `resolve_with`, `notebook_root_dir`).
-- Delete the strict short-circuit arm: with no `NB_DIR` set, every mode falls back to the `~/.nb` default store (the previous non-strict behavior).
+- Delete the strict short-circuit arm: after mode-specific resolution leaves the store unselected (no preset, rc absent or selecting nothing), resolution falls back to the `~/.nb` default when the home directory is computable. Rc-supplied stores, rc failures, uncomputable fallbacks, and selected-path validation are unchanged.
 - Update unit and integration tests that exercised strict (precedence-matrix strict cases, strict absolute-gate cases, the three integration users).
 - Update code comments that document strict semantics.
 
@@ -13,7 +13,7 @@ Native NBRC resolution now selects the store through the `ResolutionMode` enum (
 
 ### New Capabilities
 
-- `nbrc-resolution`: the store-resolution contract — unset `NB_DIR` resolves to the default store in every mode; no refusal mode exists.
+- `nbrc-resolution`: the store-resolution contract — after mode-specific resolution, a still-unselected store resolves to the default store when home is computable; no refusal mode exists.
 
 ### Modified Capabilities
 

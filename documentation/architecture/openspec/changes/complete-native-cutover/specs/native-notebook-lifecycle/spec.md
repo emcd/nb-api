@@ -62,10 +62,18 @@ A notebook SHALL be a `$NB_DIR/<name>` directory containing `.git` (the existing
 - **THEN** the system SHALL return a typed `Io` failure rather than treating it as absence
 
 ### Requirement: NB_DIR and create_notebook matrix
-`NB_DIR` unset or pointing at a non-directory SHALL be a configuration failure reported before any probe. Creation SHALL be explicit or write-path ensured per `Config.create_notebook`; reads SHALL never create.
+Store selection and its errors belong to NBRC resolution, which lifecycle delegates to; lifecycle validates the selected path (not the raw preset) before probing. `NB_DIR` pointing at a non-directory selection SHALL be a configuration failure. Creation SHALL be explicit or write-path ensured per `Config.create_notebook`; reads SHALL never create.
 
-#### Scenario: Missing NB_DIR fails fast
-- **WHEN** `NB_DIR` is unset or not a directory
+#### Scenario: Unset location delegates to NBRC
+- **WHEN** `NB_DIR` is unset
+- **THEN** lifecycle SHALL use the NBRC-resolved store — the default store, the rc-selected store, or NBRC's own error — instead of failing fast itself
+
+#### Scenario: Selected path is validated, not the raw preset
+- **WHEN** NBRC resolution selects a store (preset, rc-assigned, or default)
+- **THEN** lifecycle SHALL validate that selected path before probing anything beneath it
+
+#### Scenario: Non-directory selection fails fast
+- **WHEN** the selected store path points at a non-directory
 - **THEN** every notebook operation SHALL fail with a typed configuration failure before probing anything
 
 #### Scenario: Write path ensures when allowed

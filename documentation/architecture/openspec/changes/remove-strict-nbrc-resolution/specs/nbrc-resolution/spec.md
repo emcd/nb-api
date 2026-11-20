@@ -1,20 +1,30 @@
 ## ADDED Requirements
 
-### Requirement: Unset store location resolves to the default store
+### Requirement: No refusal for an unselected store
 
-Store resolution SHALL NOT offer a refusal mode. When `NB_DIR` is unset (or empty), every resolution mode SHALL resolve to the default store under the home directory instead of raising an error.
+Store resolution SHALL NOT offer a refusal mode. The absence of a configured store is never itself a failure: after successful mode-specific resolution, a still-unselected store resolves to the default store. Mode semantics are otherwise unchanged — an rc assignment in `ParseNbrc`/`EvaluateNbrc` wins, a failing rc still errors, an uncomputable fallback still errors, and the selected path is still validated before use.
 
-#### Scenario: Unset location with default mode
+#### Scenario: Rc supplies the store under Parse or Evaluate
 
-- **WHEN** `NB_DIR` is unset and the mode is `ParseNbrc`
-- **THEN** resolution returns the default store path
+- **WHEN** the mode is `ParseNbrc` or `EvaluateNbrc`, `NB_DIR` is unset, and the rc assigns a store
+- **THEN** resolution returns the rc-supplied store
 
-#### Scenario: Unset location with evaluation mode
+#### Scenario: Final unset or empty with computable HOME falls back
 
-- **WHEN** `NB_DIR` is unset and the mode is `EvaluateNbrc`
-- **THEN** resolution returns the default store path
+- **WHEN** the final value after mode-specific resolution is unset or empty and the home directory is computable
+- **THEN** resolution returns the default store instead of failing
 
-#### Scenario: Unset location with ignore mode
+#### Scenario: Failing rc still errors
 
-- **WHEN** `NB_DIR` is unset and the mode is `IgnoreNbrc`
-- **THEN** resolution returns the default store path
+- **WHEN** evaluation is opted in and the rc exits unsuccessfully
+- **THEN** resolution fails instead of falling back
+
+#### Scenario: Uncomputable fallback still errors
+
+- **WHEN** no store is selected and the home directory is undiscoverable
+- **THEN** resolution fails instead of inventing a default
+
+#### Scenario: Selected path is still validated
+
+- **WHEN** the selected store path points at a non-directory
+- **THEN** resolution fails with a typed configuration failure
