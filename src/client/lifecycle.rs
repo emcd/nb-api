@@ -18,16 +18,14 @@ pub(super) enum CreateMode {
 
 /// Central `NB_DIR` root: canonical directory or typed failure. The
 /// store is resolved per the caller-selected [`ResolutionMode`]
-/// (always parsing the rc when present, unless ignored or strict)
-/// and validated the same afterwards: a missing, unset,
-/// non-directory, or unresolvable root is a configuration failure;
-/// genuine I/O failures propagate instead of collapsing into
-/// absence.
+/// (always parsing the rc when present, unless ignored) and
+/// validated the same afterwards: a missing, non-directory, or
+/// unresolvable root is a configuration failure; genuine I/O
+/// failures propagate instead of collapsing into absence.
 pub(super) async fn notebook_root_dir(
     mode: ResolutionMode,
-    strict: bool,
 ) -> Result<PathBuf, NbError> {
-    let nb_dir = resolve_nbrc_store(mode, strict).await?;
+    let nb_dir = resolve_nbrc_store(mode).await?;
     match std::fs::metadata(&nb_dir) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             Err(NbError::ValidationError {
@@ -377,9 +375,8 @@ fn not_a_notebook(path: &Path) -> NbError {
 pub(super) async fn notebook_dir_from_env(
     notebook: &str,
     mode: ResolutionMode,
-    strict: bool,
 ) -> Result<Option<PathBuf>, NbError> {
-    let root = notebook_root_dir(mode, strict).await?;
+    let root = notebook_root_dir(mode).await?;
     notebook_dir_from_env_at(&root, notebook).await
 }
 

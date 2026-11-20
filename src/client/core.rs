@@ -54,7 +54,6 @@ impl NbClient {
             create_notebook: config.create_notebook,
             disable_git_signing: config.disable_git_signing,
             nbrc_mode: config.nbrc_mode,
-            require_explicit_nb_dir: config.require_explicit_nb_dir,
             allow_top_level_notes: config.allow_top_level_notes,
             gate_timeout: config.gate_timeout,
         })
@@ -236,7 +235,7 @@ impl NbClient {
     /// ensure/create/existence check in an operation must derive
     /// from this root (via the `_at` variants), never re-resolve.
     pub(super) async fn resolve_store_root(&self) -> Result<PathBuf, NbError> {
-        notebook_root_dir(self.nbrc_mode, self.require_explicit_nb_dir).await
+        notebook_root_dir(self.nbrc_mode).await
     }
 
     pub(super) async fn ensure_notebook(

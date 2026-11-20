@@ -697,24 +697,24 @@ async fn show_note_qualified_selector_nonexistent_notebook_propagates_typed_not_
 // ---------- show_notebook_path without NB_DIR ----------
 //
 // Native contract: path queries never spawn `nb`. With `NB_DIR`
-// unset, resolution fails closed with a typed configuration
-// failure instead of shelling out to the CLI.
+// unset, resolution falls back to the default store; a notebook
+// absent there reports typed `NotFound`, never a refusal.
 
 #[tokio::test]
-async fn show_notebook_path_without_nb_dir_refuses_natively() {
+async fn show_notebook_path_without_nb_dir_uses_default_store() {
     let env = NbTestEnv::new().expect("fixture initialization");
     with_isolated_env(&env, false, || async {
-        // Drop NB_DIR so discovery finds nothing: strict
-        // resolution must refuse natively (non-strict would fall
-        // back to the default store instead). Restored by the
-        // harness on exit.
+        // Drop NB_DIR so resolution falls back to the default
+        // store: no refusal, no shell-out to the CLI. Restored by
+        // the harness on exit.
         // SAFETY: serialized by ENV_LOCK; restored on drop.
         unsafe { std::env::remove_var("NB_DIR") };
+        std::fs::create_dir_all(env.home_dir().join(".nb"))
+            .expect("default store exists");
         let client = NbClient::new(&Config {
             notebook: Some(env.notebook().to_string()),
             create_notebook: false,
             allow_top_level_notes: true,
-            require_explicit_nb_dir: true,
             ..Config::default()
         })
         .expect("client construction");
@@ -722,16 +722,11 @@ async fn show_notebook_path_without_nb_dir_refuses_natively() {
         let err = client
             .show_notebook_path(Some(env.notebook()))
             .await
-            .expect_err("missing NB_DIR must refuse");
+            .expect_err("notebook is absent from the default store");
         match err {
-            NbError::ValidationError { reason, .. } => {
-                assert!(
-                    reason.contains("not configured"),
-                    "unexpected reason: {reason:?}"
-                );
-            },
+            NbError::NotFound { .. } => {},
             other => {
-                panic!("expected ValidationError, got: {other:?}");
+                panic!("expected NotFound, got: {other:?}");
             },
         }
     })

@@ -19,6 +19,16 @@ Store resolution SHALL NOT offer a refusal mode. The absence of a configured sto
 - **WHEN** evaluation is opted in and the rc exits unsuccessfully
 - **THEN** resolution fails instead of falling back
 
+#### Scenario: Undeterminable Parse content warns and falls back
+
+- **WHEN** the mode is `ParseNbrc`, the rc carries content undeterminable without execution, and the home directory is computable
+- **THEN** resolution warns and returns the default store instead of guessing
+
+#### Scenario: Readable rc leaves preset unchanged without ambiguity
+
+- **WHEN** the mode is `ParseNbrc`, the rc is readable and leaves the preset unchanged without ambiguity (absent, empty, or assigning nothing determinable — as distinct from an explicit unset or empty assignment, which clears), and a non-empty preset is set
+- **THEN** resolution returns the preset with no warning
+
 #### Scenario: Uncomputable fallback still errors
 
 - **WHEN** no store is selected and the home directory is undiscoverable

@@ -60,9 +60,7 @@ impl NbClient {
     /// A mid-initialization notebook is skipped until ready.
     pub async fn list_notebook_names(&self) -> Result<Vec<String>, NbError> {
         let _g = gate::acquire_global(self.gate_timeout).await?;
-        let root =
-            notebook_root_dir(self.nbrc_mode, self.require_explicit_nb_dir)
-                .await?;
+        let root = notebook_root_dir(self.nbrc_mode).await?;
         let mut names = Vec::new();
         let entries = std::fs::read_dir(&root).map_err(|e| NbError::Io {
             path: root.clone(),
@@ -218,13 +216,7 @@ impl NbClient {
         &self,
         notebook: &str,
     ) -> Result<PathBuf, NbError> {
-        match notebook_dir_from_env(
-            notebook,
-            self.nbrc_mode,
-            self.require_explicit_nb_dir,
-        )
-        .await?
-        {
+        match notebook_dir_from_env(notebook, self.nbrc_mode).await? {
             Some(path) => Ok(path),
             None => Err(NbError::NotFound {
                 selector: format!("{notebook}:"),

@@ -396,9 +396,9 @@ fn write_rc(home: &std::path::Path, body: &str) -> PathBuf {
     path
 }
 
-/// Resolution precedence matrix (ParseNbrc default): strict
-/// short-circuits, explicit paths are enforced, presets flow
-/// through, undeterminable content warns + defaults.
+/// Resolution precedence matrix (ParseNbrc default): explicit
+/// paths are enforced, presets flow through, undeterminable
+/// content warns + defaults, and absence falls back to `~/.nb`.
 #[tokio::test]
 async fn resolve_precedence_matrix() {
     let home = scratch_home("precedence");
@@ -410,7 +410,6 @@ async fn resolve_precedence_matrix() {
     // Preset survives a self-default rc (always-parse proof).
     let got = resolve_with(
         ResolutionMode::ParseNbrc,
-        false,
         some("/stores/env"),
         home_opt.clone(),
         none.clone(),
@@ -423,7 +422,6 @@ async fn resolve_precedence_matrix() {
     write_rc(&home, "NB_DIR=/stores/override\n");
     let got = resolve_with(
         ResolutionMode::ParseNbrc,
-        false,
         some("/stores/env"),
         home_opt.clone(),
         none.clone(),
@@ -436,7 +434,6 @@ async fn resolve_precedence_matrix() {
     write_rc(&home, "unset NB_DIR\n");
     let got = resolve_with(
         ResolutionMode::ParseNbrc,
-        false,
         some("/stores/env"),
         home_opt.clone(),
         none.clone(),
@@ -449,7 +446,6 @@ async fn resolve_precedence_matrix() {
     std::fs::remove_file(&rc).expect("remove rc");
     let got = resolve_with(
         ResolutionMode::ParseNbrc,
-        false,
         some("/stores/env"),
         home_opt.clone(),
         none.clone(),
@@ -458,32 +454,9 @@ async fn resolve_precedence_matrix() {
     .expect("preset without rc");
     assert_eq!(got, PathBuf::from("/stores/env"));
 
-    // Strict ignores the rc entirely (even a present one).
-    write_rc(&home, "NB_DIR=/stores/override\n");
-    let got = resolve_with(
-        ResolutionMode::ParseNbrc,
-        true,
-        some("/stores/env"),
-        home_opt.clone(),
-        none.clone(),
-    )
-    .await
-    .expect("strict preset resolves");
-    assert_eq!(got, PathBuf::from("/stores/env"));
-    resolve_with(
-        ResolutionMode::ParseNbrc,
-        true,
-        none.clone(),
-        home_opt.clone(),
-        none.clone(),
-    )
-    .await
-    .expect_err("strict unset refuses");
-
     // IgnoreNbrc never reads the rc either.
     let got = resolve_with(
         ResolutionMode::IgnoreNbrc,
-        false,
         some("/stores/env"),
         home_opt.clone(),
         none.clone(),
@@ -505,7 +478,6 @@ async fn resolve_explicit_rc_path() {
     let missing = home.join("no-such-rc");
     resolve_with(
         ResolutionMode::ParseNbrc,
-        false,
         none.clone(),
         home_opt.clone(),
         some(missing.to_str().unwrap()),
@@ -516,7 +488,6 @@ async fn resolve_explicit_rc_path() {
     // Explicit relative path is rejected.
     resolve_with(
         ResolutionMode::ParseNbrc,
-        false,
         none.clone(),
         home_opt.clone(),
         some("relative/.nbrc"),
@@ -528,7 +499,6 @@ async fn resolve_explicit_rc_path() {
     let rc = write_rc(&home, "NB_DIR=relative/path\n");
     let got = resolve_with(
         ResolutionMode::ParseNbrc,
-        false,
         none.clone(),
         home_opt.clone(),
         some(rc.to_str().unwrap()),
@@ -539,7 +509,6 @@ async fn resolve_explicit_rc_path() {
     // Unreadable rc (a directory) warns and behaves as absent.
     let got = resolve_with(
         ResolutionMode::ParseNbrc,
-        false,
         some("/stores/env"),
         home_opt.clone(),
         some(home.to_str().unwrap()),
@@ -551,7 +520,6 @@ async fn resolve_explicit_rc_path() {
     // Missing HOME with preset resolves without a default.
     let got = resolve_with(
         ResolutionMode::ParseNbrc,
-        false,
         some("/stores/env"),
         None,
         none.clone(),
@@ -561,15 +529,9 @@ async fn resolve_explicit_rc_path() {
     assert_eq!(got, PathBuf::from("/stores/env"));
 
     // Missing HOME without preset cannot compute a default.
-    resolve_with(
-        ResolutionMode::ParseNbrc,
-        false,
-        none.clone(),
-        None,
-        none.clone(),
-    )
-    .await
-    .expect_err("no HOME and no preset errors");
+    resolve_with(ResolutionMode::ParseNbrc, none.clone(), None, none.clone())
+        .await
+        .expect_err("no HOME and no preset errors");
 }
 
 /// `EvaluateNbrc` sources the rc for real (opted-in execution),
@@ -585,7 +547,6 @@ async fn resolve_evaluate_mode() {
     let rc = write_rc(&home, "NB_DIR=$(echo /stores/eval)\n");
     let got = resolve_with(
         ResolutionMode::EvaluateNbrc,
-        false,
         none.clone(),
         home_opt.clone(),
         some(rc.to_str().unwrap()),
@@ -597,7 +558,6 @@ async fn resolve_evaluate_mode() {
     // The same rc falls back under Parse.
     let got = resolve_with(
         ResolutionMode::ParseNbrc,
-        false,
         none.clone(),
         home_opt.clone(),
         some(rc.to_str().unwrap()),
@@ -610,7 +570,6 @@ async fn resolve_evaluate_mode() {
     let rc = write_rc(&home, "NB_DIR=/stores/nope\nexit 1\n");
     resolve_with(
         ResolutionMode::EvaluateNbrc,
-        false,
         none.clone(),
         home_opt.clone(),
         some(rc.to_str().unwrap()),
@@ -622,7 +581,6 @@ async fn resolve_evaluate_mode() {
     let rc = write_rc(&home, "export NB_DIR=\"${NB_DIR:-/stores/fb}\"\n");
     let got = resolve_with(
         ResolutionMode::EvaluateNbrc,
-        false,
         some("/stores/seed"),
         home_opt.clone(),
         some(rc.to_str().unwrap()),
@@ -634,9 +592,9 @@ async fn resolve_evaluate_mode() {
 
 /// `EvaluateNbrc` hardening: top-level `return` gets a real source
 /// frame, `exec` is unregistered (process replacement refused),
-/// and strict/Ignore presets face the same absolute-path gate.
+/// and Ignore/Parse presets face the same absolute-path gate.
 #[tokio::test]
-async fn evaluate_hardening_and_strict_absolute() {
+async fn evaluate_hardening_and_absolute_gate() {
     let home = scratch_home("hardening");
     let home_opt = Some(home.clone());
     let none: Option<std::ffi::OsString> = None;
@@ -650,7 +608,6 @@ async fn evaluate_hardening_and_strict_absolute() {
     // NOTE: `return` ends sourcing; the late assignment never runs.
     let got = resolve_with(
         ResolutionMode::EvaluateNbrc,
-        false,
         none.clone(),
         home_opt.clone(),
         some(rc.to_str().unwrap()),
@@ -663,7 +620,6 @@ async fn evaluate_hardening_and_strict_absolute() {
     let rc = write_rc(&home, "NB_DIR=/stores/x\nexec echo hi\n");
     resolve_with(
         ResolutionMode::EvaluateNbrc,
-        false,
         none.clone(),
         home_opt.clone(),
         some(rc.to_str().unwrap()),
@@ -677,7 +633,6 @@ async fn evaluate_hardening_and_strict_absolute() {
         write_rc(&home, "NB_DIR=/stores/early\nexit 0\nNB_DIR=/stores/late\n");
     let got = resolve_with(
         ResolutionMode::EvaluateNbrc,
-        false,
         none.clone(),
         home_opt.clone(),
         some(rc.to_str().unwrap()),
@@ -691,7 +646,6 @@ async fn evaluate_hardening_and_strict_absolute() {
         let rc = write_rc(&home, body);
         resolve_with(
             ResolutionMode::EvaluateNbrc,
-            false,
             none.clone(),
             home_opt.clone(),
             some(rc.to_str().unwrap()),
@@ -700,15 +654,13 @@ async fn evaluate_hardening_and_strict_absolute() {
         .expect_err("host-state builtin must be absent");
     }
 
-    // Strict and Ignore presets face the absolute-path gate too.
+    // Ignore and Parse presets face the absolute-path gate too.
     // (Fresh home: the rc files written above must not interfere.)
     let clean = scratch_home("hardening-clean");
     let clean_opt = Some(clean);
     for mode in [ResolutionMode::IgnoreNbrc, ResolutionMode::ParseNbrc] {
-        let strict = mode == ResolutionMode::IgnoreNbrc;
         resolve_with(
             mode,
-            strict,
             some("relative/path"),
             clean_opt.clone(),
             none.clone(),
@@ -719,7 +671,6 @@ async fn evaluate_hardening_and_strict_absolute() {
     // ...but absolute presets still resolve.
     let got = resolve_with(
         ResolutionMode::IgnoreNbrc,
-        false,
         some("/stores/abs"),
         clean_opt,
         none.clone(),

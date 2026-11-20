@@ -442,18 +442,17 @@ async fn native_backslash_traversal_is_platform_scoped() {
     .await;
 }
 
-/// A missing `NB_DIR` fails closed in strict mode without
-/// spawning or creating anything: reads report a typed
-/// configuration failure, never a fabricated missing-notebook
-/// result. (Non-strict resolution falls back to the default
-/// store instead; strict preserves the old fail-closed contract.)
+/// A missing `NB_DIR` resolves through the default store without
+/// spawning or creating anything: reads report the typed
+/// missing-notebook result, never a fabricated configuration
+/// failure and never a fabricated note.
 #[tokio::test]
-async fn native_reads_fail_closed_without_nb_dir() {
+async fn native_reads_resolve_default_without_nb_dir() {
     let env = NbTestEnv::new().expect("fixture");
     with_isolated_env(&env, false, || async {
-        let mut cfg = config_for(&env);
-        cfg.require_explicit_nb_dir = true;
-        let native = NbClient::new(&cfg).expect("native");
+        let native = NbClient::new(&config_for(&env)).expect("native");
+        std::fs::create_dir_all(env.home_dir().join(".nb"))
+            .expect("default store exists");
         // `with_isolated_env` already serializes process env and
         // restores it on exit; removal needs no extra guard.
         // SAFETY: restored by `with_isolated_env` on exit.
@@ -463,14 +462,14 @@ async fn native_reads_fail_closed_without_nb_dir() {
             native
                 .show_note("whatever", None)
                 .await
-                .expect_err("no NB_DIR must fail")
+                .expect_err("notebook is absent from the default store")
         );
         assert!(
-            err.contains("ValidationError") && err.contains("not configured"),
-            "missing root is a configuration failure: {err:?}"
+            err.contains("NotFound") && !err.contains("not configured"),
+            "missing notebook is a typed NotFound: {err:?}"
         );
         assert!(
-            !env.nb_dir().join("no-such-notebook").exists(),
+            !env.home_dir().join(".nb").join(env.notebook()).exists(),
             "no notebook may materialize"
         );
     })

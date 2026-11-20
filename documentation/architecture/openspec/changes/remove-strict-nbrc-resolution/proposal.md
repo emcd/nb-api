@@ -17,10 +17,10 @@ Native NBRC resolution now selects the store through the `ResolutionMode` enum (
 
 ### Modified Capabilities
 
-None — no existing local spec pins strict behavior (verified by sweep); the nbspec-repo proposal that originally specified strict lives outside this repo and will need its own follow-up there.
+None — no committed local spec pinned strict behavior. The in-flight `complete-native-cutover` lifecycle matrix did (unset fails fast); amended at proposal stage (reviews/95) and reframed to NBRC delegation (reviews/96), so no two specs contradict. The nbspec-repo proposal that originally specified strict lives outside this repo and needs its own follow-up (tracked below).
 
 ## Impact
 
-- `Config` loses a public field; `NbClient` loses the corresponding internal field. Any downstream caller setting `require_explicit_nb_dir: true` fails to compile and must decide its own unset-`NB_DIR` handling (check before constructing the client).
+- `Config` loses a public field; `NbClient` loses the corresponding internal field. Any downstream use of the `require_explicit_nb_dir` field literal — even `false` — fails to compile and must be deleted by the caller, which must then decide its own unset-`NB_DIR` handling (fall back, or check before constructing the client).
 - Default behavior is unchanged (`require_explicit_nb_dir` defaulted to `false`).
 - Pre-1.0: no compat shim per project policy.

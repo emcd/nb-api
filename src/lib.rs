@@ -76,9 +76,6 @@ pub struct Config {
     /// How the notebook store is resolved from the environment and
     /// `~/.nbrc` (default: parse the rc when present, never execute).
     pub nbrc_mode: ResolutionMode,
-    /// Refuse to resolve when `NB_DIR` is unset instead of falling
-    /// back to the parsed rc value or `~/.nb`.
-    pub require_explicit_nb_dir: bool,
     /// Maximum time to wait on the process-shared gate queue.
     pub gate_timeout: Duration,
 }
@@ -91,7 +88,6 @@ impl Default for Config {
             allow_top_level_notes: false,
             disable_git_signing: false,
             nbrc_mode: ResolutionMode::default(),
-            require_explicit_nb_dir: false,
             gate_timeout: gate::DEFAULT_GATE_TIMEOUT,
         }
     }
@@ -109,9 +105,6 @@ pub struct NbClient {
     /// How the notebook store is resolved from the environment and
     /// `~/.nbrc` (default: parse the rc when present, never execute).
     nbrc_mode: ResolutionMode,
-    /// Refuse to resolve when `NB_DIR` is unset instead of falling
-    /// back to the parsed rc value or `~/.nb`.
-    require_explicit_nb_dir: bool,
     /// Allow new notes to be created at notebook root.
     allow_top_level_notes: bool,
     /// Gate queue timeout.

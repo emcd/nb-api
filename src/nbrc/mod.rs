@@ -178,12 +178,11 @@ fn default_store(home: Option<&Path>) -> Result<PathBuf, NbError> {
 /// code, inside its private shell.
 pub(crate) async fn resolve_nbrc_store(
     mode: ResolutionMode,
-    strict: bool,
 ) -> Result<PathBuf, NbError> {
     let raw_explicit = std::env::var_os("NB_DIR");
     let home = home_dir();
     let nbrc_path = std::env::var_os("NBRC_PATH");
-    resolve_with(mode, strict, raw_explicit, home, nbrc_path).await
+    resolve_with(mode, raw_explicit, home, nbrc_path).await
 }
 
 /// Resolve against explicit inputs (pure apart from rc file I/O
@@ -192,49 +191,14 @@ pub(crate) async fn resolve_nbrc_store(
 /// unit-testable without mutating process state.
 pub(crate) async fn resolve_with(
     mode: ResolutionMode,
-    strict: bool,
     raw_explicit: Option<std::ffi::OsString>,
     home: Option<PathBuf>,
     nbrc_path: Option<std::ffi::OsString>,
 ) -> Result<PathBuf, NbError> {
-    // Strict short-circuits to Ignore semantics before anything
-    // else: the rc is never consulted, not even for existence.
-    let effective = if strict {
-        ResolutionMode::IgnoreNbrc
-    } else {
-        mode
-    };
-    if strict {
-        // Strict short-circuits to Ignore semantics: the rc is
-        // never consulted. The absolute-path gate below still
-        // applies — strict is not an exemption from it.
-        match raw_explicit.filter(|v| !v.is_empty()) {
-            Some(dir) => {
-                let store = PathBuf::from(dir);
-                if !store.is_absolute() {
-                    return Err(NbError::ValidationError {
-                        reason: format!(
-                            "notebook store must be absolute, got `{}`",
-                            store.display()
-                        ),
-                        location: None,
-                    });
-                }
-                return Ok(store);
-            },
-            None => {
-                return Err(NbError::ValidationError {
-                    reason: "notebook store is not configured (`NB_DIR` is unset) and strict resolution refuses the file default"
-                        .to_string(),
-                    location: None,
-                });
-            },
-        }
-    }
     let home_path = home.as_deref();
     // Every arm below produces the store; the absolute-path gate
     // at the end covers all modes uniformly — no mode bypasses it.
-    let store = if effective == ResolutionMode::IgnoreNbrc {
+    let store = if mode == ResolutionMode::IgnoreNbrc {
         if let Some(dir) = raw_explicit.filter(|v| !v.is_empty()) {
             tracing::debug!("notebook store from explicit NB_DIR");
             PathBuf::from(dir)
@@ -290,7 +254,7 @@ pub(crate) async fn resolve_with(
                 },
             },
         };
-        match (effective, text) {
+        match (mode, text) {
             (_, None) => match starting.filter(|v| !v.is_empty()) {
                 Some(value) => PathBuf::from(value),
                 None => default_store(home_path)?,

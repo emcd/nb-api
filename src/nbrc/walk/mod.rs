@@ -854,17 +854,6 @@ fn default_has_nested_quoting(
         )
     })
 }
-/// Resolve the notebook store directory: explicit non-empty
-/// `NB_DIR` wins without any rc I/O; with `strict` set, an unset
-/// `NB_DIR` is a configuration failure instead. Otherwise read
-/// `$NBRC_PATH` (default `~/.nbrc`), falling back to `~/.nb` when
-/// the file is absent or carries no usable `NB_DIR` value.
-/// Undeterminable rc content (anything that would need execution
-/// to resolve) warns and falls back to `~/.nb` instead of guessing.
-/// Missing `HOME`, an unreadable rc file, or a relative rc value
-/// fails instead of resolving elsewhere. The returned directory may
-/// not exist; absence is reported downstream, never switched to
-/// another notebook.
 /// Whether `NB_DIR` appears as a standalone word (not inside a
 /// longer identifier such as `MY_NB_DIR`).
 fn mentions_nb_dir(code: &str) -> bool {

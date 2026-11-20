@@ -10,14 +10,13 @@ use nb_api::{Config, NbClient, ResolutionMode};
 
 use crate::common::with_isolated_env;
 
-fn config_for(env: &NbTestEnv, mode: ResolutionMode, strict: bool) -> Config {
+fn config_for(env: &NbTestEnv, mode: ResolutionMode) -> Config {
     Config {
         notebook: Some(env.notebook().to_string()),
         create_notebook: true,
         allow_top_level_notes: true,
         disable_git_signing: true,
         nbrc_mode: mode,
-        require_explicit_nb_dir: strict,
         ..Config::default()
     }
 }
@@ -37,7 +36,7 @@ async fn rc_selected_store_receives_create() {
         std::fs::create_dir_all(&picked).expect("picked store");
         write_nbrc(env.home_dir(), "export NB_DIR=\"$HOME/picked\"\n");
         let client =
-            NbClient::new(&config_for(&env, ResolutionMode::ParseNbrc, false))
+            NbClient::new(&config_for(&env, ResolutionMode::ParseNbrc))
                 .expect("client");
         let root = client
             .create_notebook(Some("rc-notebook"))
@@ -68,7 +67,7 @@ async fn preset_survives_self_default_rc() {
             "export NB_DIR=\"${NB_DIR:-/stores/ignored}\"\n",
         );
         let client =
-            NbClient::new(&config_for(&env, ResolutionMode::ParseNbrc, false))
+            NbClient::new(&config_for(&env, ResolutionMode::ParseNbrc))
                 .expect("client");
         let root = client
             .create_notebook(Some("env-notebook"))
@@ -83,24 +82,27 @@ async fn preset_survives_self_default_rc() {
     .await;
 }
 
-/// Strict mode refuses an unset `NB_DIR` without consulting the rc.
+/// No preset and no rc assignment falls back to the default store
+/// (ParseNbrc): absence is never a refusal.
 #[tokio::test]
-async fn strict_refuses_unset_without_reading_rc() {
+async fn unset_without_preset_falls_back_to_default() {
     let env = NbTestEnv::new_native().expect("native fixture");
     with_isolated_env(&env, false, || async {
         // SAFETY: serialized by with_isolated_env; restored on exit.
         unsafe { std::env::remove_var("NB_DIR") };
-        write_nbrc(env.home_dir(), "NB_DIR=/stores/never-read\n");
+        std::fs::create_dir_all(env.home_dir().join(".nb"))
+            .expect("default store exists");
         let client =
-            NbClient::new(&config_for(&env, ResolutionMode::ParseNbrc, true))
+            NbClient::new(&config_for(&env, ResolutionMode::ParseNbrc))
                 .expect("client");
-        let err = client
+        let root = client
             .create_notebook(Some("nope"))
             .await
-            .expect_err("strict unset must refuse");
-        assert!(
-            format!("{err:?}").contains("not configured"),
-            "unexpected error: {err:?}",
+            .expect("unset falls back to ~/.nb");
+        assert_eq!(
+            root,
+            env.home_dir().join(".nb").join("nope"),
+            "creation lands in the default store",
         );
     })
     .await;
@@ -116,12 +118,9 @@ async fn ignore_mode_skips_present_rc() {
         write_nbrc(env.home_dir(), "NB_DIR=/stores/never-read\n");
         std::fs::create_dir_all(env.home_dir().join(".nb"))
             .expect("default store exists");
-        let client = NbClient::new(&config_for(
-            &env,
-            ResolutionMode::IgnoreNbrc,
-            false,
-        ))
-        .expect("client");
+        let client =
+            NbClient::new(&config_for(&env, ResolutionMode::IgnoreNbrc))
+                .expect("client");
         let root = client
             .create_notebook(Some("default-notebook"))
             .await
@@ -146,12 +145,9 @@ async fn evaluate_mode_sources_rc() {
         let picked = env.home_dir().join("eval-picked");
         std::fs::create_dir_all(&picked).expect("picked store");
         write_nbrc(env.home_dir(), "NB_DIR=$(echo \"$HOME/eval-picked\")\n");
-        let client = NbClient::new(&config_for(
-            &env,
-            ResolutionMode::EvaluateNbrc,
-            false,
-        ))
-        .expect("client");
+        let client =
+            NbClient::new(&config_for(&env, ResolutionMode::EvaluateNbrc))
+                .expect("client");
         let root = client
             .create_notebook(Some("eval-notebook"))
             .await
