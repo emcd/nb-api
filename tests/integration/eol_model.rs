@@ -32,6 +32,26 @@ fn line_ref(line: &nb_api::NoteLine) -> LineRef {
     }
 }
 
+/// Postcondition probe for the Quasar pilot: the notebook is a
+/// resolvable-commit repo with a clean tree. Runs plain `git`
+/// (no client, no `nb`) — a postcondition, not a settle loop.
+fn assert_notebook_settled(env: &NbTestEnv) {
+    let root = env.nb_dir().join(env.notebook());
+    let head = git_capture(&root, &["rev-parse", "--verify", "HEAD^{commit}"]);
+    assert!(!head.trim().is_empty(), "HEAD peels to a commit");
+    let status = git_capture(&root, &["status", "--porcelain"]);
+    assert!(status.trim().is_empty(), "tree clean: {status:?}");
+}
+
+fn git_capture(dir: &std::path::Path, args: &[&str]) -> String {
+    let mut cmd = std::process::Command::new("git");
+    nb_api::scrub_git_env_std(&mut cmd);
+    cmd.current_dir(dir).args(args);
+    let out = cmd.output().expect("git");
+    assert!(out.status.success(), "git {args:?} failed: {out:?}");
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
 #[tokio::test]
 async fn lf_body_reports_document_eol() {
     let env = NbTestEnv::new().expect("fixture");
@@ -299,10 +319,16 @@ async fn replace_final_line_without_eol_normalizes() {
 
 #[tokio::test]
 async fn insert_appends_document_crlf() {
-    let env = NbTestEnv::new().expect("fixture");
+    // Quasar pilot (issues/13): native-behavior coverage on the
+    // hermetic fixture — setup runs synchronous git with no `nb`,
+    // and HEAD/clean-tree are asserted as postconditions. The
+    // Windows diagnostic run decides whether this restores
+    // un-gated native coverage for the family.
+    let env = NbTestEnv::hermetic().expect("native fixture");
     with_isolated_env(&env, false, || async {
         let client = NbClient::new(&config_for(&env)).expect("client");
         add_body(&client, "crlf.md", "a\r\nb\r\n").await;
+        assert_notebook_settled(&env);
         let lines = client
             .show_note_lines(
                 NoteTarget::path("crlf.md"),
@@ -328,6 +354,7 @@ async fn insert_appends_document_crlf() {
             .expect("insert");
         let shown = client.show_note("crlf.md", None).await.expect("show");
         assert_eq!(shown.body, "a\r\nx\r\nb\r\n");
+        assert_notebook_settled(&env);
     })
     .await;
 }
