@@ -396,13 +396,28 @@ fn write_rc(home: &std::path::Path, body: &str) -> PathBuf {
     path
 }
 
+/// Forward-slash rendering of an absolute path for embedding in rc
+/// bodies: unambiguous in shell text on every platform (Windows
+/// accepts `/` as a separator and never misreads it as an escape).
+fn fwd(path: &std::path::Path) -> String {
+    path.to_str()
+        .expect("scratch path is UTF-8")
+        .replace('\\', "/")
+}
+
 /// Resolution precedence matrix (ParseNbrc default): explicit
 /// paths are enforced, presets flow through, undeterminable
 /// content warns + defaults, and absence falls back to `~/.nb`.
 #[tokio::test]
 async fn resolve_precedence_matrix() {
     let home = scratch_home("precedence");
-    let rc = write_rc(&home, "export NB_DIR=\"${NB_DIR:-/stores/rc}\"\n");
+    let env_store = fwd(&home.join("stores-env"));
+    let rc_store = fwd(&home.join("stores-rc"));
+    let override_store = fwd(&home.join("stores-override"));
+    let rc = write_rc(
+        &home,
+        &format!("export NB_DIR=\"${{NB_DIR:-{rc_store}}}\"\n"),
+    );
     let home_opt = Some(home.clone());
     let none: Option<std::ffi::OsString> = None;
     let some = |v: &str| Some(std::ffi::OsString::from(v));
@@ -410,31 +425,31 @@ async fn resolve_precedence_matrix() {
     // Preset survives a self-default rc (always-parse proof).
     let got = resolve_with(
         ResolutionMode::ParseNbrc,
-        some("/stores/env"),
+        some(&env_store),
         home_opt.clone(),
         none.clone(),
     )
     .await
     .expect("preset resolves");
-    assert_eq!(got, PathBuf::from("/stores/env"));
+    assert_eq!(got, PathBuf::from(&env_store));
 
     // Unconditional rc assignment overrides the preset.
-    write_rc(&home, "NB_DIR=/stores/override\n");
+    write_rc(&home, &format!("NB_DIR={override_store}\n"));
     let got = resolve_with(
         ResolutionMode::ParseNbrc,
-        some("/stores/env"),
+        some(&env_store),
         home_opt.clone(),
         none.clone(),
     )
     .await
     .expect("override resolves");
-    assert_eq!(got, PathBuf::from("/stores/override"));
+    assert_eq!(got, PathBuf::from(&override_store));
 
     // Unset in rc clears the preset back to the default.
     write_rc(&home, "unset NB_DIR\n");
     let got = resolve_with(
         ResolutionMode::ParseNbrc,
-        some("/stores/env"),
+        some(&env_store),
         home_opt.clone(),
         none.clone(),
     )
@@ -446,30 +461,31 @@ async fn resolve_precedence_matrix() {
     std::fs::remove_file(&rc).expect("remove rc");
     let got = resolve_with(
         ResolutionMode::ParseNbrc,
-        some("/stores/env"),
+        some(&env_store),
         home_opt.clone(),
         none.clone(),
     )
     .await
     .expect("preset without rc");
-    assert_eq!(got, PathBuf::from("/stores/env"));
+    assert_eq!(got, PathBuf::from(&env_store));
 
     // IgnoreNbrc never reads the rc either.
     let got = resolve_with(
         ResolutionMode::IgnoreNbrc,
-        some("/stores/env"),
+        some(&env_store),
         home_opt.clone(),
         none.clone(),
     )
     .await
     .expect("ignore preset resolves");
-    assert_eq!(got, PathBuf::from("/stores/env"));
+    assert_eq!(got, PathBuf::from(&env_store));
 }
 
 /// Explicit `NBRC_PATH` handling and pinned errors.
 #[tokio::test]
 async fn resolve_explicit_rc_path() {
     let home = scratch_home("explicit");
+    let env_store = fwd(&home.join("stores-env"));
     let home_opt = Some(home.clone());
     let none: Option<std::ffi::OsString> = None;
     let some = |v: &str| Some(std::ffi::OsString::from(v));
@@ -509,24 +525,24 @@ async fn resolve_explicit_rc_path() {
     // Unreadable rc (a directory) warns and behaves as absent.
     let got = resolve_with(
         ResolutionMode::ParseNbrc,
-        some("/stores/env"),
+        some(&env_store),
         home_opt.clone(),
         some(home.to_str().unwrap()),
     )
     .await
     .expect("unreadable rc falls back to preset");
-    assert_eq!(got, PathBuf::from("/stores/env"));
+    assert_eq!(got, PathBuf::from(&env_store));
 
     // Missing HOME with preset resolves without a default.
     let got = resolve_with(
         ResolutionMode::ParseNbrc,
-        some("/stores/env"),
+        some(&env_store),
         None,
         none.clone(),
     )
     .await
     .expect("preset without HOME resolves");
-    assert_eq!(got, PathBuf::from("/stores/env"));
+    assert_eq!(got, PathBuf::from(&env_store));
 
     // Missing HOME without preset cannot compute a default.
     resolve_with(ResolutionMode::ParseNbrc, none.clone(), None, none.clone())
@@ -544,7 +560,8 @@ async fn resolve_evaluate_mode() {
     let some = |v: &str| Some(std::ffi::OsString::from(v));
 
     // Command substitution works under Evaluate (fallback under Parse).
-    let rc = write_rc(&home, "NB_DIR=$(echo /stores/eval)\n");
+    let eval_store = fwd(&home.join("stores-eval"));
+    let rc = write_rc(&home, &format!("NB_DIR=$(echo {eval_store})\n"));
     let got = resolve_with(
         ResolutionMode::EvaluateNbrc,
         none.clone(),
@@ -553,7 +570,7 @@ async fn resolve_evaluate_mode() {
     )
     .await
     .expect("evaluate resolves command substitution");
-    assert_eq!(got, PathBuf::from("/stores/eval"));
+    assert_eq!(got, PathBuf::from(&eval_store));
 
     // The same rc falls back under Parse.
     let got = resolve_with(
@@ -578,16 +595,20 @@ async fn resolve_evaluate_mode() {
     .expect_err("failing rc is a hard error");
 
     // Seeded starting value flows into evaluation.
-    let rc = write_rc(&home, "export NB_DIR=\"${NB_DIR:-/stores/fb}\"\n");
+    let seed_store = fwd(&home.join("stores-seed"));
+    let rc = write_rc(
+        &home,
+        &format!("export NB_DIR=\"${{NB_DIR:-{seed_store}}}\"\n"),
+    );
     let got = resolve_with(
         ResolutionMode::EvaluateNbrc,
-        some("/stores/seed"),
+        some(&seed_store),
         home_opt.clone(),
         some(rc.to_str().unwrap()),
     )
     .await
     .expect("evaluate sees the seed");
-    assert_eq!(got, PathBuf::from("/stores/seed"));
+    assert_eq!(got, PathBuf::from(&seed_store));
 }
 
 /// `EvaluateNbrc` hardening: top-level `return` gets a real source
@@ -596,6 +617,7 @@ async fn resolve_evaluate_mode() {
 #[tokio::test]
 async fn evaluate_hardening_and_absolute_gate() {
     let home = scratch_home("hardening");
+    let early_store = fwd(&home.join("stores-early"));
     let home_opt = Some(home.clone());
     let none: Option<std::ffi::OsString> = None;
     let some = |v: &str| Some(std::ffi::OsString::from(v));
@@ -603,7 +625,7 @@ async fn evaluate_hardening_and_absolute_gate() {
     // Top-level return works: the rc is sourced, not run as a script.
     let rc = write_rc(
         &home,
-        "NB_DIR=/stores/early\nreturn 0\nNB_DIR=/stores/late\n",
+        &format!("NB_DIR={early_store}\nreturn 0\nNB_DIR=/stores/late\n"),
     );
     // NOTE: `return` ends sourcing; the late assignment never runs.
     let got = resolve_with(
@@ -614,10 +636,10 @@ async fn evaluate_hardening_and_absolute_gate() {
     )
     .await
     .expect("top-level return is fine when sourcing");
-    assert_eq!(got, PathBuf::from("/stores/early"));
+    assert_eq!(got, PathBuf::from(&early_store));
 
     // `exec` is unregistered: process replacement is refused loudly.
-    let rc = write_rc(&home, "NB_DIR=/stores/x\nexec echo hi\n");
+    let rc = write_rc(&home, &format!("NB_DIR={early_store}\nexec echo hi\n"));
     resolve_with(
         ResolutionMode::EvaluateNbrc,
         none.clone(),
@@ -629,8 +651,10 @@ async fn evaluate_hardening_and_absolute_gate() {
 
     // Top-level `return` ends sourcing with prior assignments intact
     // (proves a real source frame, not a run-and-discard string).
-    let rc =
-        write_rc(&home, "NB_DIR=/stores/early\nexit 0\nNB_DIR=/stores/late\n");
+    let rc = write_rc(
+        &home,
+        &format!("NB_DIR={early_store}\nexit 0\nNB_DIR=/stores/late\n"),
+    );
     let got = resolve_with(
         ResolutionMode::EvaluateNbrc,
         none.clone(),
@@ -639,11 +663,12 @@ async fn evaluate_hardening_and_absolute_gate() {
     )
     .await
     .expect("top-level return works");
-    assert_eq!(got, PathBuf::from("/stores/early"));
+    assert_eq!(got, PathBuf::from(&early_store));
 
     // `umask`/`ulimit` touch host process state and are unregistered.
-    for body in ["NB_DIR=/x\numask 022\n", "NB_DIR=/x\nulimit -n 1024\n"] {
-        let rc = write_rc(&home, body);
+    for verb in ["umask 022", "ulimit -n 1024"] {
+        let body = format!("NB_DIR={early_store}\n{verb}\n");
+        let rc = write_rc(&home, &body);
         resolve_with(
             ResolutionMode::EvaluateNbrc,
             none.clone(),
@@ -657,6 +682,7 @@ async fn evaluate_hardening_and_absolute_gate() {
     // Ignore and Parse presets face the absolute-path gate too.
     // (Fresh home: the rc files written above must not interfere.)
     let clean = scratch_home("hardening-clean");
+    let abs_store = fwd(&clean.join("stores-abs"));
     let clean_opt = Some(clean);
     for mode in [ResolutionMode::IgnoreNbrc, ResolutionMode::ParseNbrc] {
         resolve_with(
@@ -671,13 +697,13 @@ async fn evaluate_hardening_and_absolute_gate() {
     // ...but absolute presets still resolve.
     let got = resolve_with(
         ResolutionMode::IgnoreNbrc,
-        some("/stores/abs"),
+        some(&abs_store),
         clean_opt,
         none.clone(),
     )
     .await
     .expect("absolute preset resolves");
-    assert_eq!(got, PathBuf::from("/stores/abs"));
+    assert_eq!(got, PathBuf::from(&abs_store));
 }
 
 /// `EvaluateNbrc` export preservation: the seeded `NB_DIR` is
