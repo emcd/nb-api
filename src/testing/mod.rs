@@ -51,7 +51,7 @@
 //! resolve `bash` even when a concurrent test has poisoned the
 //! parent process `PATH` (see `nb-api:issues/api/7`).
 //!
-//! [`NbTestEnvBuilder::build_native`] (and [`NbTestEnv::new_native`])
+//! [`NbTestEnvBuilder::build_hermetic`] (and [`NbTestEnv::hermetic`])
 //! never spawns `nb`: the notebook is initialized natively with
 //! only `git` subprocesses, so hermetic default-suite tests prove
 //! zero `nb` dependence including setup.

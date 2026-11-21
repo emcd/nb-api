@@ -139,7 +139,7 @@ impl NbTestEnvBuilder {
 
     /// Build the fixture, initialize its notebook via the `nb`
     /// CLI, and return it. Tests exercising only native behavior
-    /// should prefer [`build_native`](Self::build_native), which
+    /// should prefer [`build_hermetic`](Self::build_hermetic), which
     /// never spawns `nb`.
     pub fn build(self) -> Result<NbTestEnv, NbTestError> {
         let scaffold = self.scaffold()?;
@@ -159,7 +159,7 @@ impl NbTestEnvBuilder {
     /// natively initialized notebook (production creation shape:
     /// git worktree, empty `.index`, `[nb] Initialize` commit).
     /// Only `git` subprocesses run.
-    pub fn build_native(self) -> Result<NbTestEnv, NbTestError> {
+    pub fn build_hermetic(self) -> Result<NbTestEnv, NbTestError> {
         let scaffold = self.scaffold()?;
         let env = NbTestEnv {
             root: scaffold.root,
@@ -234,7 +234,7 @@ impl NbTestEnvBuilder {
 }
 
 /// Fixture directories and notebook name, assembled without
-/// spawning anything. Consumed by `build` and `build_native`.
+/// spawning anything. Consumed by `build` and `build_hermetic`.
 struct ScaffoldedEnv {
     root: tempfile::TempDir,
     nb_dir: PathBuf,
@@ -281,10 +281,10 @@ impl NbTestEnv {
     }
 
     /// Build a hermetic fixture without spawning `nb` (see
-    /// [`NbTestEnvBuilder::build_native`]). Prefer this for tests
+    /// [`NbTestEnvBuilder::build_hermetic`]). Prefer this for tests
     /// exercising native behavior; only `git` runs during setup.
-    pub fn new_native() -> Result<Self, NbTestError> {
-        Self::builder().build_native()
+    pub fn hermetic() -> Result<Self, NbTestError> {
+        Self::builder().build_hermetic()
     }
 
     /// Begin building a fixture with non-default knobs.

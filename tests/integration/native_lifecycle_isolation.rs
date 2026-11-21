@@ -14,7 +14,7 @@ use nb_api::{Config, NbClient, NbError};
 #[tokio::test]
 async fn plain_child_inside_ancestor_git_is_refused() {
     use crate::common::{EnvSnapshot, lock_env};
-    let env = NbTestEnv::new_native().expect("native fixture");
+    let env = NbTestEnv::hermetic().expect("native fixture");
     let ancestor = tempfile::Builder::new()
         .prefix("nb-ancestor-")
         .tempdir()
@@ -94,7 +94,7 @@ async fn plain_child_inside_ancestor_git_is_refused() {
 #[tokio::test]
 async fn malformed_child_inside_committed_ancestor_is_isolated() {
     use crate::common::{EnvSnapshot, lock_env};
-    let env = NbTestEnv::new_native().expect("native fixture");
+    let env = NbTestEnv::hermetic().expect("native fixture");
     let ancestor = tempfile::Builder::new()
         .prefix("nb-ancestor-")
         .tempdir()

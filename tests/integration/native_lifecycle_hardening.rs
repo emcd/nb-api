@@ -52,7 +52,7 @@ fn current_ref(root: &std::path::Path) -> String {
 /// and enumeration never lists them.
 #[tokio::test]
 async fn malformed_refs_surface_git_failure() {
-    let env = NbTestEnv::new_native().expect("native fixture");
+    let env = NbTestEnv::hermetic().expect("native fixture");
     with_isolated_env(&env, false, || async {
         let client = NbClient::new(&config_for_create(&env)).expect("client");
         let disabled =
@@ -147,7 +147,7 @@ async fn malformed_refs_surface_git_failure() {
 #[tokio::test]
 async fn unreadable_head_propagates_io() {
     use std::os::unix::fs::PermissionsExt;
-    let env = NbTestEnv::new_native().expect("native fixture");
+    let env = NbTestEnv::hermetic().expect("native fixture");
     with_isolated_env(&env, false, || async {
         let client = NbClient::new(&config_for_create(&env)).expect("client");
         let root = client
@@ -196,7 +196,7 @@ async fn unreadable_head_propagates_io() {
 /// the underlying git failure, never creation-disabled.
 #[tokio::test]
 async fn malformed_with_creation_disabled_surfaces_git_failure() {
-    let env = NbTestEnv::new_native().expect("native fixture");
+    let env = NbTestEnv::hermetic().expect("native fixture");
     with_isolated_env(&env, false, || async {
         let creator = NbClient::new(&config_for_create(&env)).expect("client");
         let root = creator
@@ -229,7 +229,7 @@ async fn malformed_with_creation_disabled_surfaces_git_failure() {
 /// the foreign bytes survive cleanup.
 #[tokio::test]
 async fn injected_failure_preserves_index_only_edit() {
-    let env = NbTestEnv::new_native().expect("native fixture");
+    let env = NbTestEnv::hermetic().expect("native fixture");
     with_isolated_env(&env, false, || async {
         unsafe {
             std::env::set_var("NB_API_PAUSE_BEFORE_INIT_COMMIT_MS", "1000");
@@ -277,7 +277,7 @@ async fn injected_failure_preserves_index_only_edit() {
 /// the detached state survives instead of being deleted.
 #[tokio::test]
 async fn injected_failure_preserves_detached_head() {
-    let env = NbTestEnv::new_native().expect("native fixture");
+    let env = NbTestEnv::hermetic().expect("native fixture");
     with_isolated_env(&env, false, || async {
         unsafe {
             std::env::set_var("NB_API_PAUSE_BEFORE_INIT_COMMIT_MS", "1000");
@@ -331,7 +331,7 @@ async fn injected_failure_preserves_detached_head() {
 /// a packed-only ref layout is not mistaken for an empty repo.
 #[tokio::test]
 async fn injected_failure_preserves_packed_refs() {
-    let env = NbTestEnv::new_native().expect("native fixture");
+    let env = NbTestEnv::hermetic().expect("native fixture");
     with_isolated_env(&env, false, || async {
         unsafe {
             std::env::set_var("NB_API_PAUSE_BEFORE_INIT_COMMIT_MS", "1000");
@@ -384,7 +384,7 @@ async fn injected_failure_preserves_packed_refs() {
 #[tokio::test]
 async fn injected_failure_preserves_ref_read_failure() {
     use std::os::unix::fs::PermissionsExt;
-    let env = NbTestEnv::new_native().expect("native fixture");
+    let env = NbTestEnv::hermetic().expect("native fixture");
     with_isolated_env(&env, false, || async {
         unsafe {
             std::env::set_var("NB_API_PAUSE_BEFORE_INIT_COMMIT_MS", "1000");
@@ -453,7 +453,7 @@ async fn native_fixture_builder_rejects_escaping_names() {
     let sentinel = sentinel_holder.path().join("sentinel.txt");
     std::fs::write(&sentinel, "sentinel\n").expect("sentinel");
     for bad in ["../evil", "/abs-escape", ".."] {
-        let result = NbTestEnv::builder().notebook(bad).build_native();
+        let result = NbTestEnv::builder().notebook(bad).build_hermetic();
         let err = match result {
             Ok(_) => panic!("escaping name {bad:?} must fail"),
             Err(e) => format!("{e:?}"),
@@ -478,7 +478,7 @@ async fn native_fixture_builder_rejects_escaping_names() {
 #[tokio::test]
 async fn root_validation_cases() {
     use crate::common::{EnvSnapshot, lock_env};
-    let env = NbTestEnv::new_native().expect("native fixture");
+    let env = NbTestEnv::hermetic().expect("native fixture");
     let _guard = lock_env();
     let _snap = EnvSnapshot::capture(&["NB_DIR", "HOME", "PATH"]);
     unsafe {
@@ -561,7 +561,7 @@ async fn root_validation_cases() {
 /// failure instead of enumerating or transacting.
 #[tokio::test]
 async fn unusable_commit_objects_never_read_as_ready() {
-    let env = NbTestEnv::new_native().expect("native fixture");
+    let env = NbTestEnv::hermetic().expect("native fixture");
     with_isolated_env(&env, false, || async {
         let client = NbClient::new(&config_for_create(&env)).expect("client");
         let disabled = NbClient::new(&config_for(&env)).expect("disabled");
@@ -626,7 +626,7 @@ async fn unusable_commit_objects_never_read_as_ready() {
 /// whitelist, and enumeration includes them.
 #[tokio::test]
 async fn plus_branch_initializes_and_enumerates() {
-    let env = NbTestEnv::new_native().expect("native fixture");
+    let env = NbTestEnv::hermetic().expect("native fixture");
     with_isolated_env(&env, false, || async {
         std::fs::write(
             env.home_dir().join(".gitconfig"),
@@ -663,7 +663,7 @@ async fn plus_branch_initializes_and_enumerates() {
 /// Pre-existing plain directories are still refused elsewhere.
 #[tokio::test]
 async fn ensure_converges_through_mkdir_window() {
-    let env = NbTestEnv::new_native().expect("native fixture");
+    let env = NbTestEnv::hermetic().expect("native fixture");
     with_isolated_env(&env, false, || async {
         unsafe {
             std::env::set_var("NB_API_PAUSE_AFTER_MKDIR_MS", "1000");
@@ -720,7 +720,7 @@ async fn ensure_converges_through_mkdir_window() {
 /// index do not prove git metadata belongs to this call.
 #[tokio::test]
 async fn injected_failure_preserves_config_only_change() {
-    let env = NbTestEnv::new_native().expect("native fixture");
+    let env = NbTestEnv::hermetic().expect("native fixture");
     with_isolated_env(&env, false, || async {
         unsafe {
             std::env::set_var("NB_API_PAUSE_BEFORE_INIT_COMMIT_MS", "1000");
@@ -774,7 +774,7 @@ async fn injected_failure_preserves_config_only_change() {
 /// extra top-level files or refs.
 #[tokio::test]
 async fn injected_failure_preserves_core_key_edit() {
-    let env = NbTestEnv::new_native().expect("native fixture");
+    let env = NbTestEnv::hermetic().expect("native fixture");
     with_isolated_env(&env, false, || async {
         unsafe {
             std::env::set_var("NB_API_PAUSE_BEFORE_INIT_COMMIT_MS", "1000");
@@ -821,7 +821,7 @@ async fn injected_failure_preserves_core_key_edit() {
 /// editing `.git/hooks/foreign.sample` changes no refs or status.
 #[tokio::test]
 async fn injected_failure_preserves_hook_sample_change() {
-    let env = NbTestEnv::new_native().expect("native fixture");
+    let env = NbTestEnv::hermetic().expect("native fixture");
     with_isolated_env(&env, false, || async {
         unsafe {
             std::env::set_var("NB_API_PAUSE_BEFORE_INIT_COMMIT_MS", "1000");
@@ -868,7 +868,7 @@ async fn injected_failure_preserves_hook_sample_change() {
 /// `.git/objects/info` change no refs, index, or status.
 #[tokio::test]
 async fn injected_failure_preserves_object_store_metadata() {
-    let env = NbTestEnv::new_native().expect("native fixture");
+    let env = NbTestEnv::hermetic().expect("native fixture");
     with_isolated_env(&env, false, || async {
         unsafe {
             std::env::set_var("NB_API_PAUSE_BEFORE_INIT_COMMIT_MS", "1000");

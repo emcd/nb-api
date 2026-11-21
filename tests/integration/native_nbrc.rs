@@ -1,7 +1,7 @@
 //! Native NBRC store resolution end-to-end: the rc selects the
 //! store that later operations use, per caller-selected mode.
 //!
-//! Hermetic: fixtures are native (`NbTestEnv::new_native`), the rc
+//! Hermetic: fixtures are native (`NbTestEnv::hermetic`), the rc
 //! lives in the fixture-owned `HOME`, and `with_isolated_env`
 //! serializes the process-environment surgery.
 
@@ -28,7 +28,7 @@ fn write_nbrc(home: &std::path::Path, body: &str) {
 /// The rc-selected store is the one creation lands in (ParseNbrc).
 #[tokio::test]
 async fn rc_selected_store_receives_create() {
-    let env = NbTestEnv::new_native().expect("native fixture");
+    let env = NbTestEnv::hermetic().expect("native fixture");
     with_isolated_env(&env, false, || async {
         // SAFETY: serialized by with_isolated_env; restored on exit.
         unsafe { std::env::remove_var("NB_DIR") };
@@ -54,7 +54,7 @@ async fn rc_selected_store_receives_create() {
 /// A preset `NB_DIR` survives a self-default rc (always-parse).
 #[tokio::test]
 async fn preset_survives_self_default_rc() {
-    let env = NbTestEnv::new_native().expect("native fixture");
+    let env = NbTestEnv::hermetic().expect("native fixture");
     with_isolated_env(&env, false, || async {
         let picked = env.home_dir().join("env-picked");
         std::fs::create_dir_all(&picked).expect("picked store");
@@ -86,7 +86,7 @@ async fn preset_survives_self_default_rc() {
 /// (ParseNbrc): absence is never a refusal.
 #[tokio::test]
 async fn unset_without_preset_falls_back_to_default() {
-    let env = NbTestEnv::new_native().expect("native fixture");
+    let env = NbTestEnv::hermetic().expect("native fixture");
     with_isolated_env(&env, false, || async {
         // SAFETY: serialized by with_isolated_env; restored on exit.
         unsafe { std::env::remove_var("NB_DIR") };
@@ -111,7 +111,7 @@ async fn unset_without_preset_falls_back_to_default() {
 /// `IgnoreNbrc` never reads the rc, even when one exists.
 #[tokio::test]
 async fn ignore_mode_skips_present_rc() {
-    let env = NbTestEnv::new_native().expect("native fixture");
+    let env = NbTestEnv::hermetic().expect("native fixture");
     with_isolated_env(&env, false, || async {
         // SAFETY: serialized by with_isolated_env; restored on exit.
         unsafe { std::env::remove_var("NB_DIR") };
@@ -138,7 +138,7 @@ async fn ignore_mode_skips_present_rc() {
 /// the static subset rejects.
 #[tokio::test]
 async fn evaluate_mode_sources_rc() {
-    let env = NbTestEnv::new_native().expect("native fixture");
+    let env = NbTestEnv::hermetic().expect("native fixture");
     with_isolated_env(&env, false, || async {
         // SAFETY: serialized by with_isolated_env; restored on exit.
         unsafe { std::env::remove_var("NB_DIR") };
