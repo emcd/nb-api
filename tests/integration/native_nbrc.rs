@@ -25,6 +25,14 @@ fn write_nbrc(home: &std::path::Path, body: &str) {
     std::fs::write(home.join(".nbrc"), body).expect("rc fixture");
 }
 
+/// Canonicalize both sides of a store-path assertion: fixture-built
+/// and resolution-returned spellings of the same notebook can differ
+/// textually on Windows (`\\?\` prefix, 8.3 segments) while naming
+/// one directory. Compare canonical-to-canonical.
+fn canonical(path: &std::path::Path) -> std::path::PathBuf {
+    std::fs::canonicalize(path).expect("asserted store exists")
+}
+
 /// The rc-selected store is the one creation lands in (ParseNbrc).
 #[tokio::test]
 async fn rc_selected_store_receives_create() {
@@ -43,9 +51,20 @@ async fn rc_selected_store_receives_create() {
             .await
             .expect("create resolves through rc");
         assert_eq!(
-            root,
-            picked.join("rc-notebook"),
+            canonical(&root),
+            canonical(&picked.join("rc-notebook")),
             "creation lands in the rc-selected store",
+        );
+        // Behavioral cross-spelling check: the creation is observed
+        // through the fixture-built spelling (not just compared as
+        // strings), and the default store holds nothing.
+        assert!(
+            picked.join("rc-notebook").join(".git").exists(),
+            "notebook materialized in the rc-selected store",
+        );
+        assert!(
+            !env.home_dir().join(".nb").join("rc-notebook").exists(),
+            "nothing lands in the default-store decoy",
         );
     })
     .await;
@@ -74,9 +93,13 @@ async fn preset_survives_self_default_rc() {
             .await
             .expect("create resolves through preset");
         assert_eq!(
-            root,
-            picked.join("env-notebook"),
+            canonical(&root),
+            canonical(&picked.join("env-notebook")),
             "preset wins over the rc self-default",
+        );
+        assert!(
+            picked.join("env-notebook").join(".git").exists(),
+            "notebook materialized in the preset store",
         );
     })
     .await;
@@ -100,9 +123,21 @@ async fn unset_without_preset_falls_back_to_default() {
             .await
             .expect("unset falls back to ~/.nb");
         assert_eq!(
-            root,
-            env.home_dir().join(".nb").join("nope"),
+            canonical(&root),
+            canonical(&env.home_dir().join(".nb").join("nope")),
             "creation lands in the default store",
+        );
+        assert!(
+            env.home_dir()
+                .join(".nb")
+                .join("nope")
+                .join(".git")
+                .exists(),
+            "notebook materialized in the default store",
+        );
+        assert!(
+            !env.nb_dir().join("nope").exists(),
+            "nothing lands in the harness-store decoy",
         );
     })
     .await;
@@ -126,9 +161,17 @@ async fn ignore_mode_skips_present_rc() {
             .await
             .expect("ignore falls back to ~/.nb");
         assert_eq!(
-            root,
-            env.home_dir().join(".nb").join("default-notebook"),
+            canonical(&root),
+            canonical(&env.home_dir().join(".nb").join("default-notebook")),
             "ignore resolves the default store",
+        );
+        assert!(
+            env.home_dir()
+                .join(".nb")
+                .join("default-notebook")
+                .join(".git")
+                .exists(),
+            "notebook materialized in the default store",
         );
     })
     .await;
@@ -153,9 +196,17 @@ async fn evaluate_mode_sources_rc() {
             .await
             .expect("create resolves through evaluation");
         assert_eq!(
-            root,
-            picked.join("eval-notebook"),
+            canonical(&root),
+            canonical(&picked.join("eval-notebook")),
             "evaluation result selects the store",
+        );
+        assert!(
+            picked.join("eval-notebook").join(".git").exists(),
+            "notebook materialized in the evaluated store",
+        );
+        assert!(
+            !env.home_dir().join(".nb").join("eval-notebook").exists(),
+            "nothing lands in the default-store decoy",
         );
     })
     .await;
