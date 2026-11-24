@@ -310,6 +310,18 @@ async fn injected_failure_preserves_detached_head() {
                     "creator never reached its git-add handoff"
                 );
             }
+            // Forensics for a lock held by anyone but the two
+            // handoff parties: at arrival the creator's git has
+            // returned, and this thread has not run git yet, so an
+            // index.lock here implicates a third party (ambient
+            // GIT_* leak) or a stale lock, never the handshake.
+            let lock = root.join(".git/index.lock");
+            assert!(
+                !lock.exists(),
+                "index.lock already held at handoff arrival (GIT_DIR={:?}, GIT_INDEX_FILE={:?})",
+                std::env::var_os("GIT_DIR"),
+                std::env::var_os("GIT_INDEX_FILE"),
+            );
             assert_eq!(
                 git(&root, &["add", "-A"]).trim(),
                 "",
@@ -374,6 +386,18 @@ async fn injected_failure_preserves_packed_refs() {
                     "creator never reached its git-add handoff"
                 );
             }
+            // Forensics for a lock held by anyone but the two
+            // handoff parties: at arrival the creator's git has
+            // returned, and this thread has not run git yet, so an
+            // index.lock here implicates a third party (ambient
+            // GIT_* leak) or a stale lock, never the handshake.
+            let lock = root.join(".git/index.lock");
+            assert!(
+                !lock.exists(),
+                "index.lock already held at handoff arrival (GIT_DIR={:?}, GIT_INDEX_FILE={:?})",
+                std::env::var_os("GIT_DIR"),
+                std::env::var_os("GIT_INDEX_FILE"),
+            );
             assert_eq!(
                 git(&root, &["add", "-A"]).trim(),
                 "",
