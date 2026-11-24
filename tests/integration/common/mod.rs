@@ -93,6 +93,8 @@ const ENV_VARS_OF_INTEREST: &[&str] = &[
     "NB_API_PAUSE_BEFORE_INIT_COMMIT_MS",
     "NB_API_PAUSE_AFTER_MKDIR_MS",
     "NB_API_NOTEBOOK_INIT_FAIL",
+    // Notebook-init two-way handshake (testing feature only).
+    "NB_API_INIT_HANDSHAKE_FILE",
     // Deterministic external-writer simulation (testing feature only).
     "NB_API_SIMULATE_EXTERNAL_WRITER",
     "NB_API_SIMULATE_EXTERNAL_SAME_PATH",

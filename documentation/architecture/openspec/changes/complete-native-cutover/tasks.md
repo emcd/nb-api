@@ -8,6 +8,7 @@
 - [x] 1.6 Add purely-native layout/validity/matrix/concurrency tests (hermetic lifecycle default tests: native fixture setup, dead-`nb` tripwire) plus two-way `nb`/native interop checks classified into the ignore-gated oracle set for the extended profile
 - [x] 1.7 Gate validity on usable `HEAD` (verified to peel to a commit) with convergence waits, post-init barrier, retain-and-report on failure, and deterministic pause/fail injection hooks
 - [x] 1.8 Separate query-only paths from explicit create; centralize `NB_DIR` validation with canonical paths; skip non-notebooks in enumeration; suppress signing on init
+- [x] 1.9 Replace the fixed-pause plus `.index`-poll with a two-way init handshake (`NB_API_INIT_HANDSHAKE_FILE`: creator reports git-add return, competitor acks after its own git work) in the three injected-failure tests; bound waits are diagnostic tripwires only
 
 ## 2. Native import
 
