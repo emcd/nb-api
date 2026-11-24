@@ -426,8 +426,9 @@ async fn injected_failure_preserves_owned_directory() {
 async fn injected_failure_preserves_foreign_changes() {
     let env = NbTestEnv::hermetic().expect("native fixture");
     with_isolated_env(&env, false, || async {
+        let handshake = env.nb_dir().join(".init-handshake-contested");
         unsafe {
-            std::env::set_var("NB_API_PAUSE_BEFORE_INIT_COMMIT_MS", "1000");
+            std::env::set_var("NB_API_INIT_HANDSHAKE_FILE", &handshake);
             std::env::set_var("NB_API_NOTEBOOK_INIT_FAIL", "1");
         }
         let root = env.nb_dir().join("contested");
@@ -443,11 +444,18 @@ async fn injected_failure_preserves_foreign_changes() {
                     client.create_notebook(Some("contested")).await
                 })
             });
-            let mut poll = 0;
-            while !root.join(".index").exists() {
+            // Two-way handoff at the actual boundary: proceed only
+            // after the creator reports its successful git add. The
+            // bound is a diagnostic tripwire, never a settle loop:
+            // arrival is an event, not a timeout.
+            let mut waited = 0;
+            while !handshake.exists() {
                 std::thread::sleep(std::time::Duration::from_millis(10));
-                poll += 1;
-                assert!(poll < 500, "creator never reached its pause point");
+                waited += 1;
+                assert!(
+                    waited < 3000,
+                    "creator never reached its git-add handoff"
+                );
             }
             std::fs::write(root.join("foreign.txt"), "foreign\n")
                 .expect("foreign file");
@@ -461,12 +469,14 @@ async fn injected_failure_preserves_foreign_changes() {
                     .is_empty(),
                 "foreign commit lands"
             );
+            // Ack: the creator may proceed to its injected failure.
+            std::fs::remove_file(&handshake).expect("ack creator");
             creator.join().expect("creator thread")
         });
         let err = outcome.expect_err("injected failure must fail");
         assert!(
-            matches!(err, NbError::Io { .. }),
-            "expected injected Io failure, got: {err:?}"
+            format!("{err:?}").contains("injected notebook init failure"),
+            "failure is the injection, not a handshake timeout: {err:?}"
         );
         assert!(
             root.join("foreign.txt").is_file(),

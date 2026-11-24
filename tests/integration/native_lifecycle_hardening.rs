@@ -279,8 +279,9 @@ async fn injected_failure_preserves_index_only_edit() {
 async fn injected_failure_preserves_detached_head() {
     let env = NbTestEnv::hermetic().expect("native fixture");
     with_isolated_env(&env, false, || async {
+        let handshake = env.nb_dir().join(".init-handshake-detached-foreign");
         unsafe {
-            std::env::set_var("NB_API_PAUSE_BEFORE_INIT_COMMIT_MS", "1000");
+            std::env::set_var("NB_API_INIT_HANDSHAKE_FILE", &handshake);
             std::env::set_var("NB_API_NOTEBOOK_INIT_FAIL", "1");
         }
         let root = env.nb_dir().join("detached-foreign");
@@ -296,11 +297,18 @@ async fn injected_failure_preserves_detached_head() {
                     client.create_notebook(Some("detached-foreign")).await
                 })
             });
-            let mut poll = 0;
-            while !root.join(".index").exists() {
+            // Two-way handoff at the actual boundary: proceed only
+            // after the creator reports its successful git add. The
+            // bound is a diagnostic tripwire, never a settle loop:
+            // arrival is an event, not a timeout.
+            let mut waited = 0;
+            while !handshake.exists() {
                 std::thread::sleep(std::time::Duration::from_millis(10));
-                poll += 1;
-                assert!(poll < 500, "creator never reached its pause point");
+                waited += 1;
+                assert!(
+                    waited < 3000,
+                    "creator never reached its git-add handoff"
+                );
             }
             assert_eq!(
                 git(&root, &["add", "-A"]).trim(),
@@ -313,9 +321,15 @@ async fn injected_failure_preserves_detached_head() {
                 "foreign commit lands"
             );
             git(&root, &["checkout", "--detach", "HEAD"]);
+            // Ack: the creator may proceed to its injected failure.
+            std::fs::remove_file(&handshake).expect("ack creator");
             creator.join().expect("creator thread")
         });
-        outcome.expect_err("injected failure must fail");
+        let err = outcome.expect_err("injected failure must fail");
+        assert!(
+            format!("{err:?}").contains("injected notebook init failure"),
+            "failure is the injection, not a handshake timeout: {err:?}"
+        );
         assert!(root.join(".git/HEAD").is_file(), "directory preserved");
         let head =
             std::fs::read_to_string(root.join(".git/HEAD")).expect("HEAD");
@@ -333,8 +347,9 @@ async fn injected_failure_preserves_detached_head() {
 async fn injected_failure_preserves_packed_refs() {
     let env = NbTestEnv::hermetic().expect("native fixture");
     with_isolated_env(&env, false, || async {
+        let handshake = env.nb_dir().join(".init-handshake-packed-foreign");
         unsafe {
-            std::env::set_var("NB_API_PAUSE_BEFORE_INIT_COMMIT_MS", "1000");
+            std::env::set_var("NB_API_INIT_HANDSHAKE_FILE", &handshake);
             std::env::set_var("NB_API_NOTEBOOK_INIT_FAIL", "1");
         }
         let root = env.nb_dir().join("packed-foreign");
@@ -350,11 +365,18 @@ async fn injected_failure_preserves_packed_refs() {
                     client.create_notebook(Some("packed-foreign")).await
                 })
             });
-            let mut poll = 0;
-            while !root.join(".index").exists() {
+            // Two-way handoff at the actual boundary: proceed only
+            // after the creator reports its successful git add. The
+            // bound is a diagnostic tripwire, never a settle loop:
+            // arrival is an event, not a timeout.
+            let mut waited = 0;
+            while !handshake.exists() {
                 std::thread::sleep(std::time::Duration::from_millis(10));
-                poll += 1;
-                assert!(poll < 500, "creator never reached its pause point");
+                waited += 1;
+                assert!(
+                    waited < 3000,
+                    "creator never reached its git-add handoff"
+                );
             }
             assert_eq!(
                 git(&root, &["add", "-A"]).trim(),
@@ -367,9 +389,15 @@ async fn injected_failure_preserves_packed_refs() {
                 "foreign commit lands"
             );
             git(&root, &["pack-refs", "--all"]);
+            // Ack: the creator may proceed to its injected failure.
+            std::fs::remove_file(&handshake).expect("ack creator");
             creator.join().expect("creator thread")
         });
-        outcome.expect_err("injected failure must fail");
+        let err = outcome.expect_err("injected failure must fail");
+        assert!(
+            format!("{err:?}").contains("injected notebook init failure"),
+            "failure is the injection, not a handshake timeout: {err:?}"
+        );
         assert!(
             root.join(".git/packed-refs").is_file(),
             "packed-refs survives cleanup"

@@ -337,6 +337,59 @@ pub fn notebook_commit_all(
 /// `.index` file itself is staged, never a directory sweep, so
 /// late-arriving foreign files are not collected. Returns the
 /// initial commit hash for ownership checks.
+///
+/// Two-way init handshake for concurrent-creator tests (testing
+/// feature only): after the successful `git add` above, the
+/// creator reports arrival by creating the file named by
+/// `NB_API_INIT_HANDSHAKE_FILE`, then waits for its deletion
+/// (the competitor's ack after finishing its own git work)
+/// before proceeding to the injected failure or commit. The
+/// bound keeps a stuck competitor a diagnostic failure, never a
+/// hang. Unset (all non-test paths): zero behavior change.
+#[cfg(feature = "testing")]
+fn await_init_ack(root: &Path) -> Result<(), NbError> {
+    let Some(path) = std::env::var_os("NB_API_INIT_HANDSHAKE_FILE")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+    else {
+        return Ok(());
+    };
+    std::fs::write(&path, b"").map_err(|e| NbError::Io {
+        path: path.clone(),
+        source: e.into(),
+    })?;
+    for _ in 0..3000 {
+        // Only disappearance counts as the ack: any other
+        // metadata error propagates instead of reading as consent.
+        match std::fs::symlink_metadata(&path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(());
+            },
+            Err(e) => {
+                return Err(NbError::Io {
+                    path: path.clone(),
+                    source: e.into(),
+                });
+            },
+            Ok(_) => std::thread::sleep(std::time::Duration::from_millis(10)),
+        }
+    }
+    Err(NbError::Io {
+        path: root.to_path_buf(),
+        source: std::io::Error::other(
+            "init handshake timed out waiting for competitor ack",
+        )
+        .into(),
+    })
+}
+
+/// Initialize an empty notebook worktree at `root`, which must be an
+/// empty directory: `git init`, an empty `.index`, and an initial
+/// `[nb] Initialize` commit so `HEAD` resolves immediately.
+/// Replicates the `nb notebooks add` layout exactly. Only the
+/// `.index` file itself is staged, never a directory sweep, so
+/// late-arriving foreign files are not collected. Returns the
+/// initial commit hash for ownership checks.
 pub fn notebook_init_empty(root: &Path) -> Result<String, NbError> {
     git_capture(root, &["init".into()])?;
     std::fs::write(root.join(".index"), b"").map_err(|e| NbError::Io {
@@ -344,6 +397,8 @@ pub fn notebook_init_empty(root: &Path) -> Result<String, NbError> {
         source: e.into(),
     })?;
     git_capture(root, &["add".into(), "--".into(), ".index".into()])?;
+    #[cfg(feature = "testing")]
+    await_init_ack(root)?;
     #[cfg(feature = "testing")]
     if let Some(ms) = std::env::var_os("NB_API_PAUSE_BEFORE_INIT_COMMIT_MS")
         && let Ok(ms) = ms.to_string_lossy().parse::<u64>()
