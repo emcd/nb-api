@@ -14,7 +14,6 @@
 
 mod argv;
 mod client;
-mod diagnostics;
 mod error;
 pub mod fingerprint;
 mod gate;

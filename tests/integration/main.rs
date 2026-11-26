@@ -14,6 +14,7 @@ mod edit_mode_required;
 mod empty_result_hints;
 mod eol_model;
 mod git_env_scrub;
+mod native_import;
 mod native_lifecycle;
 mod native_lifecycle_hardening;
 mod native_lifecycle_isolation;

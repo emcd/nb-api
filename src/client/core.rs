@@ -5,7 +5,6 @@ use std::sync::LazyLock;
 use regex::Regex;
 use tokio::process::Command;
 
-use crate::diagnostics::append_warning;
 use crate::error::NbError;
 use crate::gate;
 use crate::git::derive_git_notebook_name;
@@ -179,25 +178,6 @@ impl NbClient {
         }
         let (notebook, root) = self.resolve_notebook(notebook).await?;
         Ok((notebook.clone(), format!("{}:{}", notebook, id), root))
-    }
-
-    pub(super) fn append_notebook_warning(
-        &self,
-        output: String,
-        notebook: &str,
-    ) -> String {
-        let Some(default_notebook) = self.default_notebook.as_deref() else {
-            return output;
-        };
-        if default_notebook == notebook {
-            return output;
-        }
-        append_warning(
-            output,
-            format!(
-                "Warning: wrote to notebook `{notebook}`, not the project default notebook `{default_notebook}`. If this was unintended, move or delete the note and retry with the correct notebook/folder."
-            ),
-        )
     }
 
     /// Resolves the notebook to use for a command.

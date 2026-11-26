@@ -650,59 +650,255 @@ impl NbClient {
         tx.commit().await
     }
 
-    /// Imports a file or URL into the notebook as a note.
+    /// Imports a local file into a notebook folder as a committed
+    /// note (native, one-shot).
     ///
-    /// One-shot only under the process-shared notebook gate. Not a
-    /// [`Transaction`] plan op in 0.3.0.
+    /// Reads the source bytes directly and commits through the
+    /// single-checkpoint transaction pipeline under the
+    /// process-shared gate, with the same collision/rollback
+    /// discipline as `Transaction::commit`. The destination name
+    /// is the filename override when given, else the source
+    /// basename, mangled per the existing one-shot rules with
+    /// the extension preserved; destinations are explicit, so a
+    /// taken path meets the transaction's intentional typed
+    /// refusal (`PathCollision`, never auto-suffixed). Only
+    /// regular files are admitted (directories, symlinks, and
+    /// special files refused); non-UTF-8 sources are refused
+    /// typed; URL shapes (`://`) are refused with no network
+    /// activity.
     ///
-    /// NOTE (0.4.3, evaluated): `nb import` accepts no `--wait`
-    /// flag — an unknown flag would be misparsed as an import
-    /// path — and a standalone `nb git checkpoint --wait` cannot
-    /// join the import's already-backgrounded checkpoint job, so
-    /// there is no `--wait` containment for the import race window.
-    /// Containment waits on 0.5.0 (native import with proper
-    /// locking); meanwhile the commit guard absorbs index-only
-    /// droppings and note-content leftovers still refuse loudly.
-    ///
-    /// Deferred route: the gate below is held on the pinned root,
-    /// but the `nb import` subprocess resolves the store itself
-    /// (inheriting the process environment, including its own rc
-    /// sourcing). In `IgnoreNbrc` mode the two resolutions can
-    /// disagree; full pinning of the nb-backed path is deferred
-    /// work, not part of this change.
+    /// Notebook-independent admission (source shape/type/read,
+    /// destination validity) runs before any notebook creation.
+    /// Creation itself is an explicit persistent effect: a
+    /// refused post-create import leaves the new notebook in
+    /// place with its initial state plus legitimate concurrent
+    /// changes. Concurrent writers' commits are preserved, but
+    /// rollback is not guaranteed: an `IndeterminateCommit`
+    /// requires the caller to reconcile (re-read HEAD/status)
+    /// before retrying.
     pub async fn import_note(
         &self,
-        source: &str,
+        source: &std::path::Path,
         folder: Option<&str>,
         filename: Option<&str>,
-        convert: bool,
         notebook: Option<&str>,
-    ) -> Result<String, NbError> {
-        let mut args = Vec::new();
+    ) -> Result<CommitOutcome, NbError> {
+        // URL-shaped sources are refused before any I/O: import
+        // never fetches and never spawns.
+        if source.to_string_lossy().contains("://") {
+            return Err(NbError::ValidationError {
+                reason:
+                    "import source must be a local file path (URLs refused)"
+                        .to_string(),
+                location: None,
+            });
+        }
         self.require_folder_for_new_note(folder)?;
         validate_folder_option(folder)?;
-
-        let (notebook, root) = self.resolve_notebook(notebook).await?;
-        self.with_notebook_gate_native(&root, async {
-            let cmd = format!("{}:import", notebook);
-            args.push(cmd);
-            args.push(source.to_string());
-            if convert {
-                args.push("--convert".to_string());
+        // Raw destination inputs are checked before
+        // normalization mangles anything: a traversal attempt
+        // must refuse, not normalize into a safe-looking
+        // sibling. Mangling stays cosmetic
+        // (case/punctuation), never a security boundary. The
+        // folder `..` case is still caught post-join by
+        // `validate_create_path`; absolute and backslash forms
+        // would normalize away, so they refuse here.
+        if let Some(f) = folder
+            && (f.starts_with('/') || f.contains('\\') || f.contains('\0'))
+        {
+            return Err(NbError::ValidationError {
+                reason: "import folder must be notebook-relative (absolute paths and backslashes refused)"
+                    .to_string(),
+                location: None,
+            });
+        }
+        let raw_name = match filename {
+            Some(name) => name.to_string(),
+            None => source
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_string(),
+        };
+        if raw_name.trim().is_empty() {
+            return Err(NbError::ValidationError {
+                reason: "import destination must include a filename".into(),
+                location: None,
+            });
+        }
+        // The override is a filename, not a path: separators
+        // would either escape or silently mangle (e.g.
+        // `../../evil.md` mangles to `evil.md`), so they refuse
+        // up front. Cosmetic normalization stays in
+        // `filename_for_import`.
+        if raw_name.contains('/')
+            || raw_name.contains('\\')
+            || raw_name.contains('\0')
+            || raw_name == "."
+            || raw_name == ".."
+        {
+            return Err(NbError::ValidationError {
+                reason: "import filename must be a plain filename without separators or dot segments"
+                    .to_string(),
+                location: None,
+            });
+        }
+        let mangled = transaction::filename_for_import(&raw_name);
+        // A punctuation-only name can mangle to empty, which
+        // would silently turn the folder into the basename.
+        // Check the mangled standalone name before joining.
+        if mangled.is_empty() {
+            return Err(NbError::ValidationError {
+                reason: "import filename mangled to empty (punctuation-only names refused)"
+                    .to_string(),
+                location: None,
+            });
+        }
+        let dest = transaction::join_folder_file(folder, &mangled);
+        // Destination validity is notebook-independent: check it
+        // before creation so an invalid destination creates
+        // nothing.
+        let dest = transaction::validate_create_path(&dest, true)?;
+        // Windows-invalid names refuse pre-create on every
+        // platform: a `con.md` or `a:b` folder committed on
+        // Linux breaks Windows checkouts. Mangling neutralizes
+        // reserved characters in stems, but preserved
+        // extensions keep their exact bytes and folders are
+        // never mangled — so every final destination segment is
+        // checked here, after structural validation.
+        for segment in dest.split('/') {
+            if let Some(reason) =
+                transaction::windows_portability_refusal(segment)
+            {
+                return Err(NbError::ValidationError {
+                    reason: format!(
+                        "import destination `{segment}` is Windows-invalid ({reason})"
+                    ),
+                    location: None,
+                });
             }
-            if folder.is_some() || filename.is_some() {
-                let dest = match (folder, filename) {
-                    (Some(f), Some(n)) => format!("{}/{}", f, n),
-                    (Some(f), None) => format!("{}/", f),
-                    (None, Some(n)) => n.to_string(),
-                    (None, None) => unreachable!(),
-                };
-                args.push(dest);
+        }
+        // Admission is bound to the opened file, not to a path
+        // that is re-opened later: the file is opened no-follow
+        // and nonblocking, and the OPENED handle's type is what
+        // is admitted. A symlink races into `FilesystemLoop`
+        // (refused typed); a FIFO with no writer can neither
+        // hang the open (`O_NONBLOCK`) nor pass the `is_file`
+        // Two distinct ancestor policies apply, and they must
+        // not be conflated. SOURCE ancestors (the source path's
+        // parents) are not pinned at admission: a swapped
+        // parent between admission and read opens a different
+        // file, which is then admitted on its own opened-handle
+        // merits — the same residual as any path-based API, and
+        // out of scope here. DESTINATION ancestors (notebook
+        // folders) are the transaction's business: symlink
+        // ancestors refuse at materialize
+        // (`refuse_symlink_ancestors`) and the pinned root is
+        // revalidated at commit.
+        //
+        // Unix opens with `O_NOFOLLOW | O_NONBLOCK` (`libc` is a
+        // Unix dependency). Windows has no `O_NOFOLLOW`; the
+        // equivalent is `FILE_FLAG_OPEN_REPARSE_POINT` (open the
+        // link itself, never the target) plus
+        // `FILE_FLAG_BACKUP_SEMANTICS` (allow opening directories
+        // so they meet the typed refusal below instead of a raw
+        // open failure); link detection uses `FileTypeExt`.
+        #[cfg(unix)]
+        let file = {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            std::fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+                .open(source)
+                .map_err(|e| {
+                    // `ELOOP` is the no-follow symlink signal;
+                    // `ErrorKind::FilesystemLoop` is still gated
+                    // behind `io_error_more` on this toolchain,
+                    // so match the raw code directly.
+                    if e.raw_os_error() == Some(libc::ELOOP) {
+                        NbError::ValidationError {
+                            reason: "import source must be a regular file (symlinks refused)"
+                                .to_string(),
+                            location: None,
+                        }
+                    } else {
+                        NbError::Io {
+                            path: source.to_path_buf(),
+                            source: e.into(),
+                        }
+                    }
+                })?
+        };
+        #[cfg(not(unix))]
+        let file = {
+            use std::os::windows::fs::{
+                FileTypeExt as _, OpenOptionsExt as _,
+            };
+            const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+            const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+            let opened = std::fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(
+                    FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+                )
+                .open(source)
+                .map_err(|e| NbError::Io {
+                    path: source.to_path_buf(),
+                    source: e.into(),
+                })?;
+            let link_type = opened
+                .metadata()
+                .map_err(|e| NbError::Io {
+                    path: source.to_path_buf(),
+                    source: e.into(),
+                })?
+                .file_type();
+            if link_type.is_symlink_file() || link_type.is_symlink_dir() {
+                return Err(NbError::ValidationError {
+                    reason: "import source must be a regular file (symlinks refused)"
+                        .to_string(),
+                    location: None,
+                });
             }
-            self.exec_vec(args)
-                .await
-                .map(|output| self.append_notebook_warning(output, &notebook))
-        })
-        .await
+            opened
+        };
+        let meta = file.metadata().map_err(|e| NbError::Io {
+            path: source.to_path_buf(),
+            source: e.into(),
+        })?;
+        if meta.is_dir() {
+            return Err(NbError::ValidationError {
+                reason: "import source must be a regular file (directories refused)"
+                    .to_string(),
+                location: None,
+            });
+        }
+        if !meta.is_file() {
+            return Err(NbError::ValidationError {
+                reason:
+                    "import source must be a regular file (special files refused)"
+                        .to_string(),
+                location: None,
+            });
+        }
+        let mut buf = Vec::new();
+        use std::io::Read as _;
+        let mut file = file;
+        file.read_to_end(&mut buf).map_err(|e| NbError::Io {
+            path: source.to_path_buf(),
+            source: e.into(),
+        })?;
+        let content =
+            String::from_utf8(buf).map_err(|_| NbError::ValidationError {
+                reason:
+                    "import source is not valid UTF-8 text (binary refused)"
+                        .to_string(),
+                location: None,
+            })?;
+        // Creation is allowed from here: an explicit persistent
+        // effect that survives a refused post-create import.
+        let mut tx = self.transaction(notebook).await?;
+        tx.add_note(&dest, None, &content, &[])?;
+        tx.commit().await
     }
 }

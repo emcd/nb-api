@@ -12,10 +12,10 @@
 
 ## 2. Native import
 
-- [ ] 2.1 Implement the `import_note(&Path, folder, filename, notebook) -> CommitOutcome` signature reading file bytes natively
-- [ ] 2.2 Enforce the admission contract: regular files only (dirs/symlinks/special refused), UTF-8 text stored byte-identical, binary refused typed, `://` sources refused with no network, destination confined
-- [ ] 2.3 Remove the `convert` parameter (no silent ignore); refuse `PathCollision` destinations; guarantee refusal purity (`HEAD`/index/worktree unchanged)
-- [ ] 2.4 Cover with refusal/rollback/collision/content-identity/confinement tests for both happy and refusal paths
+- [x] 2.1 Implement the `import_note(&Path, folder, filename, notebook) -> CommitOutcome` signature reading file bytes natively
+- [x] 2.2 Enforce the admission contract: regular files only (dirs/symlinks/special refused), UTF-8 text stored byte-identical, binary refused typed, `://` sources refused with no network, destination confined
+- [x] 2.3 Remove the `convert` parameter (no silent ignore); refuse `PathCollision` destinations; guarantee refusal purity (`HEAD`/index/worktree unchanged)
+- [x] 2.4 Cover with refusal/rollback/collision/content-identity/confinement tests for both happy and refusal paths
 
 ## 3. String surface retirement
 

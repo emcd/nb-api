@@ -183,10 +183,12 @@ brush-builtins = "0.2"
 # is enabled; never reaches normal consumers).
 tempfile = { version = "3.0", optional = true }
 
-# Atomic .index stale-range removal (FALLOC_FL_COLLAPSE_RANGE) on Linux.
-# Other platforms use the portable write+truncate fallback (documented
-# residual micro-window in src/transaction.rs).
-[target.'cfg(target_os = "linux")'.dependencies]
+# `libc` serves two Unix uses: `fallocate` collapse-support on
+# Linux (`src/transaction/index.rs`, Linux-gated there) and
+# no-follow, nonblocking source admission for native import
+# (`O_NOFOLLOW`/`O_NONBLOCK`, Unix-gated in `src/client/write.rs`;
+# Windows uses `std::os::windows` flag constants instead).
+[target.'cfg(unix)'.dependencies]
 libc = "0.2"
 [lib]
 name = "nb_api"

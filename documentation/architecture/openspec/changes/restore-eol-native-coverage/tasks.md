@@ -16,4 +16,4 @@
 ## 4. Validation
 
 - [x] 4.1 Run `cargo test --locked --all-features` (default suite), `cargo clippy --all-targets` (default + testing), `cargo fmt --check`, and `openspec validate --all --strict`; record named `eol_model` execution on Linux.
-- [ ] 4.2 Record named `eol_model` execution on Windows for the exact tip and attach the run reference to the change.
+- [x] 4.2 Record named `eol_model` execution on Windows for the exact tip and attach the run reference to the change.

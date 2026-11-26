@@ -39,7 +39,7 @@ The system SHALL store valid UTF-8 text files with content byte-identical to the
 - **THEN** the system SHALL refuse with a typed format failure and SHALL create nothing
 
 ### Requirement: Source admission policy
-The system SHALL import only regular files. Directories, symlinks, and special files (sockets, FIFOs, devices) SHALL be refused with a typed failure. Import copies; the source file is never moved, modified, or deleted.
+The system SHALL import only regular files. Directories, symlinks, and special files (sockets, FIFOs, devices) SHALL be refused with a typed failure. Import copies; the source file is never moved, modified, or deleted. Admission is bound to the opened file (no-follow, nonblocking open; the opened handle's type is admitted, not a re-stat path). Source ancestors are not pinned: a swapped source parent opens a different file, admitted on its own opened-handle merits. Destination ancestors are the transaction's concern, not this requirement's: symlink ancestors refuse at materialize and the pinned root is revalidated at commit.
 
 #### Scenario: Directory source refused
 - **WHEN** a directory is passed as the import source
@@ -64,20 +64,24 @@ The system SHALL resolve the destination name with the filename override winning
 Import names are explicit, so the system SHALL refuse taken destinations with hard `PathCollision` (explicit-`Transaction`-plan semantics), never an auto-suffix.
 
 #### Scenario: Taken destination refuses
-- **WHEN** the destination path already exists
-- **THEN** the system SHALL return `PathCollision` and change nothing
+- **WHEN** the destination path already exists at snapshot as an ordinary committable path and no concurrent writer moves `HEAD` during the commit
+- **THEN** the system SHALL return the transaction's intentional typed refusal `PathCollision` and change nothing. Ignore-listed and unsupported-structure destinations are not collision cases: they refuse with their own typed errors (`PathIgnored`, `UnsupportedStructure`).
 
 ### Requirement: Validate-before-create order and refusal purity
-All notebook-independent admission checks (source readability/type/format, destination name validity and confinement) SHALL run before any notebook creation. A refused import SHALL produce no note, no index edit, and no commit: import-owned effects are exactly none.
-When the notebook is missing and creation is enabled, creation (directory plus initial commit) is an explicit persistent effect: if post-create steps refuse or fail, the newly created notebook persists with its initial state plus all legitimate concurrent-writer changes — a post-create collision may itself be the racing writer creating and committing the target — and is removed only if it is still exactly as created AND no other writer has touched it. Absence of effects means absence of IMPORT-owned effects throughout. The system SHALL never reset, clean, or otherwise disturb another writer's commits or worktree contents to satisfy purity wording.
+All notebook-independent admission checks (source readability/type/format, destination name validity and confinement) SHALL run before any notebook creation. A refusal decided before the commit starts SHALL produce no note, no index edit, and no commit: import-owned effects are exactly none.
+When the notebook is missing and creation is enabled, creation (directory plus initial commit) is an explicit persistent effect: if post-create steps refuse or fail, the newly created notebook persists with its initial state plus all legitimate concurrent-writer changes — a post-create collision may itself be the racing writer creating and committing the target — and is removed only if it is still exactly as created AND no other writer has touched it. Purity beyond the commit boundary is bounded by the movement scenario below: only movement DETECTED by the failure-path `HEAD` comparison turns the failed outcome into `IndeterminateCommit` with caller reconciliation, not guaranteed rollback. Absence of effects means absence of IMPORT-owned effects throughout. The system SHALL never reset, clean, or otherwise disturb another writer's commits or worktree contents to satisfy purity wording.
 
 #### Scenario: Invalid source creates nothing
 - **WHEN** source admission fails and the notebook is also missing
 - **THEN** the import SHALL be refused and no notebook directory SHALL be created
 
 #### Scenario: Post-create refusal persists the notebook plus legitimate external changes
-- **WHEN** the source is valid, the missing notebook is created, and the destination then collides — including a collision caused by a racing writer committing the target
+- **WHEN** the source is valid, the missing notebook is created, and the destination then collides with a target already present at snapshot (including one a racing writer committed before the snapshot)
 - **THEN** the import SHALL be refused with `PathCollision`, no IMPORT-owned note/index/commit effects SHALL exist, and the created notebook SHALL persist with its initial state plus all legitimate external changes
+
+#### Scenario: Movement detected on failure
+- **WHEN** the commit fails AND the failure-path `HEAD` comparison detects movement (the observed revision differs from the pre-revision, however the movement happened)
+- **THEN** the import SHALL fail with `IndeterminateCommit` carrying the observed revision (never a silent overwrite), the external commit SHALL survive, and the caller SHALL reconcile (re-read `HEAD`/status) before retrying: rollback of import-owned effects is not guaranteed and not every `HEAD` change is detected. Collision outcomes without detected movement stay typed: snapshot-present targets refuse `PathCollision`.
 
 #### Scenario: Raced writer is preserved
 - **WHEN** an external writer commits during a failing import

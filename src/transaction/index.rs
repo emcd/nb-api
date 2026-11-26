@@ -100,6 +100,85 @@ pub(crate) fn filename_for_title(
     }
 }
 
+/// Filename for a native import: mangled source stem (same
+/// `mangle_stem` rule as one-shot creates) with the source
+/// extension preserved verbatim. The split is at the last dot
+/// past the first character; dotfiles and extensionless names
+/// mangle whole, matching `filename_for_title` behavior.
+pub(crate) fn filename_for_import(basename: &str) -> String {
+    let stem_end = basename
+        .rfind('.')
+        .filter(|&i| i > 0 && i + 1 < basename.len());
+    match stem_end {
+        Some(i) => {
+            let stem = mangle_stem(basename[..i].trim());
+            if stem.is_empty() {
+                mangle_stem(basename.trim())
+            } else {
+                format!("{stem}{}", &basename[i..])
+            }
+        },
+        None => mangle_stem(basename.trim()),
+    }
+}
+
+/// Windows portability refusal for one destination segment:
+/// `Some(reason)` when the segment cannot exist on Windows,
+/// `None` when it is portable. Mangling already neutralizes
+/// reserved *characters* in stems (`<>:"|?*` become `_`), but
+/// two holes survive it: preserved extensions keep their exact
+/// bytes (a `TX<T` extension stays invalid), and folders are
+/// never mangled at all (a `a:b` folder keeps its colon). So
+/// the check runs on the final post-mangle, post-join segments,
+/// never on raw inputs. Stems split at the FIRST dot: Windows
+/// treats `con` in `con.anything` as the device name. Dotfiles
+/// are exempt (`.con` is legal on Windows).
+pub(crate) fn windows_portability_refusal(
+    segment: &str,
+) -> Option<&'static str> {
+    // Forbidden characters and trailing space/period apply to
+    // every segment including dotfiles (`.a<b` is as illegal as
+    // `a<b`). Only the device-stem rule exempts dotfiles
+    // (`.con` is legal on Windows).
+    if segment.chars().any(|c| {
+        matches!(c, '<' | '>' | ':' | '"' | '|' | '?' | '*') || c.is_control()
+    }) {
+        return Some("Windows-reserved character");
+    }
+    if segment.ends_with(' ') || segment.ends_with('.') {
+        return Some("trailing space or period");
+    }
+    if segment.starts_with('.') {
+        return None;
+    }
+    let stem = match segment.find('.') {
+        Some(i) => &segment[..i],
+        None => segment,
+    };
+    if stem.is_empty() {
+        return None;
+    }
+    let upper = stem.to_ascii_uppercase();
+    if matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL") {
+        return Some("Windows-reserved device name");
+    }
+    for prefix in ["COM", "LPT"] {
+        if let Some(rest) = upper.strip_prefix(prefix) {
+            // ASCII digit suffix 1-9.
+            if rest.len() == 1 && matches!(rest.as_bytes()[0], b'1'..=b'9') {
+                return Some("Windows-reserved device name");
+            }
+            // Win32 superscript suffixes ¹/²/³
+            // (U+00B9/U+00B2/U+00B3), including with an
+            // extension (`com¹.txt` is reserved).
+            if matches!(rest, "¹" | "²" | "³") {
+                return Some("Windows-reserved device name");
+            }
+        }
+    }
+    None
+}
+
 /// Insert `-N` before the extension (`foo.md` -> `foo-1.md`).
 pub(crate) fn suffixed_filename(filename: &str, n: u32) -> String {
     match filename.find('.') {

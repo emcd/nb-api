@@ -430,7 +430,10 @@ fn validate_target(target: &NoteTarget) -> Result<(), NbError> {
     Ok(())
 }
 
-fn validate_create_path(path: &str, file: bool) -> Result<String, NbError> {
+pub(crate) fn validate_create_path(
+    path: &str,
+    file: bool,
+) -> Result<String, NbError> {
     // Validate the caller-supplied string before any normalization so
     // absolute and backslash forms cannot be silently rewritten.
     let raw = path.trim();
