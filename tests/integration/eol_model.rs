@@ -32,12 +32,33 @@ fn line_ref(line: &nb_api::NoteLine) -> LineRef {
     }
 }
 
+/// Settled-repo postcondition: the notebook is a resolvable-commit
+/// repo with a clean tree. Runs plain `git` (no client, no `nb`)
+/// — a postcondition, not a settle loop.
+fn assert_notebook_settled(env: &NbTestEnv) {
+    let root = env.nb_dir().join(env.notebook());
+    let head = git_capture(&root, &["rev-parse", "--verify", "HEAD^{commit}"]);
+    assert!(!head.trim().is_empty(), "HEAD peels to a commit");
+    let status = git_capture(&root, &["status", "--porcelain"]);
+    assert!(status.trim().is_empty(), "tree clean: {status:?}");
+}
+
+fn git_capture(dir: &std::path::Path, args: &[&str]) -> String {
+    let mut cmd = std::process::Command::new("git");
+    nb_api::scrub_git_env_std(&mut cmd);
+    cmd.current_dir(dir).args(args);
+    let out = cmd.output().expect("git");
+    assert!(out.status.success(), "git {args:?} failed: {out:?}");
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
 #[tokio::test]
 async fn lf_body_reports_document_eol() {
-    let env = NbTestEnv::new().expect("fixture");
+    let env = NbTestEnv::hermetic().expect("native fixture");
     with_isolated_env(&env, false, || async {
         let client = NbClient::new(&config_for(&env)).expect("client");
         add_body(&client, "eol.md", "a\nb\n").await;
+        assert_notebook_settled(&env);
         let lines = client
             .show_note_lines(
                 NoteTarget::path("eol.md"),
@@ -58,10 +79,11 @@ async fn lf_body_reports_document_eol() {
 
 #[tokio::test]
 async fn cr_only_body_is_single_line_with_preserved_cr() {
-    let env = NbTestEnv::new().expect("fixture");
+    let env = NbTestEnv::hermetic().expect("native fixture");
     with_isolated_env(&env, false, || async {
         let client = NbClient::new(&config_for(&env)).expect("client");
         add_body(&client, "cr.md", "a\rb\rc").await;
+        assert_notebook_settled(&env);
         let lines = client
             .show_note_lines(
                 NoteTarget::path("cr.md"),
@@ -91,10 +113,11 @@ async fn cr_only_body_is_single_line_with_preserved_cr() {
 
 #[tokio::test]
 async fn stray_cr_before_first_supported_eol_preserved() {
-    let env = NbTestEnv::new().expect("fixture");
+    let env = NbTestEnv::hermetic().expect("native fixture");
     with_isolated_env(&env, false, || async {
         let client = NbClient::new(&config_for(&env)).expect("client");
         add_body(&client, "stray.md", "a\rb\nc\n").await;
+        assert_notebook_settled(&env);
         let lines = client
             .show_note_lines(
                 NoteTarget::path("stray.md"),
@@ -115,10 +138,11 @@ async fn stray_cr_before_first_supported_eol_preserved() {
 
 #[tokio::test]
 async fn mixed_body_uses_first_supported_eol() {
-    let env = NbTestEnv::new().expect("fixture");
+    let env = NbTestEnv::hermetic().expect("native fixture");
     with_isolated_env(&env, false, || async {
         let client = NbClient::new(&config_for(&env)).expect("client");
         add_body(&client, "mixed.md", "a\nb\r\nc\n").await;
+        assert_notebook_settled(&env);
         let lines = client
             .show_note_lines(
                 NoteTarget::path("mixed.md"),
@@ -140,10 +164,11 @@ async fn mixed_body_uses_first_supported_eol() {
 
 #[tokio::test]
 async fn final_line_without_eol_uses_null_marker() {
-    let env = NbTestEnv::new().expect("fixture");
+    let env = NbTestEnv::hermetic().expect("native fixture");
     with_isolated_env(&env, false, || async {
         let client = NbClient::new(&config_for(&env)).expect("client");
         add_body(&client, "noeol.md", "a\nb").await;
+        assert_notebook_settled(&env);
         let lines = client
             .show_note_lines(
                 NoteTarget::path("noeol.md"),
@@ -165,10 +190,11 @@ async fn final_line_without_eol_uses_null_marker() {
 
 #[tokio::test]
 async fn insert_after_on_cr_only_adopts_lf() {
-    let env = NbTestEnv::new().expect("fixture");
+    let env = NbTestEnv::hermetic().expect("native fixture");
     with_isolated_env(&env, false, || async {
         let client = NbClient::new(&config_for(&env)).expect("client");
         add_body(&client, "adopt.md", "a\rb\rc").await;
+        assert_notebook_settled(&env);
         let lines = client
             .show_note_lines(
                 NoteTarget::path("adopt.md"),
@@ -205,16 +231,18 @@ async fn insert_after_on_cr_only_adopts_lf() {
             .expect("lines2");
         assert_eq!(lines.eol, Some(LineEol::Lf));
         assert!(lines.has_final_eol);
+        assert_notebook_settled(&env);
     })
     .await;
 }
 
 #[tokio::test]
 async fn insert_at_dollar_without_final_eol_normalizes() {
-    let env = NbTestEnv::new().expect("fixture");
+    let env = NbTestEnv::hermetic().expect("native fixture");
     with_isolated_env(&env, false, || async {
         let client = NbClient::new(&config_for(&env)).expect("client");
         add_body(&client, "dollar.md", "a\nb").await;
+        assert_notebook_settled(&env);
         let before = client
             .show_note_lines(
                 NoteTarget::path("dollar.md"),
@@ -260,16 +288,18 @@ async fn insert_at_dollar_without_final_eol_normalizes() {
             after.lines[2].anchor,
             nb_api::LineAnchor::from_line_bytes(b"c\n")
         );
+        assert_notebook_settled(&env);
     })
     .await;
 }
 
 #[tokio::test]
 async fn replace_final_line_without_eol_normalizes() {
-    let env = NbTestEnv::new().expect("fixture");
+    let env = NbTestEnv::hermetic().expect("native fixture");
     with_isolated_env(&env, false, || async {
         let client = NbClient::new(&config_for(&env)).expect("client");
         add_body(&client, "repl.md", "a\nb").await;
+        assert_notebook_settled(&env);
         let lines = client
             .show_note_lines(
                 NoteTarget::path("repl.md"),
@@ -293,16 +323,18 @@ async fn replace_final_line_without_eol_normalizes() {
             .expect("replace");
         let shown = client.show_note("repl.md", None).await.expect("show");
         assert_eq!(shown.body, "a\nc\n");
+        assert_notebook_settled(&env);
     })
     .await;
 }
 
 #[tokio::test]
 async fn insert_appends_document_crlf() {
-    let env = NbTestEnv::new().expect("fixture");
+    let env = NbTestEnv::hermetic().expect("native fixture");
     with_isolated_env(&env, false, || async {
         let client = NbClient::new(&config_for(&env)).expect("client");
         add_body(&client, "crlf.md", "a\r\nb\r\n").await;
+        assert_notebook_settled(&env);
         let lines = client
             .show_note_lines(
                 NoteTarget::path("crlf.md"),
@@ -328,16 +360,18 @@ async fn insert_appends_document_crlf() {
             .expect("insert");
         let shown = client.show_note("crlf.md", None).await.expect("show");
         assert_eq!(shown.body, "a\r\nx\r\nb\r\n");
+        assert_notebook_settled(&env);
     })
     .await;
 }
 
 #[tokio::test]
 async fn insert_at_caret_into_empty_body() {
-    let env = NbTestEnv::new().expect("fixture");
+    let env = NbTestEnv::hermetic().expect("native fixture");
     with_isolated_env(&env, false, || async {
         let client = NbClient::new(&config_for(&env)).expect("client");
         add_body(&client, "empty.md", "").await;
+        assert_notebook_settled(&env);
         client
             .edit_note_lines(
                 NoteTarget::path("empty.md"),
@@ -353,8 +387,10 @@ async fn insert_at_caret_into_empty_body() {
             .expect("insert");
         let shown = client.show_note("empty.md", None).await.expect("show");
         assert_eq!(shown.body, "x\n");
+        assert_notebook_settled(&env);
         // Dollar into an empty body is rejected: Caret is the only valid boundary.
         add_body(&client, "empty2.md", "").await;
+        assert_notebook_settled(&env);
         let err = client
             .edit_note_lines(
                 NoteTarget::path("empty2.md"),
@@ -373,6 +409,7 @@ async fn insert_at_caret_into_empty_body() {
                 || matches!(err, nb_api::NbError::PlanValidation { .. }),
             "{err:?}"
         );
+        assert_notebook_settled(&env);
     })
     .await;
 }
